@@ -275,6 +275,64 @@ export async function GET(
         return NextResponse.json({ success: false, error: 'Invalid table requested' }, { status: 400 });
     }
 
+    // Calculate Financial Totals / Summary for the pharmacy (or overall warehouse)
+    let summary = {
+      total_invoices_amount: 0,
+      total_invoices_count: 0,
+      total_returns_amount: 0,
+      total_returns_count: 0,
+      total_receipts_amount: 0,
+      total_receipts_count: 0,
+      net_balance: 0,
+      balance_type: 'debit' as 'debit' | 'credit',
+      matched_pharmacy: null as any,
+    };
+
+    try {
+      const summaryRes = await query(
+        `SELECT 
+          COALESCE((SELECT SUM(net_amount) FROM ${schema}.invoices WHERE ($1 = '' OR pharmacy_code ILIKE $1)), 0)::float as inv_amount,
+          COALESCE((SELECT COUNT(*) FROM ${schema}.invoices WHERE ($1 = '' OR pharmacy_code ILIKE $1)), 0)::int as inv_count,
+          COALESCE((SELECT SUM(net_amount) FROM ${schema}.returns WHERE ($1 = '' OR pharmacy_code ILIKE $1)), 0)::float as ret_amount,
+          COALESCE((SELECT COUNT(*) FROM ${schema}.returns WHERE ($1 = '' OR pharmacy_code ILIKE $1)), 0)::int as ret_count,
+          COALESCE((SELECT SUM(amount) FROM ${schema}.cash_receipts WHERE ($1 = '' OR pharmacy_code ILIKE $1)), 0)::float as rcpt_amount,
+          COALESCE((SELECT COUNT(*) FROM ${schema}.cash_receipts WHERE ($1 = '' OR pharmacy_code ILIKE $1)), 0)::int as rcpt_count`,
+        [searchPattern]
+      );
+
+      if (summaryRes.rows.length > 0) {
+        const s = summaryRes.rows[0];
+        const invAmt = Number(s.inv_amount || 0);
+        const retAmt = Number(s.ret_amount || 0);
+        const rcptAmt = Number(s.rcpt_amount || 0);
+        const netBal = invAmt - retAmt - rcptAmt;
+
+        summary.total_invoices_amount = invAmt;
+        summary.total_invoices_count = Number(s.inv_count || 0);
+        summary.total_returns_amount = retAmt;
+        summary.total_returns_count = Number(s.ret_count || 0);
+        summary.total_receipts_amount = rcptAmt;
+        summary.total_receipts_count = Number(s.rcpt_count || 0);
+        summary.net_balance = netBal;
+        summary.balance_type = netBal >= 0 ? 'debit' : 'credit';
+      }
+
+      if (search) {
+        const pharmRes = await query(
+          `SELECT code, name, phone, address 
+           FROM public.pharmacies 
+           WHERE tenant_id = $1 AND (code ILIKE $2 OR name ILIKE $2) 
+           LIMIT 1`,
+          [tenantId, searchPattern]
+        );
+        if (pharmRes.rows.length > 0) {
+          summary.matched_pharmacy = pharmRes.rows[0];
+        }
+      }
+    } catch (sumErr: any) {
+      console.warn('Could not compute financial summary:', sumErr.message);
+    }
+
     return NextResponse.json({
       success: true,
       tenant,
@@ -282,6 +340,7 @@ export async function GET(
       totalCount,
       limit,
       offset,
+      summary,
       rows,
     });
   } catch (error: any) {

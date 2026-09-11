@@ -68,6 +68,23 @@ interface DatabaseReplica {
   };
 }
 
+interface FinancialSummary {
+  total_invoices_amount: number;
+  total_invoices_count: number;
+  total_returns_amount: number;
+  total_returns_count: number;
+  total_receipts_amount: number;
+  total_receipts_count: number;
+  net_balance: number;
+  balance_type: 'debit' | 'credit';
+  matched_pharmacy?: {
+    code: string;
+    name: string;
+    phone?: string;
+    address?: string;
+  } | null;
+}
+
 export default function DatabasesPage() {
   const [databases, setDatabases] = useState<DatabaseReplica[]>([]);
   const [loading, setLoading] = useState(true);
@@ -77,6 +94,7 @@ export default function DatabasesPage() {
   const [activeTable, setActiveTable] = useState<string>('cash_receipts');
   const [tableData, setTableData] = useState<any[]>([]);
   const [tableTotal, setTableTotal] = useState<number>(0);
+  const [financialSummary, setFinancialSummary] = useState<FinancialSummary | null>(null);
   const [tableLoading, setTableLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(1);
@@ -121,6 +139,9 @@ export default function DatabasesPage() {
       if (data.success) {
         setTableData(data.rows || []);
         setTableTotal(data.totalCount || 0);
+        if (data.summary) {
+          setFinancialSummary(data.summary);
+        }
       } else {
         toast.error('خطأ في جلب بيانات الجدول: ' + (data.error || ''));
       }
@@ -443,10 +464,10 @@ export default function DatabasesPage() {
                   }}
                   className='w-full'
                 >
-                  <TabsList className='grid grid-cols-2 md:grid-cols-6 w-full h-auto p-1 bg-muted/60'>
+                  <TabsList className='grid grid-cols-2 md:grid-cols-5 w-full h-auto p-1 bg-muted/60'>
                     <TabsTrigger value='cash_receipts' className='gap-2 py-2 text-xs'>
                       <IconReceipt className='h-4 w-4' />
-                      سندات القبض
+                      سندات القبض (النقدية)
                       <Badge variant='secondary' className='text-[10px] px-1.5 py-0'>
                         {selectedDb.metrics?.receipts_count || 0}
                       </Badge>
@@ -454,7 +475,7 @@ export default function DatabasesPage() {
 
                     <TabsTrigger value='invoices' className='gap-2 py-2 text-xs'>
                       <IconFileText className='h-4 w-4' />
-                      الفواتير
+                      الفواتير (المشتريات)
                       <Badge variant='secondary' className='text-[10px] px-1.5 py-0'>
                         {selectedDb.metrics?.invoices_count || 0}
                       </Badge>
@@ -483,20 +504,151 @@ export default function DatabasesPage() {
                         {selectedDb.metrics?.pharmacies_count || 0}
                       </Badge>
                     </TabsTrigger>
-
-                    <TabsTrigger value='products' className='gap-2 py-2 text-xs'>
-                      <IconBox className='h-4 w-4' />
-                      الأصناف والمخزون
-                      <Badge variant='secondary' className='text-[10px] px-1.5 py-0'>
-                        {selectedDb.metrics?.products_count || 0}
-                      </Badge>
-                    </TabsTrigger>
                   </TabsList>
                 </Tabs>
               </div>
             </CardHeader>
 
             <CardContent className='p-0'>
+              {/* Pharmacy Balance & Financial Totals Summary Banner */}
+              {financialSummary && (
+                <div className='p-4 border-b bg-gradient-to-r from-background via-muted/30 to-background'>
+                  <div className='flex flex-col md:flex-row md:items-center md:justify-between gap-4'>
+                    <div>
+                      <div className='flex items-center gap-2 mb-1'>
+                        <Badge
+                          variant='outline'
+                          className={
+                            financialSummary.balance_type === 'debit'
+                              ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/20 text-xs font-semibold'
+                              : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20 text-xs font-semibold'
+                          }
+                        >
+                          {financialSummary.balance_type === 'debit'
+                            ? 'مدين لصالح المستودع (مطلوب سداده)'
+                            : 'دائن للصيدلية (رصيد فائض)'}
+                        </Badge>
+                        {financialSummary.matched_pharmacy && (
+                          <span className='text-xs text-muted-foreground font-mono'>
+                            كود الصيدلية: {financialSummary.matched_pharmacy.code}
+                          </span>
+                        )}
+                      </div>
+                      <h3 className='text-lg font-bold text-foreground flex items-center gap-2'>
+                        {financialSummary.matched_pharmacy ? (
+                          <>
+                            <span>{financialSummary.matched_pharmacy.name}</span>
+                            {financialSummary.matched_pharmacy.phone && (
+                              <span className='text-xs font-normal font-mono text-muted-foreground'>
+                                ({financialSummary.matched_pharmacy.phone})
+                              </span>
+                            )}
+                          </>
+                        ) : searchTerm ? (
+                          <span>نتائج وإجمالي الحساب للبحث: &quot;{searchTerm}&quot;</span>
+                        ) : (
+                          <span>إجمالي المعاملات والمديونيات العامة للمستودع</span>
+                        )}
+                      </h3>
+                      {financialSummary.matched_pharmacy?.address && (
+                        <p className='text-xs text-muted-foreground mt-0.5'>
+                          {financialSummary.matched_pharmacy.address}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Main Net Balance Badge */}
+                    <div className='flex items-center gap-4 bg-card border rounded-xl p-3 shadow-xs'>
+                      <div className='text-right'>
+                        <span className='text-xs text-muted-foreground block font-medium'>صافي الرصيد الحالي:</span>
+                        <span
+                          className={`text-2xl font-black font-mono ${
+                            financialSummary.net_balance > 0
+                              ? 'text-rose-600 dark:text-rose-400'
+                              : financialSummary.net_balance < 0
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : 'text-foreground'
+                          }`}
+                        >
+                          {Math.abs(financialSummary.net_balance).toLocaleString('ar-EG', {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}{' '}
+                          ج.م
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Metric Cards Row */}
+                  <div className='grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3.5 pt-3 border-t border-border/60'>
+                    {/* 1. Invoices / Purchases */}
+                    <div className='bg-background/80 border rounded-lg p-2.5 flex items-center justify-between'>
+                      <div>
+                        <span className='text-[11px] text-muted-foreground block'>إجمالي الفواتير</span>
+                        <span className='text-sm font-bold text-foreground font-mono'>
+                          {financialSummary.total_invoices_amount.toLocaleString('ar-EG', { minimumFractionDigits: 2 })}{' '}
+                          ج.م
+                        </span>
+                      </div>
+                      <Badge variant='outline' className='text-[10px] font-mono'>
+                        {financialSummary.total_invoices_count} فواتير
+                      </Badge>
+                    </div>
+
+                    {/* 2. Returns */}
+                    <div className='bg-background/80 border rounded-lg p-2.5 flex items-center justify-between'>
+                      <div>
+                        <span className='text-[11px] text-muted-foreground block'>إجمالي المرتجعات</span>
+                        <span className='text-sm font-bold text-amber-600 dark:text-amber-400 font-mono'>
+                          {financialSummary.total_returns_amount.toLocaleString('ar-EG', { minimumFractionDigits: 2 })}{' '}
+                          ج.م
+                        </span>
+                      </div>
+                      <Badge variant='outline' className='text-[10px] font-mono'>
+                        {financialSummary.total_returns_count} مرتجع
+                      </Badge>
+                    </div>
+
+                    {/* 3. Cash Receipts / Paid */}
+                    <div className='bg-background/80 border rounded-lg p-2.5 flex items-center justify-between'>
+                      <div>
+                        <span className='text-[11px] text-muted-foreground block'>إجمالي النقدية المسددة</span>
+                        <span className='text-sm font-bold text-emerald-600 dark:text-emerald-400 font-mono'>
+                          {financialSummary.total_receipts_amount.toLocaleString('ar-EG', { minimumFractionDigits: 2 })}{' '}
+                          ج.م
+                        </span>
+                      </div>
+                      <Badge variant='outline' className='text-[10px] font-mono'>
+                        {financialSummary.total_receipts_count} سند
+                      </Badge>
+                    </div>
+
+                    {/* 4. Statement Action */}
+                    <div className='bg-background/80 border rounded-lg p-2.5 flex items-center justify-between'>
+                      <div>
+                        <span className='text-[11px] text-muted-foreground block'>كشف الحساب</span>
+                        <span className='text-xs font-semibold text-primary block mt-0.5'>
+                          {activeTable === 'ledger' ? 'المعروض حالياً' : 'جميع القيود والحركات'}
+                        </span>
+                      </div>
+                      {activeTable !== 'ledger' && (
+                        <Button
+                          size='sm'
+                          variant='outline'
+                          className='h-7 text-[11px] px-2 gap-1 text-primary hover:bg-primary/10'
+                          onClick={() => {
+                            setActiveTable('ledger');
+                            setPage(1);
+                          }}
+                        >
+                          عرض الكشف
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
               {/* Search Bar */}
               <div className='p-4 border-b bg-background/50'>
                 <form onSubmit={handleSearchSubmit} className='flex gap-2'>
@@ -611,17 +763,7 @@ export default function DatabasesPage() {
                           <TableHead className='text-right'>العنوان</TableHead>
                           <TableHead className='text-right'>كود الربط المباشر</TableHead>
                           <TableHead className='text-right'>الحالة</TableHead>
-                        </TableRow>
-                      )}
-
-                      {activeTable === 'products' && (
-                        <TableRow>
-                          <TableHead className='text-right'>كود الصنف</TableHead>
-                          <TableHead className='text-right'>اسم الدواء / الصنف</TableHead>
-                          <TableHead className='text-right'>الاسم بالإنجليزية</TableHead>
-                          <TableHead className='text-right'>السعر</TableHead>
-                          <TableHead className='text-right'>الكمية بالمخزن</TableHead>
-                          <TableHead className='text-right'>نسبة الخصم</TableHead>
+                          <TableHead className='text-right'>الإجراءات</TableHead>
                         </TableRow>
                       )}
 
@@ -835,31 +977,20 @@ export default function DatabasesPage() {
                                 </Badge>
                               )}
                             </TableCell>
-                          </TableRow>
-                        ))}
-
-                      {activeTable === 'products' &&
-                        tableData.map((row) => (
-                          <TableRow key={row.id} className='hover:bg-muted/30'>
-                            <TableCell className='font-mono font-bold text-primary'>
-                              {row.remote_id}
-                            </TableCell>
-                            <TableCell className='font-medium text-foreground'>
-                              {row.name}
-                            </TableCell>
-                            <TableCell className='text-muted-foreground font-mono'>
-                              {row.name_en || '—'}
-                            </TableCell>
-                            <TableCell className='font-bold text-foreground'>
-                              {Number(row.price).toLocaleString('ar-EG')} ج.م
-                            </TableCell>
                             <TableCell>
-                              <span className='font-medium text-blue-600 dark:text-blue-400'>
-                                {Number(row.quantity).toLocaleString('ar-EG')}
-                              </span>
-                            </TableCell>
-                            <TableCell>
-                              {row.discount_percent ? `${row.discount_percent}%` : '0%'}
+                              <Button
+                                size='sm'
+                                variant='outline'
+                                className='h-7 text-xs text-primary hover:bg-primary/10 gap-1'
+                                onClick={() => {
+                                  setSearchTerm(row.code);
+                                  setActiveTable('ledger');
+                                  setPage(1);
+                                }}
+                              >
+                                <IconFileDescription className='h-3.5 w-3.5' />
+                                كشف الحساب والإجمالي
+                              </Button>
                             </TableCell>
                           </TableRow>
                         ))}

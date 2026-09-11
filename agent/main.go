@@ -522,8 +522,16 @@ func parseDate(raw interface{}) time.Time {
 	return time.Now()
 }
 
-func discoverReturnsTable(db *sql.DB) string {
+func tableExists(db *sql.DB, tableName string) bool {
+	var cnt int
+	err := db.QueryRow(fmt.Sprintf("SELECT FIRST 1 1 FROM %s", tableName)).Scan(&cnt)
+	return err == nil
+}
+
+func discoverReturnsTables(db *sql.DB) []string {
 	candidates := []string{
+		"INVOICES_R_H",
+		"INVOICES_RR_H",
 		"RET_INVOICES_H",
 		"INVOICES_RET_H",
 		"RETURNS_H",
@@ -531,14 +539,13 @@ func discoverReturnsTable(db *sql.DB) string {
 		"INVOICE_RET_H",
 		"RET_INVOICE_H",
 	}
+	var found []string
 	for _, t := range candidates {
-		var cnt int
-		err := db.QueryRow(fmt.Sprintf("SELECT FIRST 1 1 FROM %s", t)).Scan(&cnt)
-		if err == nil {
-			return t
+		if tableExists(db, t) {
+			found = append(found, t)
 		}
 	}
-	return ""
+	return found
 }
 
 func extractReturnsBatch(db *sql.DB, tableName string, lastID int64, limit int) ([]ReturnSyncItem, []LedgerSyncItem, int64, error) {
@@ -827,9 +834,11 @@ func runGentleSync(cfg *Config) {
 	_ = db.QueryRow("SELECT COUNT(*) FROM INVOICES_H").Scan(&totalInvoices)
 	_ = db.QueryRow("SELECT COUNT(*) FROM INCOME_CASH").Scan(&totalReceipts)
 
-	returnsTable := discoverReturnsTable(db)
-	if returnsTable != "" {
-		_ = db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", returnsTable)).Scan(&totalReturns)
+	returnsTables := discoverReturnsTables(db)
+	for _, rt := range returnsTables {
+		var cnt int
+		_ = db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", rt)).Scan(&cnt)
+		totalReturns += cnt
 	}
 
 	state.Lock()
@@ -1167,11 +1176,13 @@ func runGentleSync(cfg *Config) {
 	}
 
 	// 5. Gentle Indexed Sales Returns Extraction
-	if returnsTable != "" {
+	for _, rt := range returnsTables {
 		lastRetID := cfg.Cursors.LastReturnID
-		syncedReturns := 0
+		state.Lock()
+		syncedReturns := state.SyncedReturns
+		state.Unlock()
 
-		addLog(fmt.Sprintf("بدء فحص مرتجعات المبيعات من المعرف %d (الجدول: %s)...", lastRetID, returnsTable))
+		addLog(fmt.Sprintf("بدء فحص مرتجعات المبيعات من المعرف %d (الجدول: %s)...", lastRetID, rt))
 
 		for {
 			state.Lock()
@@ -1185,9 +1196,9 @@ func runGentleSync(cfg *Config) {
 			state.CurrentTask = fmt.Sprintf("رفع مرتجعات المبيعات بهدوء... تم رفع %d مرتجع", syncedReturns)
 			state.Unlock()
 
-			retBatch, ledgBatch, maxID, err := extractReturnsBatch(db, returnsTable, lastRetID, batchSize)
+			retBatch, ledgBatch, maxID, err := extractReturnsBatch(db, rt, lastRetID, batchSize)
 			if err != nil {
-				addLog(fmt.Sprintf("تنبيه في استخراج المرتجعات: %v", err))
+				addLog(fmt.Sprintf("تنبيه في استخراج المرتجعات (%s): %v", rt, err))
 				break
 			}
 

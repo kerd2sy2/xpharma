@@ -98,14 +98,6 @@ export const navGroups: NavGroup[] = [
         access: { requireOrg: true }
       },
       {
-        title: 'المنتجات والأدوية',
-        url: '/dashboard/product',
-        icon: 'product',
-        shortcut: ['p', 'p'],
-        isActive: false,
-        items: []
-      },
-      {
         title: 'المستخدمين',
         url: '/dashboard/users',
         icon: 'teams',
