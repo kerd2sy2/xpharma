@@ -46,7 +46,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
           <Header />
           <InfobarProvider defaultOpen={false}>
             {children}
-            <InfoSidebar side='right' />
+            <InfoSidebar side='left' />
           </InfobarProvider>
         </SidebarInset>
       </SidebarProvider>

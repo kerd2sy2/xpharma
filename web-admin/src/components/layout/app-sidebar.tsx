@@ -89,7 +89,7 @@ export default function AppSidebar() {
   }, [isOpen]);
 
   return (
-    <Sidebar collapsible='icon'>
+    <Sidebar collapsible='icon' side='right'>
       <SidebarHeader className='group-data-[collapsible=icon]:pt-4'>
         <OrgSwitcher />
       </SidebarHeader>
@@ -117,7 +117,7 @@ export default function AppSidebar() {
                     >
                       {item.icon && <Icon />}
                       <span>{item.title}</span>
-                      <Icons.chevronRight className='ml-auto transition-transform duration-200 group-data-panel-open/collapsible:rotate-90' />
+                      <Icons.chevronRight className='mr-auto transition-transform duration-200 group-data-panel-open/collapsible:rotate-90 rtl:rotate-180 rtl:group-data-panel-open/collapsible:rotate-90' />
                     </CollapsibleTrigger>
                     <CollapsibleContent>
                       <SidebarMenuSub>
@@ -166,7 +166,7 @@ export default function AppSidebar() {
                 {activeUser && (
                   <UserAvatarProfile className='h-8 w-8 rounded-lg' showInfo user={activeUser} />
                 )}
-                <Icons.chevronsDown className='ml-auto size-4' />
+                <Icons.chevronsDown className='mr-auto size-4' />
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 className='w-(--anchor-width) min-w-56 rounded-lg'
