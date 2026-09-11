@@ -58,34 +58,49 @@ export default function LoginPage() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
+    // Reset Google One Tap cooldown cookie so prompt is never suppressed
+    document.cookie = 'g_state=;path=/;expires=Thu, 01 Jan 1970 00:00:01 GMT;';
+
+    // Expose global callback for GIS
+    (window as any).handleGoogleCredentialResponse = handleGoogleCredentialResponse;
+
     const setupGIS = () => {
       if (!window.google?.accounts?.id) return;
 
-      window.google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: handleGoogleCredentialResponse,
-        auto_select: true, // Automatically recognize and select logged in Google account!
-        itp_support: true,
-        use_fedcm_for_prompt: true,
-        cancel_on_tap_outside: false
-      });
-
-      // 1. Immediately trigger the One-Tap prompt to recognize Google account on load
-      window.google.accounts.id.prompt();
-
-      // 2. Render official Google button into the container
-      if (buttonContainerRef.current) {
-        buttonContainerRef.current.innerHTML = '';
-        window.google.accounts.id.renderButton(buttonContainerRef.current, {
-          theme: 'outline',
-          size: 'large',
-          type: 'standard',
-          text: 'signin_with',
-          shape: 'rectangular',
-          logo_alignment: 'left',
-          width: 320
+      try {
+        window.google.accounts.id.initialize({
+          client_id: GOOGLE_CLIENT_ID,
+          callback: handleGoogleCredentialResponse,
+          auto_select: true,
+          itp_support: true,
+          use_fedcm_for_prompt: false,
+          cancel_on_tap_outside: false,
+          context: 'signin'
         });
-        setGisLoaded(true);
+
+        // Immediately trigger the floating One-Tap prompt at the top
+        window.google.accounts.id.prompt((notification: any) => {
+          if (notification.isNotDisplayed()) {
+            console.log('One-tap not displayed reason:', notification.getNotDisplayedReason());
+          }
+        });
+
+        // Render official Google button into the container
+        if (buttonContainerRef.current) {
+          buttonContainerRef.current.innerHTML = '';
+          window.google.accounts.id.renderButton(buttonContainerRef.current, {
+            theme: 'outline',
+            size: 'large',
+            type: 'standard',
+            text: 'signin_with',
+            shape: 'rectangular',
+            logo_alignment: 'left',
+            width: 320
+          });
+          setGisLoaded(true);
+        }
+      } catch (err) {
+        console.error('GIS setup error:', err);
       }
     };
 
@@ -165,6 +180,18 @@ export default function LoginPage() {
   return (
     <div className='min-h-screen w-full flex items-center justify-center bg-background text-foreground p-4 antialiased selection:bg-primary selection:text-primary-foreground'>
       <div className='w-full max-w-sm flex flex-col items-center text-center space-y-6'>
+        {/* Google Identity Services Declarative Trigger for One-Tap */}
+        <div
+          id='g_id_onload'
+          data-client_id={GOOGLE_CLIENT_ID}
+          data-context='signin'
+          data-callback='handleGoogleCredentialResponse'
+          data-auto_select='true'
+          data-itp_support='true'
+          data-use_fedcm_for_prompt='false'
+          data-cancel_on_tap_outside='false'
+        />
+
         {/* Brand Header */}
         <div className='flex flex-col items-center space-y-3'>
           <div className='relative w-16 h-16 rounded-2xl overflow-hidden border border-border bg-card p-1.5 shadow-sm'>
