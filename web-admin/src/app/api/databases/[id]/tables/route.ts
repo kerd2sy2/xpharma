@@ -126,29 +126,148 @@ export async function GET(
         break;
       }
 
-      case 'ledger': {
+      case 'returns': {
         const countRes = await query(
           `SELECT COUNT(*)::int as count 
-           FROM ${schema}.ledger_entries l
-           LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = l.pharmacy_code
-           WHERE ($2 = '' OR l.pharmacy_code ILIKE $2 OR l.doc_number ILIKE $2 OR l.description ILIKE $2)`,
+           FROM ${schema}.returns r
+           LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = r.pharmacy_code
+           WHERE ($2 = '' OR r.pharmacy_code ILIKE $2 OR r.return_number ILIKE $2 OR r.reason ILIKE $2 OR p.name ILIKE $2)`,
           [tenantId, searchPattern]
         );
         totalCount = countRes.rows[0]?.count || 0;
 
         const dataRes = await query(
           `SELECT 
-             l.id, l.remote_id, l.pharmacy_code, 
+             r.id, r.remote_id, r.return_number, r.pharmacy_code, 
              COALESCE(p.name, 'غير متوفر بالدليل') as pharmacy_name,
-             l.entry_date, l.doc_type, l.doc_number, l.debit, l.credit, l.balance, l.description
-           FROM ${schema}.ledger_entries l
-           LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = l.pharmacy_code
-           WHERE ($2 = '' OR l.pharmacy_code ILIKE $2 OR l.doc_number ILIKE $2 OR l.description ILIKE $2)
-           ORDER BY l.entry_date DESC
+             r.return_date, r.total_amount, r.net_amount, r.status, r.reason, r.created_at
+           FROM ${schema}.returns r
+           LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = r.pharmacy_code
+           WHERE ($2 = '' OR r.pharmacy_code ILIKE $2 OR r.return_number ILIKE $2 OR r.reason ILIKE $2 OR p.name ILIKE $2)
+           ORDER BY r.return_date DESC, r.remote_id DESC
            LIMIT $3 OFFSET $4`,
           [tenantId, searchPattern, limit, offset]
         );
         rows = dataRes.rows;
+        break;
+      }
+
+      case 'ledger': {
+        // Check if direct ledger_entries has data
+        const directCountRes = await query(
+          `SELECT COUNT(*)::int as count FROM ${schema}.ledger_entries`
+        );
+        const hasDirectLedger = (directCountRes.rows[0]?.count || 0) > 0;
+
+        if (hasDirectLedger) {
+          const countRes = await query(
+            `SELECT COUNT(*)::int as count 
+             FROM ${schema}.ledger_entries l
+             LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = l.pharmacy_code
+             WHERE ($2 = '' OR l.pharmacy_code ILIKE $2 OR l.doc_number ILIKE $2 OR l.description ILIKE $2 OR p.name ILIKE $2)`,
+            [tenantId, searchPattern]
+          );
+          totalCount = countRes.rows[0]?.count || 0;
+
+          const dataRes = await query(
+            `SELECT 
+               l.id, l.remote_id, l.pharmacy_code, 
+               COALESCE(p.name, 'غير متوفر بالدليل') as pharmacy_name,
+               l.entry_date, l.doc_type, l.doc_number, l.debit, l.credit, l.balance, l.description
+             FROM ${schema}.ledger_entries l
+             LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = l.pharmacy_code
+             WHERE ($2 = '' OR l.pharmacy_code ILIKE $2 OR l.doc_number ILIKE $2 OR l.description ILIKE $2 OR p.name ILIKE $2)
+             ORDER BY l.entry_date DESC, l.remote_id DESC
+             LIMIT $3 OFFSET $4`,
+            [tenantId, searchPattern, limit, offset]
+          );
+          rows = dataRes.rows;
+        } else {
+          // Unified real-time movements: Invoices (Debit) + Cash Receipts (Credit) + Returns (Credit)
+          const countRes = await query(
+            `WITH unified_movements AS (
+               SELECT i.pharmacy_code, i.invoice_number as doc_number, 'فاتورة مبيعات' as doc_type, 'فاتورة مبيعات أدوية' as description, COALESCE(p.name, 'غير متوفر بالدليل') as pharmacy_name
+               FROM ${schema}.invoices i
+               LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = i.pharmacy_code
+               UNION ALL
+               SELECT r.pharmacy_code, r.receipt_number as doc_number, 'سند قبض نقدي' as doc_type, COALESCE(r.notes, 'سند تحصيل نقدي') as description, COALESCE(p.name, 'غير متوفر بالدليل') as pharmacy_name
+               FROM ${schema}.cash_receipts r
+               LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = r.pharmacy_code
+               UNION ALL
+               SELECT ret.pharmacy_code, ret.return_number as doc_number, 'مرتجع مبيعات' as doc_type, COALESCE(ret.reason, 'مرتجع مبيعات أدوية') as description, COALESCE(p.name, 'غير متوفر بالدليل') as pharmacy_name
+               FROM ${schema}.returns ret
+               LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = ret.pharmacy_code
+             )
+             SELECT COUNT(*)::int as count
+             FROM unified_movements
+             WHERE ($2 = '' OR pharmacy_code ILIKE $2 OR doc_number ILIKE $2 OR description ILIKE $2 OR pharmacy_name ILIKE $2 OR doc_type ILIKE $2)`,
+            [tenantId, searchPattern]
+          );
+          totalCount = countRes.rows[0]?.count || 0;
+
+          const dataRes = await query(
+            `WITH raw_movements AS (
+               SELECT 
+                 i.id::text as id,
+                 'INV-' || i.remote_id as remote_id,
+                 i.pharmacy_code,
+                 COALESCE(p.name, 'غير متوفر بالدليل') as pharmacy_name,
+                 i.invoice_date as entry_date,
+                 'فاتورة مبيعات' as doc_type,
+                 i.invoice_number as doc_number,
+                 i.net_amount as debit,
+                 0.00 as credit,
+                 'فاتورة مبيعات أدوية' as description
+               FROM ${schema}.invoices i
+               LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = i.pharmacy_code
+
+               UNION ALL
+
+               SELECT 
+                 r.id::text as id,
+                 'RCP-' || r.remote_id as remote_id,
+                 r.pharmacy_code,
+                 COALESCE(p.name, 'غير متوفر بالدليل') as pharmacy_name,
+                 r.receipt_date as entry_date,
+                 'سند قبض نقدي' as doc_type,
+                 r.receipt_number as doc_number,
+                 0.00 as debit,
+                 r.amount as credit,
+                 COALESCE(r.notes, 'سند تحصيل نقدي') as description
+               FROM ${schema}.cash_receipts r
+               LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = r.pharmacy_code
+
+               UNION ALL
+
+               SELECT 
+                 ret.id::text as id,
+                 'RET-' || ret.remote_id as remote_id,
+                 ret.pharmacy_code,
+                 COALESCE(p.name, 'غير متوفر بالدليل') as pharmacy_name,
+                 ret.return_date as entry_date,
+                 'مرتجع مبيعات' as doc_type,
+                 ret.return_number as doc_number,
+                 0.00 as debit,
+                 ret.net_amount as credit,
+                 COALESCE(ret.reason, 'مرتجع مبيعات أدوية') as description
+               FROM ${schema}.returns ret
+               LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = ret.pharmacy_code
+             ),
+             calculated_movements AS (
+               SELECT 
+                 id, remote_id, pharmacy_code, pharmacy_name, entry_date, doc_type, doc_number, debit, credit,
+                 SUM(debit - credit) OVER (PARTITION BY pharmacy_code ORDER BY entry_date ASC, remote_id ASC) as balance,
+                 description
+               FROM raw_movements
+             )
+             SELECT * FROM calculated_movements
+             WHERE ($2 = '' OR pharmacy_code ILIKE $2 OR doc_number ILIKE $2 OR description ILIKE $2 OR pharmacy_name ILIKE $2 OR doc_type ILIKE $2)
+             ORDER BY entry_date DESC, remote_id DESC
+             LIMIT $3 OFFSET $4`,
+            [tenantId, searchPattern, limit, offset]
+          );
+          rows = dataRes.rows;
+        }
         break;
       }
 

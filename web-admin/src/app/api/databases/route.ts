@@ -84,6 +84,10 @@ export async function GET() {
 
           const retRes = await query(`SELECT COUNT(*)::int as count FROM ${schema}.returns`);
           returnsCount = retRes.rows[0]?.count || 0;
+
+          if (ledgerCount === 0) {
+            ledgerCount = invoicesCount + receiptsCount + returnsCount;
+          }
         } catch (schemaErr: any) {
           console.warn(`Could not read tables for schema ${schema}:`, schemaErr.message);
         }

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -58,6 +59,7 @@ type Config struct {
 	Cursors struct {
 		LastInvoiceID int64 `json:"last_invoice_id"`
 		LastReceiptID int64 `json:"last_receipt_id"`
+		LastReturnID  int64 `json:"last_return_id"`
 	} `json:"cursors"`
 }
 
@@ -162,6 +164,10 @@ type EngineState struct {
 	SyncedInvoices    int       `json:"synced_invoices"`
 	TotalReceipts     int       `json:"total_receipts"`
 	SyncedReceipts    int       `json:"synced_receipts"`
+	TotalReturns      int       `json:"total_returns"`
+	SyncedReturns     int       `json:"synced_returns"`
+	TotalLedger       int       `json:"total_ledger"`
+	SyncedLedger      int       `json:"synced_ledger"`
 	TotalCustomers    int       `json:"total_customers"`
 	TotalProducts     int       `json:"total_products"`
 	LastSyncTime      time.Time `json:"last_sync_time"`
@@ -516,6 +522,208 @@ func parseDate(raw interface{}) time.Time {
 	return time.Now()
 }
 
+func discoverReturnsTable(db *sql.DB) string {
+	candidates := []string{
+		"RET_INVOICES_H",
+		"INVOICES_RET_H",
+		"RETURNS_H",
+		"RETURN_INVOICES_H",
+		"INVOICE_RET_H",
+		"RET_INVOICE_H",
+	}
+	for _, t := range candidates {
+		var cnt int
+		err := db.QueryRow(fmt.Sprintf("SELECT FIRST 1 1 FROM %s", t)).Scan(&cnt)
+		if err == nil {
+			return t
+		}
+	}
+	return ""
+}
+
+func extractReturnsBatch(db *sql.DB, tableName string, lastID int64, limit int) ([]ReturnSyncItem, []LedgerSyncItem, int64, error) {
+	if tableName == "" {
+		return nil, nil, lastID, nil
+	}
+
+	rows, err := db.Query(fmt.Sprintf("SELECT FIRST 1 * FROM %s", tableName))
+	if err != nil {
+		return nil, nil, lastID, err
+	}
+	cols, _ := rows.Columns()
+	rows.Close()
+
+	idCol, dateCol, totCol, discCol, accCol, noteCol := "", "", "", "", "", ""
+	for _, c := range cols {
+		u := strings.ToUpper(strings.TrimSpace(c))
+		if idCol == "" && (strings.Contains(u, "ID") || strings.Contains(u, "CODE") || strings.Contains(u, "NUM")) {
+			idCol = c
+		}
+		if dateCol == "" && strings.Contains(u, "DATE") {
+			dateCol = c
+		}
+		if totCol == "" && (strings.Contains(u, "TOTAL_TOTAL") || strings.Contains(u, "TOTAL") || strings.Contains(u, "NET") || strings.Contains(u, "AMOUNT") || strings.Contains(u, "MONY")) {
+			totCol = c
+		}
+		if discCol == "" && strings.Contains(u, "DISCOUNT") {
+			discCol = c
+		}
+		if accCol == "" && (strings.Contains(u, "ACCOUNT") || strings.Contains(u, "ACC") || strings.Contains(u, "CLIENT") || strings.Contains(u, "PHARM")) {
+			accCol = c
+		}
+		if noteCol == "" && (strings.Contains(u, "NOTE") || strings.Contains(u, "REASON") || strings.Contains(u, "REMARK") || strings.Contains(u, "DESCR")) {
+			noteCol = c
+		}
+	}
+
+	if idCol == "" && len(cols) > 0 {
+		idCol = cols[0]
+	}
+	if dateCol == "" {
+		dateCol = idCol
+	}
+
+	selectCols := []string{idCol, dateCol}
+	if totCol != "" {
+		selectCols = append(selectCols, totCol)
+	}
+	if discCol != "" {
+		selectCols = append(selectCols, discCol)
+	}
+	if accCol != "" {
+		selectCols = append(selectCols, accCol)
+	}
+	if noteCol != "" {
+		selectCols = append(selectCols, noteCol)
+	}
+
+	q := fmt.Sprintf(`
+		SELECT FIRST %d %s
+		FROM %s
+		WHERE %s > %d
+		ORDER BY %s ASC
+	`, limit, strings.Join(selectCols, ", "), tableName, idCol, lastID, idCol)
+
+	qRows, err := db.Query(q)
+	if err != nil {
+		return nil, nil, lastID, err
+	}
+	defer qRows.Close()
+
+	var retBatch []ReturnSyncItem
+	var ledgBatch []LedgerSyncItem
+	var maxID int64 = lastID
+
+	for qRows.Next() {
+		vals := make([]interface{}, len(selectCols))
+		valPtrs := make([]interface{}, len(selectCols))
+		for i := range vals {
+			valPtrs[i] = &vals[i]
+		}
+		if err := qRows.Scan(valPtrs...); err != nil {
+			continue
+		}
+
+		var id int64
+		if vals[0] != nil {
+			switch v := vals[0].(type) {
+			case int64:
+				id = v
+			case int:
+				id = int64(v)
+			default:
+				fmt.Sscanf(fmt.Sprintf("%v", vals[0]), "%d", &id)
+			}
+		}
+		if id > maxID {
+			maxID = id
+		}
+
+		dateD := parseDate(vals[1])
+		var total, discount float64
+		var accountID string = "0"
+		var reason string = "مرتجع مبيعات أدوية"
+
+		currIdx := 2
+		if totCol != "" && currIdx < len(vals) {
+			if vals[currIdx] != nil {
+				switch v := vals[currIdx].(type) {
+				case float64:
+					total = v
+				default:
+					fmt.Sscanf(fmt.Sprintf("%v", vals[currIdx]), "%f", &total)
+				}
+			}
+			currIdx++
+		}
+		if discCol != "" && currIdx < len(vals) {
+			if vals[currIdx] != nil {
+				switch v := vals[currIdx].(type) {
+				case float64:
+					discount = v
+				default:
+					fmt.Sscanf(fmt.Sprintf("%v", vals[currIdx]), "%f", &discount)
+				}
+			}
+			currIdx++
+		}
+		if accCol != "" && currIdx < len(vals) {
+			if vals[currIdx] != nil {
+				accountID = strings.TrimSpace(fmt.Sprintf("%v", vals[currIdx]))
+			}
+			currIdx++
+		}
+		if noteCol != "" && currIdx < len(vals) {
+			if vals[currIdx] != nil {
+				switch v := vals[currIdx].(type) {
+				case []byte:
+					reason = decodeText(v)
+				default:
+					reason = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
+				}
+			}
+		}
+
+		total = math.Abs(total)
+		discount = math.Abs(discount)
+		net := total - discount
+		if net <= 0 {
+			net = total
+		}
+		if reason == "" {
+			reason = "مرتجع مبيعات أدوية"
+		}
+
+		remoteID := fmt.Sprintf("%d", id)
+		retNum := fmt.Sprintf("RET-%d", id)
+
+		retBatch = append(retBatch, ReturnSyncItem{
+			RemoteID:     remoteID,
+			ReturnNumber: retNum,
+			PharmacyCode: accountID,
+			ReturnDate:   dateD,
+			TotalAmount:  total,
+			NetAmount:    net,
+			Status:       "approved",
+			Reason:       reason,
+		})
+
+		ledgBatch = append(ledgBatch, LedgerSyncItem{
+			RemoteID:     "RET-" + remoteID,
+			PharmacyCode: accountID,
+			EntryDate:    dateD,
+			DocType:      "مرتجع مبيعات",
+			DocNumber:    retNum,
+			Debit:        0.00,
+			Credit:       net,
+			Balance:      0.00,
+			Description:  reason,
+		})
+	}
+
+	return retBatch, ledgBatch, maxID, nil
+}
+
 // -----------------------------------------------------------------------------
 // Gentle, Throttled Sync Engine (خفيف وهادئ جداً لمنع التهنيج)
 // -----------------------------------------------------------------------------
@@ -614,17 +822,28 @@ func runGentleSync(cfg *Config) {
 	state.Unlock()
 	addLog("تم الاتصال بقاعدة بيانات الفايربيرد بنجاح.")
 
-	// 1. Quick indexed counts
-	var totalInvoices, totalReceipts int
+	// 1. Quick indexed counts & returns discovery
+	var totalInvoices, totalReceipts, totalReturns int
 	_ = db.QueryRow("SELECT COUNT(*) FROM INVOICES_H").Scan(&totalInvoices)
 	_ = db.QueryRow("SELECT COUNT(*) FROM INCOME_CASH").Scan(&totalReceipts)
+
+	returnsTable := discoverReturnsTable(db)
+	if returnsTable != "" {
+		_ = db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", returnsTable)).Scan(&totalReturns)
+	}
 
 	state.Lock()
 	state.TotalInvoices = totalInvoices
 	state.TotalReceipts = totalReceipts
+	state.TotalReturns = totalReturns
+	state.TotalLedger = totalInvoices + totalReceipts + totalReturns
 	state.Unlock()
 
-	addLog(fmt.Sprintf("فحص المخزن: تم العثور على %d فاتورة و %d سند قبض.", totalInvoices, totalReceipts))
+	if totalReturns > 0 {
+		addLog(fmt.Sprintf("فحص المخزن: تم العثور على %d فاتورة، %d سند قبض، و %d مرتجع مبيعات.", totalInvoices, totalReceipts, totalReturns))
+	} else {
+		addLog(fmt.Sprintf("فحص المخزن: تم العثور على %d فاتورة و %d سند قبض.", totalInvoices, totalReceipts))
+	}
 
 	batchSize := cfg.BatchSize
 	if batchSize <= 0 {
@@ -766,6 +985,7 @@ func runGentleSync(cfg *Config) {
 		}
 
 		var batch []InvoiceSyncItem
+		var ledgBatch []LedgerSyncItem
 		var maxIDInBatch int64 = lastInvID
 
 		for rows.Next() {
@@ -782,10 +1002,14 @@ func runGentleSync(cfg *Config) {
 			dateD := parseDate(rawDate)
 			net := total - discount
 			rem := net - paid
+			remoteID := fmt.Sprintf("%d", id)
+			invNum := fmt.Sprintf("INV-%d", id)
+			pharmaCode := fmt.Sprintf("%d", accountID)
+
 			batch = append(batch, InvoiceSyncItem{
-				RemoteID:        fmt.Sprintf("%d", id),
-				InvoiceNumber:   fmt.Sprintf("INV-%d", id),
-				PharmacyCode:    fmt.Sprintf("%d", accountID),
+				RemoteID:        remoteID,
+				InvoiceNumber:   invNum,
+				PharmacyCode:    pharmaCode,
 				InvoiceDate:     dateD,
 				TotalAmount:     total,
 				DiscountAmount:  discount,
@@ -794,6 +1018,18 @@ func runGentleSync(cfg *Config) {
 				RemainingAmount: rem,
 				Status:          "synced",
 			})
+
+			ledgBatch = append(ledgBatch, LedgerSyncItem{
+				RemoteID:     "INV-" + remoteID,
+				PharmacyCode: pharmaCode,
+				EntryDate:    dateD,
+				DocType:      "فاتورة مبيعات",
+				DocNumber:    invNum,
+				Debit:        net,
+				Credit:       0.00,
+				Balance:      0.00,
+				Description:  "فاتورة مبيعات أدوية",
+			})
 		}
 		rows.Close() // Release locks immediately
 
@@ -801,7 +1037,7 @@ func runGentleSync(cfg *Config) {
 			break
 		}
 
-		payload := IngestionPayload{Invoices: batch}
+		payload := IngestionPayload{Invoices: batch, Ledger: ledgBatch}
 		if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, payload); err != nil {
 			addLog(fmt.Sprintf("تنبيه أثناء إرسال الدفعة: %v", err))
 			time.Sleep(2 * time.Second)
@@ -815,8 +1051,9 @@ func runGentleSync(cfg *Config) {
 
 		state.Lock()
 		state.SyncedInvoices = syncedInvoices
+		state.SyncedLedger = syncedInvoices + state.SyncedReceipts + state.SyncedReturns
 		if totalInvoices > 0 {
-			state.ProgressPercent = (syncedInvoices * 80) / totalInvoices
+			state.ProgressPercent = (syncedInvoices * 50) / totalInvoices
 		}
 		state.Unlock()
 
@@ -857,6 +1094,7 @@ func runGentleSync(cfg *Config) {
 		}
 
 		var batch []CashReceiptSyncItem
+		var ledgBatch []LedgerSyncItem
 		var maxIDInBatch int64 = lastRcptID
 
 		for rows.Next() {
@@ -873,15 +1111,31 @@ func runGentleSync(cfg *Config) {
 			}
 			dateD := parseDate(rawDate)
 			collector := decodeText(userRaw)
+			remoteID := fmt.Sprintf("%d", id)
+			rcptNum := fmt.Sprintf("RCP-%d", id)
+			pharmaCode := fmt.Sprintf("%d", accountID)
+
 			batch = append(batch, CashReceiptSyncItem{
-				RemoteID:      fmt.Sprintf("%d", id),
-				ReceiptNumber: fmt.Sprintf("RCP-%d", id),
-				PharmacyCode:  fmt.Sprintf("%d", accountID),
+				RemoteID:      remoteID,
+				ReceiptNumber: rcptNum,
+				PharmacyCode:  pharmaCode,
 				ReceiptDate:   dateD,
 				Amount:        amount,
 				PaymentMethod: "cash",
 				CollectorName: collector,
 				Notes:         "سند قبض نقدي",
+			})
+
+			ledgBatch = append(ledgBatch, LedgerSyncItem{
+				RemoteID:     "RCP-" + remoteID,
+				PharmacyCode: pharmaCode,
+				EntryDate:    dateD,
+				DocType:      "سند قبض نقدي",
+				DocNumber:    rcptNum,
+				Debit:        0.00,
+				Credit:       amount,
+				Balance:      0.00,
+				Description:  fmt.Sprintf("سند تحصيل نقدي - المحصل: %s", collector),
 			})
 		}
 		rows.Close()
@@ -890,7 +1144,7 @@ func runGentleSync(cfg *Config) {
 			break
 		}
 
-		payload := IngestionPayload{CashReceipts: batch}
+		payload := IngestionPayload{CashReceipts: batch, Ledger: ledgBatch}
 		if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, payload); err != nil {
 			addLog(fmt.Sprintf("تنبيه أثناء إرسال سندات القبض: %v", err))
 			time.Sleep(2 * time.Second)
@@ -904,6 +1158,7 @@ func runGentleSync(cfg *Config) {
 
 		state.Lock()
 		state.SyncedReceipts = syncedRcpts
+		state.SyncedLedger = state.SyncedInvoices + syncedRcpts + state.SyncedReturns
 		state.Unlock()
 
 		addLog(fmt.Sprintf("تم رفع دفعة (%d سند قبض) بنجاح - الإجمالي المرفوع: %d سند.", len(batch), syncedRcpts))
@@ -911,7 +1166,60 @@ func runGentleSync(cfg *Config) {
 		time.Sleep(time.Duration(delayMs) * time.Millisecond)
 	}
 
+	// 5. Gentle Indexed Sales Returns Extraction
+	if returnsTable != "" {
+		lastRetID := cfg.Cursors.LastReturnID
+		syncedReturns := 0
+
+		addLog(fmt.Sprintf("بدء فحص مرتجعات المبيعات من المعرف %d (الجدول: %s)...", lastRetID, returnsTable))
+
+		for {
+			state.Lock()
+			if state.ShouldPause {
+				state.Status = "paused"
+				state.CurrentTask = "المزامنة متوقفة مؤقتاً"
+				state.Unlock()
+				addLog("تم إيقاف المزامنة مؤقتاً.")
+				return
+			}
+			state.CurrentTask = fmt.Sprintf("رفع مرتجعات المبيعات بهدوء... تم رفع %d مرتجع", syncedReturns)
+			state.Unlock()
+
+			retBatch, ledgBatch, maxID, err := extractReturnsBatch(db, returnsTable, lastRetID, batchSize)
+			if err != nil {
+				addLog(fmt.Sprintf("تنبيه في استخراج المرتجعات: %v", err))
+				break
+			}
+
+			if len(retBatch) == 0 {
+				break
+			}
+
+			payload := IngestionPayload{Returns: retBatch, Ledger: ledgBatch}
+			if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, payload); err != nil {
+				addLog(fmt.Sprintf("تنبيه أثناء إرسال دفعة المرتجعات: %v", err))
+				time.Sleep(2 * time.Second)
+				continue
+			}
+
+			syncedReturns += len(retBatch)
+			lastRetID = maxID
+			cfg.Cursors.LastReturnID = lastRetID
+			saveConfig(cfg)
+
+			state.Lock()
+			state.SyncedReturns = syncedReturns
+			state.SyncedLedger = state.SyncedInvoices + state.SyncedReceipts + syncedReturns
+			state.Unlock()
+
+			addLog(fmt.Sprintf("تم رفع دفعة (%d مرتجع) بنجاح - الإجمالي المرفوع: %d مرتجع.", len(retBatch), syncedReturns))
+
+			time.Sleep(time.Duration(delayMs) * time.Millisecond)
+		}
+	}
+
 	state.Lock()
+	state.SyncedLedger = state.SyncedInvoices + state.SyncedReceipts + state.SyncedReturns
 	state.Status = "success"
 	state.CurrentTask = "المزامنة مكتملة وفي وضع المراقبة والتحديث التلقائي المستمر"
 	state.ProgressPercent = 100
@@ -985,6 +1293,10 @@ func startInternalServer(cfg *Config) {
 			"synced_invoices":     state.SyncedInvoices,
 			"total_receipts":      state.TotalReceipts,
 			"synced_receipts":     state.SyncedReceipts,
+			"total_returns":       state.TotalReturns,
+			"synced_returns":      state.SyncedReturns,
+			"total_ledger":        state.TotalLedger,
+			"synced_ledger":       state.SyncedLedger,
 			"total_customers":     state.TotalCustomers,
 			"total_products":      state.TotalProducts,
 			"last_sync_time":      state.LastSyncTime.Format("15:04:05 2006-01-02"),
@@ -1115,10 +1427,13 @@ func startInternalServer(cfg *Config) {
 	mux.HandleFunc("/api/reset", func(w http.ResponseWriter, r *http.Request) {
 		cfg.Cursors.LastInvoiceID = 0
 		cfg.Cursors.LastReceiptID = 0
+		cfg.Cursors.LastReturnID = 0
 		saveConfig(cfg)
 		state.Lock()
 		state.SyncedInvoices = 0
 		state.SyncedReceipts = 0
+		state.SyncedReturns = 0
+		state.SyncedLedger = 0
 		state.ProgressPercent = 0
 		state.ShouldPause = false
 		state.Unlock()
@@ -1740,11 +2055,15 @@ const appHTML = `<!DOCTYPE html>
 
     .stats-row {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 12px;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 10px;
     }
 
-    @media (max-width: 680px) {
+    @media (max-width: 950px) {
+      .stats-row { grid-template-columns: repeat(3, 1fr); }
+    }
+
+    @media (max-width: 580px) {
       .stats-row { grid-template-columns: repeat(2, 1fr); }
     }
 
@@ -2189,10 +2508,32 @@ const appHTML = `<!DOCTYPE html>
           <div class="stat-card-val"><span id="cntReceipts">0</span> <span class="stat-card-denom">/ <span id="totReceipts">0</span></span></div>
         </div>
 
+        <!-- Sales Returns -->
+        <div class="stat-card">
+          <div class="stat-card-header">
+            <span class="stat-card-title" id="t-st-returns">مرتجع المبيعات</span>
+            <div class="stat-card-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            </div>
+          </div>
+          <div class="stat-card-val"><span id="cntReturns">0</span> <span class="stat-card-denom">/ <span id="totReturns">0</span></span></div>
+        </div>
+
+        <!-- Account Movements (Ledger) -->
+        <div class="stat-card">
+          <div class="stat-card-header">
+            <span class="stat-card-title" id="t-st-ledger">كشف الحساب</span>
+            <div class="stat-card-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+            </div>
+          </div>
+          <div class="stat-card-val" id="cntLedger">0</div>
+        </div>
+
         <!-- Customers -->
         <div class="stat-card">
           <div class="stat-card-header">
-            <span class="stat-card-title" id="t-st-custs">دليل العملاء والصيدليات</span>
+            <span class="stat-card-title" id="t-st-custs">دليل العملاء</span>
             <div class="stat-card-icon">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             </div>
@@ -2282,7 +2623,9 @@ const appHTML = `<!DOCTYPE html>
         secProg: 'حالة المزامنة والتقدم المباشر',
         stInvoices: 'الفواتير المرفوعة',
         stReceipts: 'سندات القبض',
-        stCusts: 'دليل العملاء والصيدليات',
+        stReturns: 'مرتجع المبيعات',
+        stLedger: 'كشف الحساب',
+        stCusts: 'دليل العملاء',
         stStatus: 'حالة المحرك',
         secLog: 'سجل النشاط والعمليات المباشر',
         btnCopy: 'نسخ السجل',
@@ -2319,7 +2662,9 @@ const appHTML = `<!DOCTYPE html>
         secProg: 'Live Sync Progress & Health',
         stInvoices: 'Synced Invoices',
         stReceipts: 'Cash Receipts',
-        stCusts: 'Pharmacies Directory',
+        stReturns: 'Sales Returns',
+        stLedger: 'Account Movements',
+        stCusts: 'Pharmacies',
         stStatus: 'Engine Status',
         secLog: 'Live Synchronization Log',
         btnCopy: 'Copy Log',
@@ -2366,6 +2711,8 @@ const appHTML = `<!DOCTYPE html>
       document.getElementById('t-sec-prog').innerText = t.secProg;
       document.getElementById('t-st-invoices').innerText = t.stInvoices;
       document.getElementById('t-st-receipts').innerText = t.stReceipts;
+      document.getElementById('t-st-returns').innerText = t.stReturns;
+      document.getElementById('t-st-ledger').innerText = t.stLedger;
       document.getElementById('t-st-custs').innerText = t.stCusts;
       document.getElementById('t-st-status').innerText = t.stStatus;
       document.getElementById('t-sec-log').innerText = t.secLog;
@@ -2551,6 +2898,9 @@ const appHTML = `<!DOCTYPE html>
         document.getElementById('totInvoices').innerText = (data.total_invoices || 0).toLocaleString();
         document.getElementById('cntReceipts').innerText = (data.synced_receipts || 0).toLocaleString();
         document.getElementById('totReceipts').innerText = (data.total_receipts || 0).toLocaleString();
+        document.getElementById('cntReturns').innerText = (data.synced_returns || 0).toLocaleString();
+        document.getElementById('totReturns').innerText = (data.total_returns || 0).toLocaleString();
+        document.getElementById('cntLedger').innerText = (data.synced_ledger || 0).toLocaleString();
         document.getElementById('cntCusts').innerText = (data.total_customers || 0).toLocaleString();
 
         // Progress

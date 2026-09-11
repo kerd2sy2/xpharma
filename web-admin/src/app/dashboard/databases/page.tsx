@@ -34,6 +34,7 @@ import {
   IconChevronLeft,
   IconArrowUpRight,
   IconDatabase,
+  IconRotate,
 } from '@tabler/icons-react';
 import { toast } from 'sonner';
 
@@ -442,7 +443,7 @@ export default function DatabasesPage() {
                   }}
                   className='w-full'
                 >
-                  <TabsList className='grid grid-cols-2 md:grid-cols-5 w-full h-auto p-1 bg-muted/60'>
+                  <TabsList className='grid grid-cols-2 md:grid-cols-6 w-full h-auto p-1 bg-muted/60'>
                     <TabsTrigger value='cash_receipts' className='gap-2 py-2 text-xs'>
                       <IconReceipt className='h-4 w-4' />
                       سندات القبض
@@ -459,6 +460,22 @@ export default function DatabasesPage() {
                       </Badge>
                     </TabsTrigger>
 
+                    <TabsTrigger value='returns' className='gap-2 py-2 text-xs'>
+                      <IconRotate className='h-4 w-4' />
+                      مرتجع المبيعات
+                      <Badge variant='secondary' className='text-[10px] px-1.5 py-0'>
+                        {selectedDb.metrics?.returns_count || 0}
+                      </Badge>
+                    </TabsTrigger>
+
+                    <TabsTrigger value='ledger' className='gap-2 py-2 text-xs'>
+                      <IconFileDescription className='h-4 w-4' />
+                      كشف الحساب
+                      <Badge variant='secondary' className='text-[10px] px-1.5 py-0'>
+                        {selectedDb.metrics?.ledger_count || 0}
+                      </Badge>
+                    </TabsTrigger>
+
                     <TabsTrigger value='pharmacies' className='gap-2 py-2 text-xs'>
                       <IconBuildingStore className='h-4 w-4' />
                       دليل الصيدليات
@@ -472,14 +489,6 @@ export default function DatabasesPage() {
                       الأصناف والمخزون
                       <Badge variant='secondary' className='text-[10px] px-1.5 py-0'>
                         {selectedDb.metrics?.products_count || 0}
-                      </Badge>
-                    </TabsTrigger>
-
-                    <TabsTrigger value='ledger' className='gap-2 py-2 text-xs'>
-                      <IconFileDescription className='h-4 w-4' />
-                      كشف الحساب
-                      <Badge variant='secondary' className='text-[10px] px-1.5 py-0'>
-                        {selectedDb.metrics?.ledger_count || 0}
                       </Badge>
                     </TabsTrigger>
                   </TabsList>
@@ -499,6 +508,10 @@ export default function DatabasesPage() {
                           ? 'ابحث برقم السند، كود الصيدلية (مثال: 2877 أو 6887)، أو اسم المحصل...'
                           : activeTable === 'invoices'
                           ? 'ابحث برقم الفاتورة، كود الصيدلية...'
+                          : activeTable === 'returns'
+                          ? 'ابحث برقم المرتجع، كود الصيدلية، اسم الصيدلية، أو سبب الإرجاع...'
+                          : activeTable === 'ledger'
+                          ? 'ابحث في كشف الحساب برقم المستند، كود أو اسم الصيدلية، أو البيان...'
                           : activeTable === 'pharmacies'
                           ? 'ابحث بكود الصيدلية، اسم الصيدلية، رقم الهاتف...'
                           : 'ابحث في السجلات...'
@@ -573,6 +586,19 @@ export default function DatabasesPage() {
                           <TableHead className='text-right'>الصافي</TableHead>
                           <TableHead className='text-right'>المدفوع</TableHead>
                           <TableHead className='text-right'>المتبقي</TableHead>
+                          <TableHead className='text-right'>الحالة</TableHead>
+                        </TableRow>
+                      )}
+
+                      {activeTable === 'returns' && (
+                        <TableRow>
+                          <TableHead className='text-right'>رقم المرتجع</TableHead>
+                          <TableHead className='text-right'>كود الصيدلية</TableHead>
+                          <TableHead className='text-right'>اسم الصيدلية</TableHead>
+                          <TableHead className='text-right'>تاريخ المرتجع</TableHead>
+                          <TableHead className='text-right'>الإجمالي</TableHead>
+                          <TableHead className='text-right'>الصافي المسترد</TableHead>
+                          <TableHead className='text-right'>سبب الإرجاع</TableHead>
                           <TableHead className='text-right'>الحالة</TableHead>
                         </TableRow>
                       )}
@@ -723,6 +749,57 @@ export default function DatabasesPage() {
                           </TableRow>
                         ))}
 
+                      {activeTable === 'returns' &&
+                        tableData.map((row) => (
+                          <TableRow key={row.id} className='hover:bg-muted/30'>
+                            <TableCell className='font-mono font-bold text-amber-600 dark:text-amber-400'>
+                              {row.return_number || `RET-${row.remote_id}`}
+                            </TableCell>
+                            <TableCell>
+                              <div className='flex items-center gap-1.5'>
+                                <Badge variant='outline' className='font-mono text-[11px] px-1.5 py-0'>
+                                  {row.pharmacy_code}
+                                </Badge>
+                                <button
+                                  onClick={() => handleCopy(row.pharmacy_code, `ret-p-${row.id}`)}
+                                  className='text-muted-foreground hover:text-foreground'
+                                  title='نسخ كود الصيدلية'
+                                >
+                                  {copiedId === `ret-p-${row.id}` ? (
+                                    <IconCheck className='h-3.5 w-3.5 text-emerald-500' />
+                                  ) : (
+                                    <IconCopy className='h-3.5 w-3.5' />
+                                  )}
+                                </button>
+                              </div>
+                            </TableCell>
+                            <TableCell className='font-medium text-foreground'>
+                              {row.pharmacy_name}
+                            </TableCell>
+                            <TableCell className='text-muted-foreground'>
+                              {row.return_date
+                                ? new Date(row.return_date).toLocaleDateString('ar-EG', {
+                                    year: 'numeric',
+                                    month: 'short',
+                                    day: 'numeric',
+                                  })
+                                : '—'}
+                            </TableCell>
+                            <TableCell>{Number(row.total_amount || 0).toLocaleString('ar-EG')} ج.م</TableCell>
+                            <TableCell className='font-bold text-amber-600 dark:text-amber-400'>
+                              {Number(row.net_amount || 0).toLocaleString('ar-EG')} ج.م
+                            </TableCell>
+                            <TableCell className='text-muted-foreground max-w-[200px] truncate' title={row.reason}>
+                              {row.reason || 'مرتجع مبيعات'}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant='outline' className='bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200 text-[10px]'>
+                                مرتجع معتمد
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+
                       {activeTable === 'pharmacies' &&
                         tableData.map((row) => (
                           <TableRow key={row.id} className='hover:bg-muted/30'>
@@ -790,33 +867,67 @@ export default function DatabasesPage() {
                       {activeTable === 'ledger' &&
                         tableData.map((row) => (
                           <TableRow key={row.id} className='hover:bg-muted/30'>
-                            <TableCell className='text-muted-foreground'>
+                            <TableCell className='text-muted-foreground whitespace-nowrap'>
                               {row.entry_date
-                                ? new Date(row.entry_date).toLocaleDateString('ar-EG')
+                                ? new Date(row.entry_date).toLocaleDateString('ar-EG', {
+                                    year: 'numeric',
+                                    month: 'short',
+                                    day: 'numeric',
+                                  })
                                 : '—'}
                             </TableCell>
                             <TableCell>
-                              <Badge variant='outline' className='font-mono text-[11px] px-1.5 py-0'>
-                                {row.pharmacy_code}
-                              </Badge>
+                              <div className='flex items-center gap-1.5'>
+                                <Badge variant='outline' className='font-mono text-[11px] px-1.5 py-0'>
+                                  {row.pharmacy_code}
+                                </Badge>
+                                <button
+                                  onClick={() => handleCopy(row.pharmacy_code, `led-p-${row.id}`)}
+                                  className='text-muted-foreground hover:text-foreground'
+                                  title='نسخ كود الصيدلية'
+                                >
+                                  {copiedId === `led-p-${row.id}` ? (
+                                    <IconCheck className='h-3.5 w-3.5 text-emerald-500' />
+                                  ) : (
+                                    <IconCopy className='h-3.5 w-3.5' />
+                                  )}
+                                </button>
+                              </div>
                             </TableCell>
                             <TableCell className='font-medium text-foreground'>
                               {row.pharmacy_name}
                             </TableCell>
                             <TableCell>
-                              <Badge variant='secondary' className='text-[10px]'>
+                              <Badge
+                                variant='outline'
+                                className={`text-[10px] px-2 py-0.5 font-medium whitespace-nowrap ${
+                                  row.doc_type === 'فاتورة مبيعات'
+                                    ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200'
+                                    : row.doc_type === 'سند قبض نقدي'
+                                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 border-emerald-200'
+                                    : row.doc_type === 'مرتجع مبيعات'
+                                    ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200'
+                                    : 'bg-muted text-muted-foreground'
+                                }`}
+                              >
                                 {row.doc_type}
                               </Badge>
                             </TableCell>
-                            <TableCell className='font-mono'>{row.doc_number}</TableCell>
-                            <TableCell className='text-rose-600 font-medium'>
-                              {Number(row.debit) > 0 ? `${Number(row.debit).toLocaleString('ar-EG')} ج.م` : '—'}
+                            <TableCell className='font-mono font-medium'>{row.doc_number}</TableCell>
+                            <TableCell className='text-rose-600 font-semibold whitespace-nowrap'>
+                              {Number(row.debit) > 0 ? `${Number(row.debit).toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م` : '—'}
                             </TableCell>
-                            <TableCell className='text-emerald-600 font-medium'>
-                              {Number(row.credit) > 0 ? `${Number(row.credit).toLocaleString('ar-EG')} ج.م` : '—'}
+                            <TableCell className='text-emerald-600 font-semibold whitespace-nowrap'>
+                              {Number(row.credit) > 0 ? `${Number(row.credit).toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م` : '—'}
                             </TableCell>
-                            <TableCell className='font-bold text-foreground'>
-                              {Number(row.balance).toLocaleString('ar-EG')} ج.م
+                            <TableCell className={`font-bold whitespace-nowrap ${
+                              Number(row.balance) > 0
+                                ? 'text-rose-600 dark:text-rose-400'
+                                : Number(row.balance) < 0
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : 'text-foreground'
+                            }`}>
+                              {Number(row.balance).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م
                             </TableCell>
                             <TableCell className='text-muted-foreground max-w-[200px] truncate' title={row.description}>
                               {row.description || '—'}
