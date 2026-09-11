@@ -1,0 +1,33 @@
+# Binaries & build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.bin
+bin/
+dist/
+
+# Dependencies
+vendor/
+node_modules/
+
+# Local databases & queues
+*.db
+*.gdb
+*.bbolt
+data/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE & OS files
+.vscode/
+.idea/
+Thumbs.db
+[Dd]esktop.ini
+
+# Reference repository
+reference_tabarak/
