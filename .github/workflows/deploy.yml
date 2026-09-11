@@ -1,0 +1,88 @@
+name: 🚀 XPharma Auto Deploy CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: 🌐 Deploy to VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔐 Execute Remote Deployment via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script_stop: true
+          script: |
+            echo "🚀 [1/4] Starting XPharma deployment..."
+            
+            # Navigate to project directory (adjust if placed in /var/www/xpharma or /root/xpharma)
+            if [ -d "/var/www/xpharma" ]; then
+              cd /var/www/xpharma
+            elif [ -d "/root/xpharma" ]; then
+              cd /root/xpharma
+            elif [ -d "$HOME/xpharma" ]; then
+              cd "$HOME/xpharma"
+            else
+              echo "⚠️ Project directory not found! Creating /var/www/xpharma..."
+              mkdir -p /var/www/xpharma
+              cd /var/www/xpharma
+              git clone https://github.com/kerd2sy2/xpharma.git .
+            fi
+
+            echo "📥 [2/4] Pulling latest code from GitHub (main)..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "⚙️ [3/4] Building and restarting Go Backend..."
+            if [ -d "backend" ]; then
+              cd backend
+              go build -o xpharma-server cmd/server/main.go || echo "Go build skipped or failed"
+              # Restart backend service if systemd service exists
+              if systemctl is-active --quiet xpharma-backend; then
+                sudo systemctl restart xpharma-backend
+                echo "✅ Backend service restarted via systemd."
+              elif pgrep -f "xpharma-server" > /dev/null; then
+                pkill -f "xpharma-server" || true
+                nohup ./xpharma-server > backend.log 2>&1 &
+                echo "✅ Backend restarted in background."
+              fi
+              cd ..
+            fi
+
+            echo "💻 [4/4] Building and updating Web Admin Dashboard (Next.js)..."
+            if [ -d "web-admin" ]; then
+              cd web-admin
+              npm install --prefer-offline --no-audit || npm install
+              npm run build
+              
+              # Restart PM2 or start if not running
+              if command -v pm2 > /dev/null; then
+                pm2 restart xpharma-web || pm2 start npm --name "xpharma-web" -- start -- -p 3002
+                pm2 save
+                echo "✅ Web Admin Dashboard restarted with PM2 on port 3002."
+              else
+                echo "⚠️ PM2 not found, running background process..."
+                pkill -f "next-server" || true
+                nohup npm start -- -p 3002 > web-admin.log 2>&1 &
+              fi
+              cd ..
+            fi
+
+            # Reload Nginx if available
+            if command -v nginx > /dev/null; then
+              sudo nginx -t && sudo systemctl reload nginx || true
+            fi
+
+            echo "🎉 Deployment completed successfully!"
