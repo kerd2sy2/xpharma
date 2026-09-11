@@ -224,16 +224,15 @@ export const navGroups: NavGroup[] = [
           },
           {
             title: 'الاشتراكات والمدفوعات',
-            url: '/dashboard/billing',
+            url: '/dashboard/billing-review',
             icon: 'billing',
-            shortcut: ['b', 'b'],
-            access: { requireOrg: true }
+            shortcut: ['b', 'b']
           },
           {
-            title: 'تسجيل الدخول',
-            shortcut: ['l', 'l'],
-            url: '/',
-            icon: 'login'
+            title: 'تسجيل الخروج',
+            shortcut: ['l', 'o'],
+            url: '/logout',
+            icon: 'logout'
           }
         ]
       }

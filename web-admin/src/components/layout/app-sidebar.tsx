@@ -1,18 +1,9 @@
 'use client';
+
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu';
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
   SidebarHeader,
@@ -24,13 +15,12 @@ import {
   SidebarMenuSubItem,
   SidebarRail
 } from '@/components/ui/sidebar';
-import { UserAvatarProfile } from '@/components/user-avatar-profile';
 import { navGroups } from '@/config/nav-config';
 import { useMediaQuery } from '@/hooks/use-media-query';
-import { useClerk, useOrganization, useUser } from '@clerk/nextjs';
+import { useClerk, useUser } from '@clerk/nextjs';
 import { useFilteredNavGroups } from '@/hooks/use-nav';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import * as React from 'react';
 import { Icons } from '../icons';
 import { OrgSwitcher } from '../org-switcher';
@@ -39,9 +29,7 @@ export default function AppSidebar() {
   const pathname = usePathname();
   const { isOpen } = useMediaQuery();
   const { user } = useUser();
-  const { organization } = useOrganization();
   const { signOut } = useClerk();
-  const router = useRouter();
   const filteredGroups = useFilteredNavGroups(navGroups);
 
   const [localUser, setLocalUser] = React.useState<any>(null);
@@ -100,6 +88,8 @@ export default function AppSidebar() {
             <SidebarMenu>
               {group.items.map((item) => {
                 const Icon = item.icon ? Icons[item.icon] : Icons.logo;
+                const isUserAccount = item.icon === 'account' || item.title === 'الحساب الشخصي';
+
                 return item?.items && item?.items?.length > 0 ? (
                   <Collapsible
                     key={item.title}
@@ -115,22 +105,51 @@ export default function AppSidebar() {
                         />
                       }
                     >
-                      {item.icon && <Icon />}
+                      {isUserAccount && activeUser?.imageUrl ? (
+                        <img
+                          src={activeUser.imageUrl}
+                          alt=''
+                          className='size-5 rounded-full object-cover shrink-0'
+                        />
+                      ) : (
+                        item.icon && <Icon />
+                      )}
                       <span>{item.title}</span>
                       <Icons.chevronRight className='mr-auto transition-transform duration-200 group-data-panel-open/collapsible:rotate-90 rtl:rotate-180 rtl:group-data-panel-open/collapsible:rotate-90' />
                     </CollapsibleTrigger>
                     <CollapsibleContent>
                       <SidebarMenuSub>
-                        {item.items?.map((subItem) => (
-                          <SidebarMenuSubItem key={subItem.title}>
-                            <SidebarMenuSubButton
-                              render={<Link href={subItem.url} aria-label={subItem.title} />}
-                              isActive={pathname === subItem.url}
-                            >
-                              <span>{subItem.title}</span>
-                            </SidebarMenuSubButton>
-                          </SidebarMenuSubItem>
-                        ))}
+                        {item.items?.map((subItem) => {
+                          const SubIcon = subItem.icon ? Icons[subItem.icon] : null;
+                          const isLogout = subItem.url === '/logout' || subItem.icon === 'logout';
+
+                          return (
+                            <SidebarMenuSubItem key={subItem.title}>
+                              {isLogout ? (
+                                <SidebarMenuSubButton
+                                  render={
+                                    <button
+                                      type='button'
+                                      onClick={handleLogout}
+                                      className='flex w-full items-center gap-2 text-right text-destructive hover:text-destructive hover:bg-destructive/10 cursor-pointer font-medium'
+                                    />
+                                  }
+                                >
+                                  {SubIcon && <SubIcon className='size-4 shrink-0' />}
+                                  <span>{subItem.title}</span>
+                                </SidebarMenuSubButton>
+                              ) : (
+                                <SidebarMenuSubButton
+                                  render={<Link href={subItem.url} aria-label={subItem.title} />}
+                                  isActive={pathname === subItem.url}
+                                >
+                                  {SubIcon && <SubIcon className='size-4 shrink-0' />}
+                                  <span>{subItem.title}</span>
+                                </SidebarMenuSubButton>
+                              )}
+                            </SidebarMenuSubItem>
+                          );
+                        })}
                       </SidebarMenuSub>
                     </CollapsibleContent>
                   </Collapsible>
@@ -151,71 +170,6 @@ export default function AppSidebar() {
           </SidebarGroup>
         ))}
       </SidebarContent>
-      <SidebarFooter>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <SidebarMenuButton
-                    size='lg'
-                    className='data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground'
-                  />
-                }
-              >
-                {activeUser && (
-                  <UserAvatarProfile className='h-8 w-8 rounded-lg' showInfo user={activeUser} />
-                )}
-                <Icons.chevronsDown className='mr-auto size-4' />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                className='w-(--anchor-width) min-w-56 rounded-lg'
-                side='bottom'
-                align='end'
-                sideOffset={4}
-              >
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel className='p-0 font-normal'>
-                    <div className='px-1 py-1.5'>
-                      {activeUser && (
-                        <UserAvatarProfile className='h-8 w-8 rounded-lg' showInfo user={activeUser} />
-                      )}
-                    </div>
-                  </DropdownMenuLabel>
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-
-                <DropdownMenuGroup>
-                  <DropdownMenuItem onClick={() => router.push('/dashboard/profile')}>
-                    <Icons.account className='ml-2 h-4 w-4' />
-                    الملف الشخصي
-                  </DropdownMenuItem>
-                  {organization && (
-                    <DropdownMenuItem onClick={() => router.push('/dashboard/billing')}>
-                      <Icons.creditCard className='ml-2 h-4 w-4' />
-                      الاشتراكات والفواتير
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem onClick={() => router.push('/dashboard/notifications')}>
-                    <Icons.notification className='ml-2 h-4 w-4' />
-                    مركز الإشعارات
-                  </DropdownMenuItem>
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuGroup>
-                  <DropdownMenuItem
-                    onClick={handleLogout}
-                    className='cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10'
-                  >
-                    <Icons.logout aria-hidden className='ml-2 h-4 w-4' />
-                    تسجيل الخروج
-                  </DropdownMenuItem>
-                </DropdownMenuGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
       <SidebarRail />
     </Sidebar>
   );
