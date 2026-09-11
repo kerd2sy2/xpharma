@@ -8,7 +8,15 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { ShieldCheck, Building2, ArrowRight, Loader2, KeyRound, Mail, Sparkles } from 'lucide-react';
+import {
+  IconShieldCheck,
+  IconBuildingWarehouse,
+  IconArrowRight,
+  IconLoader2,
+  IconKey,
+  IconMail,
+  IconSparkles
+} from '@tabler/icons-react';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -67,7 +75,7 @@ export default function LoginPage() {
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                <ShieldCheck className='w-3.5 h-3.5' />
+                <IconShieldCheck className='w-3.5 h-3.5' />
                 مدير المنصة (Admin)
               </button>
               <button
@@ -79,7 +87,7 @@ export default function LoginPage() {
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                <Building2 className='w-3.5 h-3.5' />
+                <IconBuildingWarehouse className='w-3.5 h-3.5' />
                 مستودع أدوية (Tenant)
               </button>
             </div>
@@ -101,7 +109,7 @@ export default function LoginPage() {
                   البريد الإلكتروني / اسم المستخدم
                 </Label>
                 <div className='relative'>
-                  <Mail className='absolute left-3 top-2.5 h-4 w-4 text-slate-500' />
+                  <IconMail className='absolute left-3 top-2.5 h-4 w-4 text-slate-500' />
                   <Input
                     id='email'
                     type='email'
@@ -124,7 +132,7 @@ export default function LoginPage() {
                   </a>
                 </div>
                 <div className='relative'>
-                  <KeyRound className='absolute left-3 top-2.5 h-4 w-4 text-slate-500' />
+                  <IconKey className='absolute left-3 top-2.5 h-4 w-4 text-slate-500' />
                   <Input
                     id='password'
                     type='password'
@@ -147,7 +155,7 @@ export default function LoginPage() {
                   تذكر بيانات الدخول
                 </label>
                 <div className='flex items-center gap-1 text-xs text-teal-400/80 font-mono'>
-                  <Sparkles className='w-3 h-3 text-teal-400' />
+                  <IconSparkles className='w-3 h-3 text-teal-400' />
                   <span>v1.0.0 Cloud</span>
                 </div>
               </div>
@@ -161,13 +169,13 @@ export default function LoginPage() {
               >
                 {loading ? (
                   <>
-                    <Loader2 className='w-4 h-4 mr-2 animate-spin' />
+                    <IconLoader2 className='w-4 h-4 mr-2 animate-spin' />
                     جاري التحقق والدخول...
                   </>
                 ) : (
                   <>
                     دخول لوحة التحكم
-                    <ArrowRight className='w-4 h-4 ml-2' />
+                    <IconArrowRight className='w-4 h-4 ml-2' />
                   </>
                 )}
               </Button>
