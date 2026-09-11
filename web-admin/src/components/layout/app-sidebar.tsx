@@ -187,18 +187,18 @@ export default function AppSidebar() {
 
                 <DropdownMenuGroup>
                   <DropdownMenuItem onClick={() => router.push('/dashboard/profile')}>
-                    <Icons.account className='mr-2 h-4 w-4' />
-                    Profile
+                    <Icons.account className='ml-2 h-4 w-4' />
+                    الملف الشخصي
                   </DropdownMenuItem>
                   {organization && (
                     <DropdownMenuItem onClick={() => router.push('/dashboard/billing')}>
-                      <Icons.creditCard className='mr-2 h-4 w-4' />
-                      Billing
+                      <Icons.creditCard className='ml-2 h-4 w-4' />
+                      الاشتراكات والفواتير
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuItem onClick={() => router.push('/dashboard/notifications')}>
-                    <Icons.notification className='mr-2 h-4 w-4' />
-                    Notifications
+                    <Icons.notification className='ml-2 h-4 w-4' />
+                    مركز الإشعارات
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
@@ -207,8 +207,8 @@ export default function AppSidebar() {
                     onClick={handleLogout}
                     className='cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10'
                   >
-                    <Icons.logout aria-hidden className='mr-2 h-4 w-4' />
-                    تسجيل الخروج (Sign out)
+                    <Icons.logout aria-hidden className='ml-2 h-4 w-4' />
+                    تسجيل الخروج
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
               </DropdownMenuContent>

@@ -23,7 +23,15 @@ type IngestionPayload struct {
 	CashReceipts []CashReceiptSyncItem `json:"cash_receipts"`
 	Ledger       []LedgerSyncItem      `json:"ledger"`
 	Products     []ProductSyncItem     `json:"products"`
+	Customers    []CustomerSyncItem    `json:"customers"`
 	Cursors      SyncCursors           `json:"cursors"`
+}
+
+type CustomerSyncItem struct {
+	Code    string `json:"code"`
+	Name    string `json:"name"`
+	Phone   string `json:"phone"`
+	Address string `json:"address"`
 }
 
 type SyncCursors struct {
@@ -299,7 +307,29 @@ func (s *IngestionService) HandleIngest(c *gin.Context) {
 			}
 		}
 
-		// 6. Update Cursors & Sync State in central public table
+		// 6. Upsert Customers / Pharmacies into public.pharmacies
+		for _, cust := range payload.Customers {
+			if cust.Code == "" || strings.TrimSpace(cust.Name) == "" {
+				continue
+			}
+			custQuery := `
+				INSERT INTO public.pharmacies (tenant_id, code, name, phone, address, is_active, updated_at)
+				VALUES ($1, $2, $3, $4, $5, TRUE, NOW())
+				ON CONFLICT (tenant_id, code) DO UPDATE 
+				SET name = EXCLUDED.name,
+				    phone = COALESCE(NULLIF(EXCLUDED.phone, ''), public.pharmacies.phone),
+				    address = COALESCE(NULLIF(EXCLUDED.address, ''), public.pharmacies.address),
+				    updated_at = NOW()
+			`
+			_, err := tx.Exec(ctx, custQuery,
+				tenantID, cust.Code, cust.Name, cust.Phone, cust.Address,
+			)
+			if err != nil {
+				return fmt.Errorf("upsert pharmacy %s: %w", cust.Code, err)
+			}
+		}
+
+		// 7. Update Cursors & Sync State in central public table
 		syncStateQuery := `
 			INSERT INTO public.tenant_sync_states (tenant_id, last_sync_at, last_invoice_cursor, last_return_cursor, last_receipt_cursor, last_ledger_cursor, sync_status, updated_at)
 			VALUES ($1, NOW(), $2, $3, $4, $5, 'idle', NOW())
@@ -336,11 +366,12 @@ func (s *IngestionService) HandleIngest(c *gin.Context) {
 		"success": true,
 		"message": "Batch synced successfully",
 		"counts": gin.H{
-			"invoices": len(payload.Invoices),
-			"returns":  len(payload.Returns),
-			"receipts": len(payload.CashReceipts),
-			"ledger":   len(payload.Ledger),
-			"products": len(payload.Products),
+			"invoices":  len(payload.Invoices),
+			"returns":   len(payload.Returns),
+			"receipts":  len(payload.CashReceipts),
+			"ledger":    len(payload.Ledger),
+			"products":  len(payload.Products),
+			"customers": len(payload.Customers),
 		},
 	})
 }

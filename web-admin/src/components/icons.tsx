@@ -3,6 +3,7 @@ import {
   IconAlertCircle,
   IconAlertTriangle,
   IconServer,
+  IconDatabase,
   IconActivity,
   IconArrowRight,
   IconBell,
@@ -201,6 +202,7 @@ export const Icons = {
   eyeOff: IconEyeOff,
   adjustments: IconAdjustmentsHorizontal,
   server: IconServer,
+  database: IconDatabase,
   activity: IconActivity,
 
   // Text formatting

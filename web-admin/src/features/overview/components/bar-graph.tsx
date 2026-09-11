@@ -13,21 +13,21 @@ import { Badge } from '@/components/ui/badge';
 import { Icons } from '@/components/icons';
 
 const chartData = [
-  { month: 'January', desktop: 186, mobile: 80 },
-  { month: 'February', desktop: 305, mobile: 200 },
-  { month: 'March', desktop: 237, mobile: 120 },
-  { month: 'April', desktop: 73, mobile: 190 },
-  { month: 'May', desktop: 209, mobile: 130 },
-  { month: 'June', desktop: 214, mobile: 140 }
+  { month: 'يناير', desktop: 186, mobile: 80 },
+  { month: 'فبراير', desktop: 305, mobile: 200 },
+  { month: 'مارس', desktop: 237, mobile: 120 },
+  { month: 'أبريل', desktop: 73, mobile: 190 },
+  { month: 'مايو', desktop: 209, mobile: 130 },
+  { month: 'يونيو', desktop: 214, mobile: 140 }
 ];
 
 const chartConfig = {
   desktop: {
-    label: 'Desktop',
+    label: 'أجهزة الكمبيوتر',
     color: 'var(--chart-1)'
   },
   mobile: {
-    label: 'Mobile',
+    label: 'الهواتف الذكية',
     color: 'var(--chart-2)'
   }
 } satisfies ChartConfig;
@@ -37,13 +37,13 @@ export function BarGraph() {
     <Card>
       <CardHeader>
         <CardTitle>
-          Bar Chart - Multiple
+          مقارنة الأجهزة المستخدمة
           <Badge variant='outline'>
             <Icons.trendingDown />
             -5.2%
           </Badge>
         </CardTitle>
-        <CardDescription>January - June 2025</CardDescription>
+        <CardDescription>يناير - يونيو 2026</CardDescription>
       </CardHeader>
       <CardContent>
         <ChartContainer config={chartConfig}>

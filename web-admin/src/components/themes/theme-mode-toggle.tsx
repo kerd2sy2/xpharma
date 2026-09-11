@@ -55,10 +55,10 @@ export function ThemeModeToggle() {
         }
       >
         <Icons.brightness />
-        <span className='sr-only'>Toggle theme</span>
+        <span className='sr-only'>تبديل المظهر</span>
       </TooltipTrigger>
       <TooltipContent>
-        Toggle theme <Kbd>⌘⇧D</Kbd> <Kbd>D D</Kbd>
+        تبديل الوضع الليلي / النهاري <Kbd>⌘⇧D</Kbd> <Kbd>D D</Kbd>
       </TooltipContent>
     </Tooltip>
   );

@@ -22,26 +22,26 @@ const chartData = [
 
 const chartConfig = {
   visitors: {
-    label: 'Visitors'
+    label: 'الزيارات'
   },
   chrome: {
-    label: 'Chrome',
+    label: 'جوجل كروم',
     color: 'var(--chart-1)'
   },
   safari: {
-    label: 'Safari',
+    label: 'سفاري',
     color: 'var(--chart-2)'
   },
   firefox: {
-    label: 'Firefox',
+    label: 'فايرفوكس',
     color: 'var(--chart-3)'
   },
   edge: {
-    label: 'Edge',
+    label: 'مايكروسوفت إيدج',
     color: 'var(--chart-4)'
   },
   other: {
-    label: 'Other',
+    label: 'متصفحات أخرى',
     color: 'var(--chart-5)'
   }
 } satisfies ChartConfig;
@@ -51,13 +51,13 @@ export function PieGraph() {
     <Card className='flex h-full flex-col'>
       <CardHeader className='items-center pb-0'>
         <CardTitle>
-          Pie Chart
+          توزيع مصادر الدخول
           <Badge variant='outline'>
             <Icons.trendingUp />
             +5.2%
           </Badge>
         </CardTitle>
-        <CardDescription>January - June 2024</CardDescription>
+        <CardDescription>يناير - يونيو 2026</CardDescription>
       </CardHeader>
       <CardContent className='flex flex-1 items-center justify-center pb-0'>
         <ChartContainer

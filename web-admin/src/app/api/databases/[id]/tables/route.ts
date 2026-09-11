@@ -1,0 +1,172 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { query } from '@/lib/db';
+
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id: tenantId } = await params;
+    const { searchParams } = new URL(req.url);
+    const table = searchParams.get('table') || 'cash_receipts';
+    const search = searchParams.get('search') || '';
+    const limit = Math.min(parseInt(searchParams.get('limit') || '50', 10), 200);
+    const offset = Math.max(parseInt(searchParams.get('offset') || '0', 10), 0);
+
+    // Verify tenant exists and get schema_name
+    const tenantRes = await query(
+      `SELECT id, name, slug, schema_name FROM public.tenants WHERE id = $1`,
+      [tenantId]
+    );
+    if (tenantRes.rows.length === 0) {
+      return NextResponse.json({ success: false, error: 'Warehouse not found' }, { status: 404 });
+    }
+
+    const tenant = tenantRes.rows[0];
+    const schema = tenant.schema_name;
+    const searchPattern = search ? `%${search.trim()}%` : '';
+
+    let rows: any[] = [];
+    let totalCount = 0;
+
+    switch (table) {
+      case 'cash_receipts': {
+        const countRes = await query(
+          `SELECT COUNT(*)::int as count 
+           FROM ${schema}.cash_receipts r
+           LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = r.pharmacy_code
+           WHERE ($2 = '' OR r.pharmacy_code ILIKE $2 OR r.receipt_number ILIKE $2 OR r.collector_name ILIKE $2 OR p.name ILIKE $2)`,
+          [tenantId, searchPattern]
+        );
+        totalCount = countRes.rows[0]?.count || 0;
+
+        const dataRes = await query(
+          `SELECT 
+             r.id, r.remote_id, r.receipt_number, r.pharmacy_code, 
+             COALESCE(p.name, 'غير متوفر بالدليل') as pharmacy_name,
+             r.receipt_date, r.amount, r.payment_method, r.collector_name, r.notes, r.created_at
+           FROM ${schema}.cash_receipts r
+           LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = r.pharmacy_code
+           WHERE ($2 = '' OR r.pharmacy_code ILIKE $2 OR r.receipt_number ILIKE $2 OR r.collector_name ILIKE $2 OR p.name ILIKE $2)
+           ORDER BY r.receipt_date DESC, r.remote_id DESC
+           LIMIT $3 OFFSET $4`,
+          [tenantId, searchPattern, limit, offset]
+        );
+        rows = dataRes.rows;
+        break;
+      }
+
+      case 'invoices': {
+        const countRes = await query(
+          `SELECT COUNT(*)::int as count 
+           FROM ${schema}.invoices i
+           LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = i.pharmacy_code
+           WHERE ($2 = '' OR i.pharmacy_code ILIKE $2 OR i.invoice_number ILIKE $2 OR p.name ILIKE $2)`,
+          [tenantId, searchPattern]
+        );
+        totalCount = countRes.rows[0]?.count || 0;
+
+        const dataRes = await query(
+          `SELECT 
+             i.id, i.remote_id, i.invoice_number, i.pharmacy_code, 
+             COALESCE(p.name, 'غير متوفر بالدليل') as pharmacy_name,
+             i.invoice_date, i.total_amount, i.discount_amount, i.net_amount, i.paid_amount, i.remaining_amount, i.status, i.created_at
+           FROM ${schema}.invoices i
+           LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = i.pharmacy_code
+           WHERE ($2 = '' OR i.pharmacy_code ILIKE $2 OR i.invoice_number ILIKE $2 OR p.name ILIKE $2)
+           ORDER BY i.invoice_date DESC, i.remote_id DESC
+           LIMIT $3 OFFSET $4`,
+          [tenantId, searchPattern, limit, offset]
+        );
+        rows = dataRes.rows;
+        break;
+      }
+
+      case 'pharmacies': {
+        const countRes = await query(
+          `SELECT COUNT(*)::int as count 
+           FROM public.pharmacies
+           WHERE tenant_id = $1 
+             AND ($2 = '' OR code ILIKE $2 OR name ILIKE $2 OR phone ILIKE $2 OR address ILIKE $2)`,
+          [tenantId, searchPattern]
+        );
+        totalCount = countRes.rows[0]?.count || 0;
+
+        const dataRes = await query(
+          `SELECT id, code, name, phone, address, link_code, is_active, created_at, updated_at
+           FROM public.pharmacies
+           WHERE tenant_id = $1 
+             AND ($2 = '' OR code ILIKE $2 OR name ILIKE $2 OR phone ILIKE $2 OR address ILIKE $2)
+           ORDER BY code ASC
+           LIMIT $3 OFFSET $4`,
+          [tenantId, searchPattern, limit, offset]
+        );
+        rows = dataRes.rows;
+        break;
+      }
+
+      case 'products': {
+        const countRes = await query(
+          `SELECT COUNT(*)::int as count 
+           FROM ${schema}.products
+           WHERE ($1 = '' OR remote_id ILIKE $1 OR name ILIKE $1 OR name_en ILIKE $1)`,
+          [searchPattern]
+        );
+        totalCount = countRes.rows[0]?.count || 0;
+
+        const dataRes = await query(
+          `SELECT id, remote_id, name, name_en, price, quantity, discount_percent, date_in, updated_at
+           FROM ${schema}.products
+           WHERE ($1 = '' OR remote_id ILIKE $1 OR name ILIKE $1 OR name_en ILIKE $1)
+           ORDER BY remote_id ASC
+           LIMIT $2 OFFSET $3`,
+          [searchPattern, limit, offset]
+        );
+        rows = dataRes.rows;
+        break;
+      }
+
+      case 'ledger': {
+        const countRes = await query(
+          `SELECT COUNT(*)::int as count 
+           FROM ${schema}.ledger_entries l
+           LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = l.pharmacy_code
+           WHERE ($2 = '' OR l.pharmacy_code ILIKE $2 OR l.doc_number ILIKE $2 OR l.description ILIKE $2)`,
+          [tenantId, searchPattern]
+        );
+        totalCount = countRes.rows[0]?.count || 0;
+
+        const dataRes = await query(
+          `SELECT 
+             l.id, l.remote_id, l.pharmacy_code, 
+             COALESCE(p.name, 'غير متوفر بالدليل') as pharmacy_name,
+             l.entry_date, l.doc_type, l.doc_number, l.debit, l.credit, l.balance, l.description
+           FROM ${schema}.ledger_entries l
+           LEFT JOIN public.pharmacies p ON p.tenant_id = $1 AND p.code = l.pharmacy_code
+           WHERE ($2 = '' OR l.pharmacy_code ILIKE $2 OR l.doc_number ILIKE $2 OR l.description ILIKE $2)
+           ORDER BY l.entry_date DESC
+           LIMIT $3 OFFSET $4`,
+          [tenantId, searchPattern, limit, offset]
+        );
+        rows = dataRes.rows;
+        break;
+      }
+
+      default:
+        return NextResponse.json({ success: false, error: 'Invalid table requested' }, { status: 400 });
+    }
+
+    return NextResponse.json({
+      success: true,
+      tenant,
+      table,
+      totalCount,
+      limit,
+      offset,
+      rows,
+    });
+  } catch (error: any) {
+    console.error('Error fetching table data:', error);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}

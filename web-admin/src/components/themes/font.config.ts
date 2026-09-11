@@ -1,5 +1,6 @@
 import {
   Architects_Daughter,
+  Cairo,
   DM_Sans,
   Fira_Code,
   Geist,
@@ -18,6 +19,12 @@ import {
 } from 'next/font/google';
 
 import { cn } from '@/lib/utils';
+
+const fontCairo = Cairo({
+  subsets: ['arabic', 'latin'],
+  variable: '--font-cairo',
+  weight: ['400', '500', '600', '700', '800']
+});
 
 const fontSans = Geist({
   subsets: ['latin'],
@@ -103,6 +110,7 @@ const fontPlayfairDisplay = Playfair_Display({
 });
 
 export const fontVariables = cn(
+  fontCairo.variable,
   fontSans.variable,
   fontMono.variable,
   fontGoogleSansFlex.variable,

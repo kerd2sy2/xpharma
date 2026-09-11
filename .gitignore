@@ -5,6 +5,10 @@
 *.so
 *.dylib
 *.bin
+*-linux
+*.zip
+*.tsbuildinfo
+.next/
 bin/
 dist/
 

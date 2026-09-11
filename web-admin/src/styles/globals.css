@@ -17,6 +17,7 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-cairo), var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   }
 
   /* Global scrollbar styling to match ScrollArea */

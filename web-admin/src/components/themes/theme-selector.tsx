@@ -38,15 +38,15 @@ export function ThemeSelector() {
           <span className='text-muted-foreground hidden sm:block'>
             <Icons.palette />
           </span>
-          <span className='text-muted-foreground block sm:hidden'>Theme</span>
-          <SelectValue placeholder='Select a theme' />
+          <span className='text-muted-foreground block sm:hidden'>السمة</span>
+          <SelectValue placeholder='اختر السمة' />
           <Kbd>T T</Kbd>
         </SelectTrigger>
         <SelectContent align='end'>
           {THEMES.length > 0 && (
             <>
               <SelectGroup>
-                <SelectLabel>themes</SelectLabel>
+                <SelectLabel>السمات المتاحة</SelectLabel>
                 {THEMES.map((theme) => (
                   <SelectItem key={theme.name} value={theme.value}>
                     {theme.name}

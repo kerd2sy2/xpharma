@@ -8,35 +8,72 @@ type BreadcrumbItem = {
   link: string;
 };
 
-// This allows to add custom title as well
+const segmentTranslations: Record<string, string> = {
+  dashboard: 'لوحة التحكم',
+  overview: 'نظرة عامة',
+  tenants: 'المخازن والمستأجرين',
+  databases: 'قواعد البيانات المنسوخة',
+  'billing-review': 'الفواتير والاشتراكات',
+  monitoring: 'مراقبة الوكلاء',
+  workspaces: 'مساحات العمل',
+  team: 'فرق العمل',
+  product: 'المنتجات والأدوية',
+  users: 'المستخدمين',
+  kanban: 'لوحة المهام',
+  chat: 'المحادثات',
+  'ai-chat': 'المساعد الذكي',
+  profile: 'الملف الشخصي',
+  notifications: 'الإشعارات',
+  billing: 'الاشتراكات والمدفوعات',
+  forms: 'النماذج',
+  basic: 'بسيط',
+  'multi-step': 'متعدد الخطوات',
+  'sheet-form': 'نموذج منبثق',
+  advanced: 'متقدم',
+  'react-query': 'ريأكت كويري',
+  elements: 'العناصر',
+  icons: 'الأيقونات',
+  exclusive: 'ميزات حصرية'
+};
+
 const routeMapping: Record<string, BreadcrumbItem[]> = {
-  '/dashboard': [{ title: 'Dashboard', link: '/dashboard' }],
-  '/dashboard/employee': [
-    { title: 'Dashboard', link: '/dashboard' },
-    { title: 'Employee', link: '/dashboard/employee' }
+  '/dashboard': [{ title: 'لوحة التحكم', link: '/dashboard' }],
+  '/dashboard/overview': [
+    { title: 'لوحة التحكم', link: '/dashboard' },
+    { title: 'نظرة عامة', link: '/dashboard/overview' }
   ],
-  '/dashboard/product': [
-    { title: 'Dashboard', link: '/dashboard' },
-    { title: 'Product', link: '/dashboard/product' }
+  '/dashboard/tenants': [
+    { title: 'لوحة التحكم', link: '/dashboard' },
+    { title: 'المخازن والمستأجرين', link: '/dashboard/tenants' }
+  ],
+  '/dashboard/databases': [
+    { title: 'لوحة التحكم', link: '/dashboard' },
+    { title: 'قواعد البيانات المنسوخة', link: '/dashboard/databases' }
+  ],
+  '/dashboard/billing-review': [
+    { title: 'لوحة التحكم', link: '/dashboard' },
+    { title: 'الفواتير والاشتراكات', link: '/dashboard/billing-review' }
+  ],
+  '/dashboard/monitoring': [
+    { title: 'لوحة التحكم', link: '/dashboard' },
+    { title: 'مراقبة الوكلاء', link: '/dashboard/monitoring' }
   ]
-  // Add more custom mappings as needed
 };
 
 export function useBreadcrumbs() {
   const pathname = usePathname();
 
   const breadcrumbs = useMemo(() => {
-    // Check if we have a custom mapping for this exact path
     if (routeMapping[pathname]) {
       return routeMapping[pathname];
     }
 
-    // If no exact match, fall back to generating breadcrumbs from the path
     const segments = pathname.split('/').filter(Boolean);
     return segments.map((segment, index) => {
       const path = `/${segments.slice(0, index + 1).join('/')}`;
+      const title = segmentTranslations[segment.toLowerCase()] || segment.charAt(0).toUpperCase() + segment.slice(1);
       return {
-        title: segment.charAt(0).toUpperCase() + segment.slice(1),
+        title,
         link: path
       };
     });

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -159,24 +160,77 @@ func main() {
 				return
 			}
 
+			role := "user"
 			superAdminEmail := os.Getenv("SUPER_ADMIN_EMAIL")
 			if superAdminEmail == "" {
 				superAdminEmail = "kerd2sy@gmail.com"
 			}
 
-			if strings.ToLower(strings.TrimSpace(profile.Email)) != strings.ToLower(strings.TrimSpace(superAdminEmail)) {
-				c.JSON(http.StatusForbidden, gin.H{
-					"error": "غير مصرح: هذا الحساب غير مسموح له بالدخول كمدير للمنصة. الدخول مخصص فقط للحساب المعتمد",
-				})
+			if strings.ToLower(strings.TrimSpace(profile.Email)) == strings.ToLower(strings.TrimSpace(superAdminEmail)) {
+				role = "superadmin"
+			}
+
+			// Store / Update Google user in public.users table
+			rawJSON, _ := json.Marshal(profile)
+			emailVerified := profile.EmailVerified == "true"
+			var dbUserID, dbRole string
+			var isActive bool
+
+			upsertGoogleUserQuery := `
+				INSERT INTO public.users (
+					google_id, email, email_verified, name, avatar_url, provider, role, raw_profile, last_login_at, updated_at
+				) VALUES (
+					$1, $2, $3, $4, $5, 'google', $6, $7, NOW(), NOW()
+				)
+				ON CONFLICT (email) DO UPDATE SET
+					google_id = EXCLUDED.google_id,
+					name = EXCLUDED.name,
+					avatar_url = EXCLUDED.avatar_url,
+					email_verified = EXCLUDED.email_verified,
+					raw_profile = EXCLUDED.raw_profile,
+					last_login_at = NOW(),
+					updated_at = NOW()
+				RETURNING id, role, is_active;
+			`
+			err = router.Pool().QueryRow(
+				c.Request.Context(),
+				upsertGoogleUserQuery,
+				profile.Sub,
+				strings.ToLower(strings.TrimSpace(profile.Email)),
+				emailVerified,
+				profile.Name,
+				profile.Picture,
+				role,
+				rawJSON,
+			).Scan(&dbUserID, &dbRole, &isActive)
+
+			if err != nil {
+				log.Printf("Warning: Failed to persist google user in database: %v", err)
+				dbUserID = profile.Sub
+				dbRole = role
+				isActive = true
+			}
+
+			if !isActive {
+				c.JSON(http.StatusForbidden, gin.H{"error": "تم تعطيل هذا الحساب. يرجى مراجعة إدارة المنصة"})
 				return
 			}
 
-			role := "superadmin"
+			// Check if this user is linked to any pharmacy in central registry
+			var pharmacyID, tenantID, pharmaCode string
+			_ = router.Pool().QueryRow(
+				c.Request.Context(),
+				`SELECT id, tenant_id, code FROM public.pharmacies WHERE linked_user_id = $1 OR linked_user_id = $2 LIMIT 1`,
+				dbUserID, profile.Sub,
+			).Scan(&pharmacyID, &tenantID, &pharmaCode)
 
 			token, err := tokenService.GenerateToken(auth.Claims{
-				UserID: profile.Sub,
-				Email:  profile.Email,
-				Role:   role,
+				UserID:     dbUserID,
+				Email:      profile.Email,
+				Role:       dbRole,
+				TenantID:   tenantID,
+				PharmacyID: pharmacyID,
+				PharmaCode: pharmaCode,
 			}, 30*24*time.Hour)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل إنشاء الجلسة"})
@@ -186,8 +240,116 @@ func main() {
 			c.JSON(http.StatusOK, gin.H{
 				"success": true,
 				"token":   token,
+				"user": gin.H{
+					"id":          dbUserID,
+					"email":       profile.Email,
+					"name":        profile.Name,
+					"photo":       profile.Picture,
+					"role":        dbRole,
+					"provider":    "google",
+					"tenant_id":   tenantID,
+					"pharmacy_id": pharmacyID,
+				},
 				"profile": profile,
-				"role":    role,
+				"role":    dbRole,
+			})
+		})
+
+		authGroup.POST("/apple", func(c *gin.Context) {
+			var req struct {
+				IdentityToken string `json:"identity_token" binding:"required"`
+				UserID        string `json:"user_id"`
+				Email         string `json:"email"`
+				Name          string `json:"name"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+
+			role := "user"
+			appleEmail := strings.ToLower(strings.TrimSpace(req.Email))
+			if appleEmail == "" {
+				appleEmail = req.UserID + "@apple.id"
+			}
+			userName := req.Name
+			if userName == "" {
+				userName = "مستخدم Apple"
+			}
+
+			rawJSON, _ := json.Marshal(req)
+			var dbUserID, dbRole string
+			var isActive bool
+
+			upsertAppleUserQuery := `
+				INSERT INTO public.users (
+					apple_id, email, email_verified, name, provider, role, raw_profile, last_login_at, updated_at
+				) VALUES (
+					$1, $2, true, $3, 'apple', $4, $5, NOW(), NOW()
+				)
+				ON CONFLICT (email) DO UPDATE SET
+					apple_id = COALESCE(EXCLUDED.apple_id, public.users.apple_id),
+					name = CASE WHEN EXCLUDED.name <> 'مستخدم Apple' THEN EXCLUDED.name ELSE public.users.name END,
+					raw_profile = EXCLUDED.raw_profile,
+					last_login_at = NOW(),
+					updated_at = NOW()
+				RETURNING id, role, is_active;
+			`
+			err := router.Pool().QueryRow(
+				c.Request.Context(),
+				upsertAppleUserQuery,
+				req.UserID,
+				appleEmail,
+				userName,
+				role,
+				rawJSON,
+			).Scan(&dbUserID, &dbRole, &isActive)
+
+			if err != nil {
+				log.Printf("Warning: Failed to persist apple user in database: %v", err)
+				dbUserID = req.UserID
+				dbRole = role
+				isActive = true
+			}
+
+			if !isActive {
+				c.JSON(http.StatusForbidden, gin.H{"error": "تم تعطيل هذا الحساب. يرجى مراجعة إدارة المنصة"})
+				return
+			}
+
+			var pharmacyID, tenantID, pharmaCode string
+			_ = router.Pool().QueryRow(
+				c.Request.Context(),
+				`SELECT id, tenant_id, code FROM public.pharmacies WHERE linked_user_id = $1 OR linked_user_id = $2 LIMIT 1`,
+				dbUserID, req.UserID,
+			).Scan(&pharmacyID, &tenantID, &pharmaCode)
+
+			token, err := tokenService.GenerateToken(auth.Claims{
+				UserID:     dbUserID,
+				Email:      appleEmail,
+				Role:       dbRole,
+				TenantID:   tenantID,
+				PharmacyID: pharmacyID,
+				PharmaCode: pharmaCode,
+			}, 30*24*time.Hour)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل إنشاء الجلسة"})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"success": true,
+				"token":   token,
+				"user": gin.H{
+					"id":          dbUserID,
+					"email":       appleEmail,
+					"name":        userName,
+					"role":        dbRole,
+					"provider":    "apple",
+					"tenant_id":   tenantID,
+					"pharmacy_id": pharmacyID,
+				},
+				"role": dbRole,
 			})
 		})
 	}

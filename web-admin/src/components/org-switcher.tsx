@@ -69,14 +69,14 @@ export function OrgSwitcher() {
               <Icons.galleryVerticalEnd className='size-4' />
             </div>
             <div
-              className={`grid flex-1 text-left text-sm leading-tight transition-all duration-200 ease-in-out ${
+              className={`grid flex-1 text-right text-sm leading-tight transition-all duration-200 ease-in-out ${
                 state === 'collapsed'
                   ? 'invisible max-w-0 overflow-hidden opacity-0'
                   : 'visible max-w-full opacity-100'
               }`}
             >
-              <span className='truncate font-medium'>Loading...</span>
-              <span className='text-muted-foreground truncate text-xs'>Organizations</span>
+              <span className='truncate font-medium'>جاري التحميل...</span>
+              <span className='text-muted-foreground truncate text-xs'>مساحات العمل</span>
             </div>
           </SidebarMenuButton>
         </SidebarMenuItem>
@@ -98,17 +98,17 @@ export function OrgSwitcher() {
               <Icons.add className='size-4' />
             </div>
             <div
-              className={`grid flex-1 text-left text-sm leading-tight transition-all duration-200 ease-in-out ${
+              className={`grid flex-1 text-right text-sm leading-tight transition-all duration-200 ease-in-out ${
                 state === 'collapsed'
                   ? 'invisible max-w-0 overflow-hidden opacity-0'
                   : 'visible max-w-full opacity-100'
               }`}
             >
-              <span className='truncate font-medium'>Create organization</span>
-              <span className='text-muted-foreground truncate text-xs'>Get started</span>
+              <span className='truncate font-medium'>إنشاء مساحة عمل</span>
+              <span className='text-muted-foreground truncate text-xs'>ابدأ الآن</span>
             </div>
             <Icons.chevronsUpDown
-              className={`ml-auto transition-all duration-200 ease-in-out ${
+              className={`mr-auto transition-all duration-200 ease-in-out ${
                 state === 'collapsed'
                   ? 'invisible max-w-0 opacity-0'
                   : 'visible max-w-full opacity-100'
@@ -153,7 +153,7 @@ export function OrgSwitcher() {
               )}
             </div>
             <div
-              className={`grid flex-1 text-left text-sm leading-tight transition-all duration-200 ease-in-out ${
+              className={`grid flex-1 text-right text-sm leading-tight transition-all duration-200 ease-in-out ${
                 state === 'collapsed'
                   ? 'invisible max-w-0 overflow-hidden opacity-0'
                   : 'visible max-w-full opacity-100'
@@ -162,11 +162,11 @@ export function OrgSwitcher() {
               <span className='truncate font-medium'>{displayOrganization.name}</span>
               <span className='text-muted-foreground truncate text-xs'>
                 {userMemberships.data.find((m) => m.organization.id === displayOrganization.id)
-                  ?.role || 'Organization'}
+                  ?.role || 'المؤسسة'}
               </span>
             </div>
             <Icons.chevronsUpDown
-              className={`ml-auto transition-all duration-200 ease-in-out ${
+              className={`mr-auto transition-all duration-200 ease-in-out ${
                 state === 'collapsed'
                   ? 'invisible max-w-0 opacity-0'
                   : 'visible max-w-full opacity-100'
@@ -181,7 +181,7 @@ export function OrgSwitcher() {
           >
             <DropdownMenuGroup>
               <DropdownMenuLabel className='text-muted-foreground text-xs'>
-                Organizations
+                مساحات العمل والمؤسسات
               </DropdownMenuLabel>
             </DropdownMenuGroup>
             <DropdownMenuGroup>
@@ -207,7 +207,7 @@ export function OrgSwitcher() {
                       )}
                     </div>
                     {membership.organization.name}
-                    {isActive && <Icons.check className='ml-auto size-4' />}
+                    {isActive && <Icons.check className='mr-auto size-4' />}
                     {!isActive && <DropdownMenuShortcut>⌘{index + 1}</DropdownMenuShortcut>}
                   </DropdownMenuItem>
                 );
@@ -224,7 +224,7 @@ export function OrgSwitcher() {
                 <div className='flex size-6 items-center justify-center rounded-md border bg-transparent'>
                   <Icons.add className='size-4' />
                 </div>
-                <div className='text-muted-foreground font-medium'>Add organization</div>
+                <div className='text-muted-foreground font-medium'>إضافة مساحة عمل جديدة</div>
               </DropdownMenuItem>
             </DropdownMenuGroup>
           </DropdownMenuContent>
