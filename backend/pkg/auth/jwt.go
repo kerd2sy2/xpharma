@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -101,4 +102,41 @@ func (s *TokenService) AuthMiddleware(requiredRoles ...string) gin.HandlerFunc {
 		c.Set("role", claims.Role)
 		c.Next()
 	}
+}
+
+type GoogleProfile struct {
+	Sub           string `json:"sub"`
+	Email         string `json:"email"`
+	EmailVerified string `json:"email_verified"`
+	Name          string `json:"name"`
+	Picture       string `json:"picture"`
+	Aud           string `json:"aud"`
+}
+
+func VerifyGoogleToken(idToken string, expectedClientID string) (*GoogleProfile, error) {
+	if idToken == "" {
+		return nil, errors.New("empty id_token")
+	}
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Get("https://oauth2.googleapis.com/tokeninfo?id_token=" + idToken)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("failed to verify google token with identity service")
+	}
+
+	var profile GoogleProfile
+	if err := json.NewDecoder(resp.Body).Decode(&profile); err != nil {
+		return nil, err
+	}
+
+	if expectedClientID != "" && profile.Aud != expectedClientID {
+		return nil, errors.New("token audience does not match configured google client id")
+	}
+
+	return &profile, nil
 }

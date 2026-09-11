@@ -137,6 +137,54 @@ func main() {
 				"tenant_id":     tenantID,
 			})
 		})
+
+		authGroup.POST("/google", func(c *gin.Context) {
+			var req struct {
+				IDToken string `json:"id_token" binding:"required"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+
+			googleClientID := os.Getenv("GOOGLE_CLIENT_ID")
+			if googleClientID == "" {
+				googleClientID = "691858081100-sc5nk157i5vjejhr52pgm8kkh1ofore6.apps.googleusercontent.com"
+			}
+
+			profile, err := auth.VerifyGoogleToken(req.IDToken, googleClientID)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "فشل التحقق من حساب Google: " + err.Error()})
+				return
+			}
+
+			superAdminEmail := os.Getenv("SUPER_ADMIN_EMAIL")
+			if superAdminEmail == "" {
+				superAdminEmail = "kerd2sy@gmail.com"
+			}
+
+			role := "user"
+			if profile.Email == superAdminEmail {
+				role = "superadmin"
+			}
+
+			token, err := tokenService.GenerateToken(auth.Claims{
+				UserID: profile.Sub,
+				Email:  profile.Email,
+				Role:   role,
+			}, 30*24*time.Hour)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل إنشاء الجلسة"})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"success": true,
+				"token":   token,
+				"profile": profile,
+				"role":    role,
+			})
+		})
 	}
 
 	srv := &http.Server{

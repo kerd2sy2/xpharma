@@ -1,0 +1,16 @@
+[Unit]
+Description=xpharma Cloud Backend Microservices
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/www/xpharma/repo/backend
+EnvironmentFile=/var/www/xpharma/.env
+ExecStart=/var/www/xpharma/xpharma-server
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
