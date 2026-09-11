@@ -44,6 +44,42 @@ export default function AppSidebar() {
   const router = useRouter();
   const filteredGroups = useFilteredNavGroups(navGroups);
 
+  const [localUser, setLocalUser] = React.useState<any>(null);
+
+  React.useEffect(() => {
+    try {
+      const stored = localStorage.getItem('xpharma_user');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        setLocalUser({
+          fullName: parsed.name || parsed.fullName || 'Admin',
+          imageUrl: parsed.picture || parsed.imageUrl || '',
+          emailAddresses: [{ emailAddress: parsed.email || '' }]
+        });
+      } else {
+        setLocalUser(null);
+      }
+    } catch (_) {
+      setLocalUser(null);
+    }
+  }, []);
+
+  const activeUser = user || localUser;
+
+  const handleLogout = async () => {
+    try {
+      localStorage.removeItem('xpharma_user');
+      sessionStorage.clear();
+      if (signOut) {
+        try {
+          await signOut();
+        } catch (_) {}
+      }
+    } finally {
+      window.location.href = '/login';
+    }
+  };
+
   React.useEffect(() => {
     // Side effects based on sidebar state changes
   }, [isOpen]);
@@ -123,7 +159,9 @@ export default function AppSidebar() {
                   />
                 }
               >
-                {user && <UserAvatarProfile className='h-8 w-8 rounded-lg' showInfo user={user} />}
+                {activeUser && (
+                  <UserAvatarProfile className='h-8 w-8 rounded-lg' showInfo user={activeUser} />
+                )}
                 <Icons.chevronsDown className='ml-auto size-4' />
               </DropdownMenuTrigger>
               <DropdownMenuContent
@@ -135,8 +173,8 @@ export default function AppSidebar() {
                 <DropdownMenuGroup>
                   <DropdownMenuLabel className='p-0 font-normal'>
                     <div className='px-1 py-1.5'>
-                      {user && (
-                        <UserAvatarProfile className='h-8 w-8 rounded-lg' showInfo user={user} />
+                      {activeUser && (
+                        <UserAvatarProfile className='h-8 w-8 rounded-lg' showInfo user={activeUser} />
                       )}
                     </div>
                   </DropdownMenuLabel>
@@ -161,9 +199,12 @@ export default function AppSidebar() {
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
                 <DropdownMenuGroup>
-                  <DropdownMenuItem onClick={() => signOut({ redirectUrl: '/auth/sign-in' })}>
+                  <DropdownMenuItem
+                    onClick={handleLogout}
+                    className='cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10'
+                  >
                     <Icons.logout aria-hidden className='mr-2 h-4 w-4' />
-                    Sign out
+                    تسجيل الخروج (Sign out)
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
               </DropdownMenuContent>

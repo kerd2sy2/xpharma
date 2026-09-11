@@ -96,9 +96,16 @@ export function NavUser({
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => {
+                  localStorage.removeItem('xpharma_user');
+                  sessionStorage.clear();
+                  window.location.href = '/login';
+                }}
+                className='cursor-pointer text-destructive focus:text-destructive'
+              >
                 <Icons.logout className='mr-2 h-4 w-4' />
-                Log out
+                تسجيل الخروج (Log out)
               </DropdownMenuItem>
             </DropdownMenuGroup>
           </DropdownMenuContent>
