@@ -93,11 +93,31 @@ export async function GET(
         totalCount = countRes.rows[0]?.count || 0;
 
         const dataRes = await query(
-          `SELECT id, code, name, phone, address, link_code, is_active, created_at, updated_at
-           FROM public.pharmacies
-           WHERE tenant_id = $1 
-             AND ($2 = '' OR code ILIKE $2 OR name ILIKE $2 OR phone ILIKE $2 OR address ILIKE $2)
-           ORDER BY code ASC
+          `SELECT 
+             p.id, p.code, p.name, p.phone, p.address, p.link_code, p.is_active, p.created_at, p.updated_at,
+             COALESCE(inv.total_amount, 0)::float as total_invoices,
+             COALESCE(inv.invoices_count, 0)::int as invoices_count,
+             COALESCE(ret.total_amount, 0)::float as total_returns,
+             COALESCE(ret.returns_count, 0)::int as returns_count,
+             COALESCE(rcpt.total_amount, 0)::float as total_paid,
+             COALESCE(rcpt.receipts_count, 0)::int as receipts_count,
+             (COALESCE(inv.total_amount, 0) - COALESCE(ret.total_amount, 0) - COALESCE(rcpt.total_amount, 0))::float as current_balance
+           FROM public.pharmacies p
+           LEFT JOIN (
+             SELECT pharmacy_code, SUM(net_amount) as total_amount, COUNT(*) as invoices_count 
+             FROM ${schema}.invoices GROUP BY pharmacy_code
+           ) inv ON inv.pharmacy_code = p.code
+           LEFT JOIN (
+             SELECT pharmacy_code, SUM(net_amount) as total_amount, COUNT(*) as returns_count 
+             FROM ${schema}.returns GROUP BY pharmacy_code
+           ) ret ON ret.pharmacy_code = p.code
+           LEFT JOIN (
+             SELECT pharmacy_code, SUM(amount) as total_amount, COUNT(*) as receipts_count 
+             FROM ${schema}.cash_receipts GROUP BY pharmacy_code
+           ) rcpt ON rcpt.pharmacy_code = p.code
+           WHERE p.tenant_id = $1 
+             AND ($2 = '' OR p.code ILIKE $2 OR p.name ILIKE $2 OR p.phone ILIKE $2 OR p.address ILIKE $2)
+           ORDER BY (COALESCE(inv.total_amount, 0) - COALESCE(ret.total_amount, 0) - COALESCE(rcpt.total_amount, 0)) DESC, p.code ASC
            LIMIT $3 OFFSET $4`,
           [tenantId, searchPattern, limit, offset]
         );
@@ -289,15 +309,30 @@ export async function GET(
     };
 
     try {
+      let matchedCode = '';
+      if (search) {
+        const pharmRes = await query(
+          `SELECT code, name, phone, address 
+           FROM public.pharmacies 
+           WHERE tenant_id = $1 AND (code ILIKE $2 OR name ILIKE $2) 
+           LIMIT 1`,
+          [tenantId, searchPattern]
+        );
+        if (pharmRes.rows.length > 0) {
+          summary.matched_pharmacy = pharmRes.rows[0];
+          matchedCode = pharmRes.rows[0].code;
+        }
+      }
+
       const summaryRes = await query(
         `SELECT 
-          COALESCE((SELECT SUM(net_amount) FROM ${schema}.invoices WHERE ($1 = '' OR pharmacy_code ILIKE $1)), 0)::float as inv_amount,
-          COALESCE((SELECT COUNT(*) FROM ${schema}.invoices WHERE ($1 = '' OR pharmacy_code ILIKE $1)), 0)::int as inv_count,
-          COALESCE((SELECT SUM(net_amount) FROM ${schema}.returns WHERE ($1 = '' OR pharmacy_code ILIKE $1)), 0)::float as ret_amount,
-          COALESCE((SELECT COUNT(*) FROM ${schema}.returns WHERE ($1 = '' OR pharmacy_code ILIKE $1)), 0)::int as ret_count,
-          COALESCE((SELECT SUM(amount) FROM ${schema}.cash_receipts WHERE ($1 = '' OR pharmacy_code ILIKE $1)), 0)::float as rcpt_amount,
-          COALESCE((SELECT COUNT(*) FROM ${schema}.cash_receipts WHERE ($1 = '' OR pharmacy_code ILIKE $1)), 0)::int as rcpt_count`,
-        [searchPattern]
+          COALESCE((SELECT SUM(net_amount) FROM ${schema}.invoices WHERE ($1 = '' OR pharmacy_code ILIKE $1 OR ($2 != '' AND pharmacy_code = $2))), 0)::float as inv_amount,
+          COALESCE((SELECT COUNT(*) FROM ${schema}.invoices WHERE ($1 = '' OR pharmacy_code ILIKE $1 OR ($2 != '' AND pharmacy_code = $2))), 0)::int as inv_count,
+          COALESCE((SELECT SUM(net_amount) FROM ${schema}.returns WHERE ($1 = '' OR pharmacy_code ILIKE $1 OR ($2 != '' AND pharmacy_code = $2))), 0)::float as ret_amount,
+          COALESCE((SELECT COUNT(*) FROM ${schema}.returns WHERE ($1 = '' OR pharmacy_code ILIKE $1 OR ($2 != '' AND pharmacy_code = $2))), 0)::int as ret_count,
+          COALESCE((SELECT SUM(amount) FROM ${schema}.cash_receipts WHERE ($1 = '' OR pharmacy_code ILIKE $1 OR ($2 != '' AND pharmacy_code = $2))), 0)::float as rcpt_amount,
+          COALESCE((SELECT COUNT(*) FROM ${schema}.cash_receipts WHERE ($1 = '' OR pharmacy_code ILIKE $1 OR ($2 != '' AND pharmacy_code = $2))), 0)::int as rcpt_count`,
+        [searchPattern, matchedCode]
       );
 
       if (summaryRes.rows.length > 0) {
@@ -315,19 +350,6 @@ export async function GET(
         summary.total_receipts_count = Number(s.rcpt_count || 0);
         summary.net_balance = netBal;
         summary.balance_type = netBal >= 0 ? 'debit' : 'credit';
-      }
-
-      if (search) {
-        const pharmRes = await query(
-          `SELECT code, name, phone, address 
-           FROM public.pharmacies 
-           WHERE tenant_id = $1 AND (code ILIKE $2 OR name ILIKE $2) 
-           LIMIT 1`,
-          [tenantId, searchPattern]
-        );
-        if (pharmRes.rows.length > 0) {
-          summary.matched_pharmacy = pharmRes.rows[0];
-        }
       }
     } catch (sumErr: any) {
       console.warn('Could not compute financial summary:', sumErr.message);

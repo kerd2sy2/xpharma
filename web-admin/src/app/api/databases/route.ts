@@ -44,6 +44,7 @@ export async function GET() {
         let pharmaciesCount = 0;
         let totalReceiptsAmount = 0;
         let totalInvoicesAmount = 0;
+        let totalReturnsAmount = 0;
         let latestReceiptDate: string | null = null;
         let latestInvoiceDate: string | null = null;
 
@@ -76,14 +77,16 @@ export async function GET() {
           totalInvoicesAmount = invRes.rows[0]?.total_amount || 0;
           latestInvoiceDate = invRes.rows[0]?.latest_date || null;
 
-          const prodRes = await query(`SELECT COUNT(*)::int as count FROM ${schema}.products`);
-          productsCount = prodRes.rows[0]?.count || 0;
-
-          const ledgRes = await query(`SELECT COUNT(*)::int as count FROM ${schema}.ledger_entries`);
-          ledgerCount = ledgRes.rows[0]?.count || 0;
-
-          const retRes = await query(`SELECT COUNT(*)::int as count FROM ${schema}.returns`);
-          returnsCount = retRes.rows[0]?.count || 0;
+          try {
+            const retRes = await query(`
+              SELECT 
+                COUNT(*)::int as count,
+                COALESCE(SUM(net_amount), 0)::float as total_amount
+              FROM ${schema}.returns
+            `);
+            returnsCount = retRes.rows[0]?.count || 0;
+            totalReturnsAmount = retRes.rows[0]?.total_amount || 0;
+          } catch (_) {}
 
           if (ledgerCount === 0) {
             ledgerCount = invoicesCount + receiptsCount + returnsCount;
@@ -102,11 +105,12 @@ export async function GET() {
             total_invoices_amount: totalInvoicesAmount,
             latest_invoice_date: latestInvoiceDate,
             pharmacies_count: pharmaciesCount,
-            products_count: productsCount,
+            products_count: 0,
             ledger_count: ledgerCount,
             returns_count: returnsCount,
+            total_returns_amount: totalReturnsAmount,
             total_replicated_records:
-              receiptsCount + invoicesCount + pharmaciesCount + productsCount + ledgerCount + returnsCount,
+              receiptsCount + invoicesCount + pharmaciesCount + ledgerCount + returnsCount,
           },
         };
       })

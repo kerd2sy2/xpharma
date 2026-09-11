@@ -856,11 +856,11 @@ func runGentleSync(cfg *Config) {
 
 	batchSize := cfg.BatchSize
 	if batchSize <= 0 {
-		batchSize = 100
+		batchSize = 250
 	}
 	delayMs := cfg.BatchDelayMs
 	if delayMs <= 0 {
-		delayMs = 1500
+		delayMs = 250
 	}
 
 	// 2. Sync Customers once if not yet loaded
@@ -870,10 +870,43 @@ func runGentleSync(cfg *Config) {
 
 	if currCusts == 0 {
 		addLog("فحص دليل العملاء والصيدليات...")
+
+		// Optional: pre-load extra phone numbers from TELE_PHON table if available
+		extraPhones := make(map[string]string)
+		if tableExists(db, "TELE_PHON") {
+			tRows, tErr := db.Query("SELECT ACCOUNT_ID, TEL_ FROM TELE_PHON")
+			if tErr == nil {
+				for tRows.Next() {
+					var accID int64
+					var tRaw interface{}
+					if err := tRows.Scan(&accID, &tRaw); err == nil {
+						k := fmt.Sprintf("%d", accID)
+						var ph string
+						switch tv := tRaw.(type) {
+						case []byte:
+							ph = decodeText(tv)
+						default:
+							ph = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", tv)))
+						}
+						if ph != "" {
+							if existing, ok := extraPhones[k]; ok {
+								if !strings.Contains(existing, ph) {
+									extraPhones[k] = existing + " / " + ph
+								}
+							} else {
+								extraPhones[k] = ph
+							}
+						}
+					}
+				}
+				tRows.Close()
+			}
+		}
+
 		custRows, err := db.Query("SELECT * FROM ACCOUNTS")
 		if err == nil {
 			cols, _ := custRows.Columns()
-			idIdx, nameIdx, phoneIdx, addrIdx := -1, -1, -1, -1
+			idIdx, nameIdx, phoneIdx, phone2Idx, addrIdx := -1, -1, -1, -1, -1
 			for idx, c := range cols {
 				u := strings.ToUpper(strings.TrimSpace(c))
 				if idIdx == -1 && (u == "ACCOUNT_ID" || u == "ACC_ID" || u == "ID" || u == "CODE") {
@@ -882,11 +915,25 @@ func runGentleSync(cfg *Config) {
 				if nameIdx == -1 && (u == "ACCOUNT_NAME" || u == "ACC_NAME" || u == "NAME") {
 					nameIdx = idx
 				}
-				if phoneIdx == -1 && (u == "PHONE" || u == "TEL" || u == "MOBILE") {
+				if phoneIdx == -1 && (u == "ACCOUNT_TEL1" || strings.Contains(u, "TEL1") || strings.Contains(u, "PHONE1")) {
 					phoneIdx = idx
 				}
-				if addrIdx == -1 && (u == "ADDRESS" || u == "ADDR") {
+				if phone2Idx == -1 && (u == "ACCOUNT_TEL2" || strings.Contains(u, "TEL2") || strings.Contains(u, "PHONE2")) {
+					phone2Idx = idx
+				}
+				if addrIdx == -1 && (u == "ACCOUNT_ADDRESS" || strings.Contains(u, "ADDR") || strings.Contains(u, "ADDRESS")) {
 					addrIdx = idx
+				}
+			}
+
+			// Fallbacks if not named TEL1/TEL2
+			if phoneIdx == -1 {
+				for idx, c := range cols {
+					u := strings.ToUpper(strings.TrimSpace(c))
+					if idx != idIdx && idx != nameIdx && idx != addrIdx && (strings.Contains(u, "TEL") || strings.Contains(u, "PHONE") || strings.Contains(u, "MOB")) {
+						phoneIdx = idx
+						break
+					}
 				}
 			}
 
@@ -901,7 +948,7 @@ func runGentleSync(cfg *Config) {
 					if err := custRows.Scan(valPtrs...); err != nil {
 						continue
 					}
-					var cCode, cName, cPhone, cAddr string
+					var cCode, cName, cPhone, cPhone2, cAddr string
 					if vals[idIdx] != nil {
 						cCode = strings.TrimSpace(fmt.Sprintf("%v", vals[idIdx]))
 					}
@@ -919,6 +966,29 @@ func runGentleSync(cfg *Config) {
 							cPhone = decodeText(v)
 						default:
 							cPhone = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
+						}
+					}
+					if phone2Idx != -1 && vals[phone2Idx] != nil {
+						switch v := vals[phone2Idx].(type) {
+						case []byte:
+							cPhone2 = decodeText(v)
+						default:
+							cPhone2 = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
+						}
+					}
+					if cPhone2 != "" && cPhone2 != cPhone {
+						if cPhone != "" {
+							cPhone = cPhone + " / " + cPhone2
+						} else {
+							cPhone = cPhone2
+						}
+					}
+					// Include extra phones from TELE_PHON if available
+					if exPh, ok := extraPhones[cCode]; ok && exPh != "" {
+						if cPhone == "" {
+							cPhone = exPh
+						} else if !strings.Contains(cPhone, exPh) {
+							cPhone = cPhone + " / " + exPh
 						}
 					}
 					if addrIdx != -1 && vals[addrIdx] != nil {
@@ -946,7 +1016,7 @@ func runGentleSync(cfg *Config) {
 			state.Unlock()
 
 			if len(custList) > 0 {
-				addLog(fmt.Sprintf("تم استخراج %d عميل، جاري الرفع للسحابة...", len(custList)))
+				addLog(fmt.Sprintf("تم استخراج %d صيدلية وعميل بأرقام الهواتف والعناوين، جاري الرفع للسحابة...", len(custList)))
 				for i := 0; i < len(custList); i += 300 {
 					end := i + 300
 					if end > len(custList) {
@@ -954,9 +1024,9 @@ func runGentleSync(cfg *Config) {
 					}
 					p := IngestionPayload{Customers: custList[i:end]}
 					_ = postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, p)
-					time.Sleep(300 * time.Millisecond)
+					time.Sleep(200 * time.Millisecond)
 				}
-				addLog("اكتمل تحديث دليل العملاء بنجاح.")
+				addLog("اكتمل تحديث دليل الصيدليات بنجاح.")
 			}
 		}
 	}
@@ -1109,17 +1179,43 @@ func runGentleSync(cfg *Config) {
 		for rows.Next() {
 			var id int64
 			var rawDate interface{}
-			var amount float64
+			var rawAmount interface{}
 			var accountID int64
-			var userRaw []byte
-			if err := rows.Scan(&id, &rawDate, &amount, &accountID, &userRaw); err != nil {
+			var rawUser interface{}
+			if err := rows.Scan(&id, &rawDate, &rawAmount, &accountID, &rawUser); err != nil {
 				continue
 			}
 			if id > maxIDInBatch {
 				maxIDInBatch = id
 			}
 			dateD := parseDate(rawDate)
-			collector := decodeText(userRaw)
+			var amount float64
+			if rawAmount != nil {
+				switch v := rawAmount.(type) {
+				case float64:
+					amount = v
+				case float32:
+					amount = float64(v)
+				case int64:
+					amount = float64(v)
+				case int:
+					amount = float64(v)
+				default:
+					fmt.Sscanf(fmt.Sprintf("%v", v), "%f", &amount)
+				}
+			}
+			var collector string
+			if rawUser != nil {
+				switch v := rawUser.(type) {
+				case []byte:
+					collector = decodeText(v)
+				default:
+					collector = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
+				}
+			}
+			if collector == "" {
+				collector = "الخزينة الرئيسية"
+			}
 			remoteID := fmt.Sprintf("%d", id)
 			rcptNum := fmt.Sprintf("RCP-%d", id)
 			pharmaCode := fmt.Sprintf("%d", accountID)
@@ -1445,10 +1541,11 @@ func startInternalServer(cfg *Config) {
 		state.SyncedReceipts = 0
 		state.SyncedReturns = 0
 		state.SyncedLedger = 0
+		state.TotalCustomers = 0
 		state.ProgressPercent = 0
 		state.ShouldPause = false
 		state.Unlock()
-		addLog("تمت إعادة تعيين مؤشرات المزامنة للبدء من أول سجل.")
+		addLog("تمت إعادة تعيين مؤشرات المزامنة للبدء من أول سجل وتحديث دليل الصيدليات بالكامل.")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "reset"})
 	})

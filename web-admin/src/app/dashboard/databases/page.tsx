@@ -385,22 +385,28 @@ export default function DatabasesPage() {
                   </div>
 
                   {/* Replicated metrics tags */}
-                  <div className='grid grid-cols-3 gap-2 my-3 py-2 px-2.5 rounded-lg bg-background/80 border border-border/50 text-center'>
+                  <div className='grid grid-cols-4 gap-1.5 my-3 py-2 px-2 rounded-lg bg-background/80 border border-border/50 text-center'>
                     <div>
-                      <span className='text-[11px] text-muted-foreground block'>سندات القبض</span>
-                      <span className='font-bold text-sm text-primary'>
-                        {db.metrics?.receipts_count || 0}
-                      </span>
-                    </div>
-                    <div>
-                      <span className='text-[11px] text-muted-foreground block'>الفواتير</span>
-                      <span className='font-bold text-sm'>
+                      <span className='text-[10px] text-muted-foreground block truncate'>الفواتير</span>
+                      <span className='font-bold text-xs text-foreground'>
                         {db.metrics?.invoices_count || 0}
                       </span>
                     </div>
                     <div>
-                      <span className='text-[11px] text-muted-foreground block'>الصيدليات</span>
-                      <span className='font-bold text-sm'>
+                      <span className='text-[10px] text-muted-foreground block truncate'>المرتجعات</span>
+                      <span className='font-bold text-xs text-amber-600 dark:text-amber-400'>
+                        {db.metrics?.returns_count || 0}
+                      </span>
+                    </div>
+                    <div>
+                      <span className='text-[10px] text-muted-foreground block truncate'>سندات القبض</span>
+                      <span className='font-bold text-xs text-primary'>
+                        {db.metrics?.receipts_count || 0}
+                      </span>
+                    </div>
+                    <div>
+                      <span className='text-[10px] text-muted-foreground block truncate'>الصيدليات</span>
+                      <span className='font-bold text-xs text-foreground'>
                         {db.metrics?.pharmacies_count || 0}
                       </span>
                     </div>
@@ -761,7 +767,10 @@ export default function DatabasesPage() {
                           <TableHead className='text-right'>اسم الصيدلية</TableHead>
                           <TableHead className='text-right'>رقم الهاتف</TableHead>
                           <TableHead className='text-right'>العنوان</TableHead>
-                          <TableHead className='text-right'>كود الربط المباشر</TableHead>
+                          <TableHead className='text-right'>المشتريات (الفواتير)</TableHead>
+                          <TableHead className='text-right'>المرتجعات</TableHead>
+                          <TableHead className='text-right'>المسدد نقداً</TableHead>
+                          <TableHead className='text-right font-bold'>صافي الرصيد الحالي</TableHead>
                           <TableHead className='text-right'>الحالة</TableHead>
                           <TableHead className='text-right'>الإجراءات</TableHead>
                         </TableRow>
@@ -954,16 +963,33 @@ export default function DatabasesPage() {
                             <TableCell className='font-mono text-muted-foreground'>
                               {row.phone || '—'}
                             </TableCell>
-                            <TableCell className='text-muted-foreground max-w-[220px] truncate' title={row.address}>
+                            <TableCell className='text-muted-foreground max-w-[180px] truncate' title={row.address}>
                               {row.address || '—'}
                             </TableCell>
-                            <TableCell>
-                              {row.link_code ? (
-                                <Badge variant='outline' className='font-mono text-[10px] bg-muted/40'>
-                                  {row.link_code}
+                            <TableCell className='font-bold text-foreground whitespace-nowrap'>
+                              {Number(row.total_invoices || 0).toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
+                            </TableCell>
+                            <TableCell className='text-amber-600 font-medium whitespace-nowrap'>
+                              {Number(row.total_returns || 0) > 0 ? `${Number(row.total_returns).toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م` : '—'}
+                            </TableCell>
+                            <TableCell className='text-emerald-600 font-medium whitespace-nowrap'>
+                              {Number(row.total_paid || 0) > 0 ? `${Number(row.total_paid).toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م` : '—'}
+                            </TableCell>
+                            <TableCell className='whitespace-nowrap'>
+                              {Number(row.current_balance || 0) !== 0 ? (
+                                <Badge
+                                  variant='outline'
+                                  className={`font-mono text-xs px-2 py-0.5 ${
+                                    Number(row.current_balance || 0) > 0
+                                      ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border-rose-300'
+                                      : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border-emerald-300'
+                                  }`}
+                                >
+                                  {Math.abs(Number(row.current_balance)).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{' '}
+                                  {Number(row.current_balance) > 0 ? 'مدين' : 'دائن'}
                                 </Badge>
                               ) : (
-                                <span className='text-muted-foreground text-xs'>غير مربوط</span>
+                                <span className='text-muted-foreground font-mono text-xs'>0.00 ج.م</span>
                               )}
                             </TableCell>
                             <TableCell>
@@ -981,7 +1007,7 @@ export default function DatabasesPage() {
                               <Button
                                 size='sm'
                                 variant='outline'
-                                className='h-7 text-xs text-primary hover:bg-primary/10 gap-1'
+                                className='h-7 text-xs text-primary hover:bg-primary/10 gap-1 font-semibold'
                                 onClick={() => {
                                   setSearchTerm(row.code);
                                   setActiveTable('ledger');
@@ -989,7 +1015,7 @@ export default function DatabasesPage() {
                                 }}
                               >
                                 <IconFileDescription className='h-3.5 w-3.5' />
-                                كشف الحساب والإجمالي
+                                كشف الحساب
                               </Button>
                             </TableCell>
                           </TableRow>
