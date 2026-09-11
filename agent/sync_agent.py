@@ -244,7 +244,7 @@ def extract_from_firebird(fb_cfg):
         dsn = f"{host}/{port}:{db_path}"
         con = fdb.connect(dsn=dsn, user=user, password=password, charset="NONE")
         cur = con.cursor()
-        cur.execute("SELECT FIRST 100 INVOICES_H_ID, DATE_D, TOTAL_TOTAL, TOTAL_DISCOUNT1, TOTAL_MONY_PAY, ACCOUNT_ID FROM INVOICES_H ORDER BY DATE_D DESC")
+        cur.execute("SELECT INVOICES_H_ID, DATE_D, TOTAL_TOTAL, TOTAL_DISCOUNT1, TOTAL_MONY_PAY, ACCOUNT_ID FROM INVOICES_H ORDER BY INVOICES_H_ID ASC")
         invoices = []
         for row in cur.fetchall():
             net = float(row[2] or 0) - float(row[3] or 0)
