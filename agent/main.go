@@ -184,14 +184,22 @@ func addLog(msg string) {
 	defer state.Unlock()
 	entry := fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), msg)
 	state.Logs = append(state.Logs, entry)
-	if len(state.Logs) > 80 {
-		state.Logs = state.Logs[len(state.Logs)-80:]
+	if len(state.Logs) > 100 {
+		state.Logs = state.Logs[len(state.Logs)-100:]
 	}
 }
 
 // -----------------------------------------------------------------------------
-// Windows Auto-Start (Registry & Task Scheduler)
+// Windows Process & Auto-Start Management (Hidden Execution)
 // -----------------------------------------------------------------------------
+
+func runHiddenCommand(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	if runtime.GOOS == "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	}
+	return cmd.Run()
+}
 
 func setWindowsAutoStart(enable bool) error {
 	if runtime.GOOS != "windows" {
@@ -204,32 +212,28 @@ func setWindowsAutoStart(enable bool) error {
 	exePath, _ = filepath.EvalSymlinks(exePath)
 
 	if enable {
-		// 1. Add to HKCU Run Key (Runs automatically when user logs into Windows without requiring Admin rights)
-		cmdReg := exec.Command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+		// 1. Add to HKCU Run Key (Runs automatically on login without requiring Administrator rights)
+		_ = runHiddenCommand("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
 			"/v", "XPharmaSyncAgent",
 			"/t", "REG_SZ",
 			"/d", fmt.Sprintf("\"%s\" -daemon", exePath),
 			"/f")
-		_ = cmdReg.Run()
 
-		// 2. Also register in Task Scheduler on logon for redundancy
-		cmdTask := exec.Command("schtasks", "/create",
+		// 2. Register in Task Scheduler on logon
+		_ = runHiddenCommand("schtasks", "/create",
 			"/tn", "XPharmaSyncAgent",
 			"/tr", fmt.Sprintf("\"%s\" -daemon", exePath),
 			"/sc", "onlogon",
 			"/f")
-		_ = cmdTask.Run()
 
 		addLog("تم تفعيل التشغيل التلقائي مع فتح الويندوز بنجاح (Auto-Start Enabled).")
 		return nil
 	} else {
-		cmdReg := exec.Command("reg", "delete", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+		_ = runHiddenCommand("reg", "delete", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
 			"/v", "XPharmaSyncAgent",
 			"/f")
-		_ = cmdReg.Run()
 
-		cmdTask := exec.Command("schtasks", "/delete", "/tn", "XPharmaSyncAgent", "/f")
-		_ = cmdTask.Run()
+		_ = runHiddenCommand("schtasks", "/delete", "/tn", "XPharmaSyncAgent", "/f")
 
 		addLog("تم إيقاف التشغيل التلقائي مع فتح الويندوز.")
 		return nil
@@ -241,6 +245,7 @@ func isWindowsAutoStartEnabled() bool {
 		return false
 	}
 	cmd := exec.Command("reg", "query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "XPharmaSyncAgent")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	return cmd.Run() == nil
 }
 
@@ -280,14 +285,17 @@ func initWindowsConsole() {
 }
 
 func openAppWindow(url string) {
-	// 1. Try Microsoft Edge in standalone App Mode (No address bar, looks like native desktop window)
+	// 1. Try Microsoft Edge in standalone App Mode (No browser address bar, looks like a desktop application)
 	edgePaths := []string{
 		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
 		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
 	}
 	for _, p := range edgePaths {
 		if _, err := os.Stat(p); err == nil {
-			cmd := exec.Command(p, fmt.Sprintf("--app=%s", url), "--window-size=980,750")
+			cmd := exec.Command(p, fmt.Sprintf("--app=%s", url), "--window-size=1040,780")
+			if runtime.GOOS == "windows" {
+				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+			}
 			if err := cmd.Start(); err == nil {
 				return
 			}
@@ -302,7 +310,10 @@ func openAppWindow(url string) {
 	}
 	for _, p := range chromePaths {
 		if _, err := os.Stat(p); err == nil {
-			cmd := exec.Command(p, fmt.Sprintf("--app=%s", url), "--window-size=980,750")
+			cmd := exec.Command(p, fmt.Sprintf("--app=%s", url), "--window-size=1040,780")
+			if runtime.GOOS == "windows" {
+				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+			}
 			if err := cmd.Start(); err == nil {
 				return
 			}
@@ -310,7 +321,11 @@ func openAppWindow(url string) {
 	}
 
 	// 3. Fallback to default browser
-	_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	if runtime.GOOS == "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	}
+	_ = cmd.Start()
 }
 
 // -----------------------------------------------------------------------------
@@ -571,7 +586,7 @@ func runGentleSync(cfg *Config) {
 		state.LastError = fmt.Sprintf("فشل الاتصال بقاعدة بيانات الفايربيرد: %v", err)
 		state.FirebirdConnected = false
 		state.Unlock()
-		addLog(fmt.Sprintf("خطأ في الاتصال بالفايربيرد: %v", err))
+		addLog(fmt.Sprintf("خطأ في الاتصال بقاعدة البيانات: %v", err))
 		return
 	}
 	defer db.Close()
@@ -776,7 +791,7 @@ func runGentleSync(cfg *Config) {
 		}
 		state.Unlock()
 
-		// Gentle Pause to let warehouse server and ERP breathe freely
+		// Gentle pause between batches
 		time.Sleep(time.Duration(delayMs) * time.Millisecond)
 	}
 
@@ -868,9 +883,9 @@ func runGentleSync(cfg *Config) {
 	state.Unlock()
 
 	if isAr {
-		addLog(fmt.Sprintf("اكتملت المزامنة بنجاح! آخر فحص: %s", time.Now().Format("15:04:05")))
+		addLog(fmt.Sprintf("اكتملت المزامنة بنجاح. آخر فحص: %s", time.Now().Format("15:04:05")))
 	} else {
-		addLog(fmt.Sprintf("Sync cycle completed successfully! Last checked: %s", time.Now().Format("15:04:05")))
+		addLog(fmt.Sprintf("Sync cycle completed successfully. Last checked: %s", time.Now().Format("15:04:05")))
 	}
 }
 
@@ -1050,7 +1065,7 @@ func startInternalServer(cfg *Config) {
 }
 
 // -----------------------------------------------------------------------------
-// App Window Interface (HTML/CSS/JS)
+// App Window Interface (HTML/CSS/JS) - Enterprise Clean Design (No Emojis)
 // -----------------------------------------------------------------------------
 
 const appHTML = `<!DOCTYPE html>
@@ -1058,81 +1073,164 @@ const appHTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>وكيل مزامنة مستودع الأدوية | XPharma Sync Agent</title>
+  <title>XPharma Sync Agent | وكيل مزامنة المستودع</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #0b1120;
-      --card-bg: #131d33;
-      --card-border: rgba(255, 255, 255, 0.08);
+      --bg: #090d16;
+      --card: #0f172a;
+      --card-hover: #131d35;
+      --border: rgba(148, 163, 184, 0.12);
+      --border-focus: rgba(59, 130, 246, 0.5);
       --primary: #2563eb;
       --primary-hover: #1d4ed8;
       --text: #f8fafc;
       --text-muted: #94a3b8;
+      --text-sub: #64748b;
       --success: #10b981;
+      --success-bg: rgba(16, 185, 129, 0.1);
       --warning: #f59e0b;
+      --warning-bg: rgba(245, 158, 11, 0.1);
       --danger: #ef4444;
-      --font-ar: 'Cairo', sans-serif;
-      --font-en: 'Inter', sans-serif;
+      --danger-bg: rgba(239, 68, 68, 0.1);
+      --font-ar: 'Cairo', system-ui, sans-serif;
+      --font-en: 'Inter', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Consolas', monospace;
     }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
+
     body {
       background: var(--bg);
+      background-image: radial-gradient(circle at 50% 0%, rgba(37, 99, 235, 0.12) 0%, transparent 60%);
       color: var(--text);
       font-family: var(--font-ar);
       min-height: 100vh;
       display: flex;
       flex-direction: column;
       user-select: none;
+      -webkit-font-smoothing: antialiased;
     }
+
     body.lang-en { font-family: var(--font-en); }
-    
+    body.lang-en .num { font-family: var(--font-en); }
+
+    /* Top Navigation Bar */
     .topbar {
-      background: rgba(15, 23, 42, 0.95);
-      border-bottom: 1px solid var(--card-border);
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
       padding: 12px 24px;
       display: flex;
       justify-content: space-between;
       align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 50;
     }
+
     .brand {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
     }
+
     .brand-icon {
-      width: 36px;
-      height: 36px;
-      background: linear-gradient(135deg, #2563eb, #38bdf8);
-      border-radius: 8px;
+      width: 38px;
+      height: 38px;
+      background: linear-gradient(135deg, #2563eb, #0ea5e9);
+      border-radius: 10px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-weight: 800;
       color: white;
-      font-size: 18px;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
     }
-    .brand-text h1 { font-size: 16px; font-weight: 700; color: white; }
-    .brand-text p { font-size: 11px; color: var(--text-muted); }
-    
-    .lang-toggle {
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid var(--card-border);
+
+    .brand-title {
+      font-size: 15px;
+      font-weight: 700;
       color: var(--text);
-      padding: 6px 14px;
-      border-radius: 6px;
-      font-size: 13px;
+      letter-spacing: -0.2px;
+    }
+
+    .brand-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .brand-sub .version {
+      background: rgba(255, 255, 255, 0.08);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      color: #93c5fd;
+    }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .daemon-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(16, 185, 129, 0.08);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #34d399;
+    }
+
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 8px #10b981;
+      animation: pulse-ring 2s infinite;
+    }
+
+    @keyframes pulse-ring {
+      0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
+      70% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+
+    .btn-lang {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
       font-weight: 600;
       cursor: pointer;
-      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s;
     }
-    .lang-toggle:hover { background: rgba(255, 255, 255, 0.12); }
 
+    .btn-lang:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    /* Main Container */
     .main {
       padding: 20px 24px;
-      max-width: 980px;
+      max-width: 1020px;
       margin: 0 auto;
       width: 100%;
       display: flex;
@@ -1141,326 +1239,848 @@ const appHTML = `<!DOCTYPE html>
       flex: 1;
     }
 
-    /* Connection Status Badges */
-    .status-bar {
-      display: flex;
+    /* Connection Status Cards */
+    .status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
       gap: 12px;
-      flex-wrap: wrap;
     }
-    .status-pill {
-      flex: 1;
-      min-width: 240px;
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 10px;
-      padding: 10px 14px;
+
+    @media (max-width: 720px) {
+      .status-grid { grid-template-columns: 1fr; }
+    }
+
+    .status-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      transition: border-color 0.2s;
     }
-    .status-label { font-size: 12px; color: var(--text-muted); }
-    .status-indicator {
+
+    .status-card:hover { border-color: rgba(148, 163, 184, 0.25); }
+
+    .status-info {
       display: flex;
       align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      font-weight: 700;
+      gap: 12px;
     }
-    .dot {
-      width: 8px;
-      height: 8px;
+
+    .status-icon-box {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #94a3b8;
+    }
+
+    .status-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .status-sub {
+      font-size: 11px;
+      color: var(--text-sub);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .badge-ok {
+      background: var(--success-bg);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.2);
+    }
+
+    .badge-err {
+      background: var(--danger-bg);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+
+    .badge-wait {
+      background: rgba(59, 130, 246, 0.1);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.2);
+    }
+
+    .badge-dot {
+      width: 6px;
+      height: 6px;
       border-radius: 50%;
     }
-    .dot-green { background: #10b981; box-shadow: 0 0 8px #10b981; }
-    .dot-red { background: #ef4444; }
-    .dot-blue { background: #3b82f6; animation: pulse 1s infinite; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-    /* Settings Box */
+    .badge-ok .badge-dot { background: #10b981; }
+    .badge-err .badge-dot { background: #ef4444; }
+    .badge-wait .badge-dot { background: #3b82f6; }
+
+    /* Surface Card */
     .card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
+      background: var(--card);
+      border: 1px solid var(--border);
       border-radius: 12px;
       padding: 18px 20px;
     }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .card-title-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .card-icon {
+      color: #60a5fa;
+      display: flex;
+      align-items: center;
+    }
+
     .card-title {
       font-size: 14px;
       font-weight: 700;
-      color: white;
-      margin-bottom: 14px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
+      color: var(--text);
     }
+
+    .card-subtitle {
+      font-size: 11px;
+      color: var(--text-sub);
+    }
+
+    /* Form Fields */
     .form-grid {
       display: grid;
       grid-template-columns: 2fr 1fr;
       gap: 14px;
     }
-    @media (max-width: 700px) { .form-grid { grid-template-columns: 1fr; } }
+
+    @media (max-width: 700px) {
+      .form-grid { grid-template-columns: 1fr; }
+    }
+
     .form-group {
       display: flex;
       flex-direction: column;
       gap: 6px;
     }
+
     .form-group.full { grid-column: 1 / -1; }
+
     .form-label {
       font-size: 12px;
       font-weight: 600;
       color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
+
+    .input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .input-icon {
+      position: absolute;
+      color: #64748b;
+      display: flex;
+      align-items: center;
+      pointer-events: none;
+    }
+
+    [dir="rtl"] .input-icon { right: 12px; }
+    [dir="ltr"] .input-icon { left: 12px; }
+
+    .input-toggle {
+      position: absolute;
+      background: none;
+      border: none;
+      color: #64748b;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      padding: 4px;
+      transition: color 0.15s;
+    }
+
+    .input-toggle:hover { color: var(--text); }
+
+    [dir="rtl"] .input-toggle { left: 12px; }
+    [dir="ltr"] .input-toggle { right: 12px; }
+
     .form-input {
-      background: rgba(0, 0, 0, 0.25);
-      border: 1px solid var(--card-border);
+      width: 100%;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--border);
       color: white;
-      padding: 10px 12px;
+      padding: 10px 14px;
       border-radius: 8px;
       font-size: 13px;
       outline: none;
       font-family: inherit;
-      transition: border 0.2s;
+      transition: all 0.2s;
     }
-    .form-input:focus { border-color: var(--primary); }
 
-    /* Pace Selector */
-    .pace-box {
+    [dir="rtl"] .form-input.has-icon { padding-right: 38px; }
+    [dir="ltr"] .form-input.has-icon { padding-left: 38px; }
+
+    [dir="rtl"] .form-input.has-toggle { padding-left: 38px; }
+    [dir="ltr"] .form-input.has-toggle { padding-right: 38px; }
+
+    .form-input:focus {
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+      background: rgba(0, 0, 0, 0.5);
+    }
+
+    /* Pacing Selector */
+    .pace-container {
       margin-top: 14px;
-      background: rgba(37, 99, 235, 0.08);
-      border: 1px solid rgba(37, 99, 235, 0.2);
-      border-radius: 8px;
-      padding: 12px 14px;
+      background: rgba(37, 99, 235, 0.04);
+      border: 1px solid rgba(37, 99, 235, 0.18);
+      border-radius: 10px;
+      padding: 12px 16px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .pace-info {
+      display: flex;
+      align-items: center;
       gap: 10px;
     }
-    .pace-text { font-size: 12px; }
-    .pace-text strong { color: #60a5fa; }
+
+    .pace-text-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: #93c5fd;
+    }
+
+    .pace-text-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
     .pace-select {
       background: #1e293b;
       color: white;
-      border: 1px solid var(--card-border);
-      padding: 6px 12px;
-      border-radius: 6px;
+      border: 1px solid var(--border);
+      padding: 7px 12px;
+      border-radius: 8px;
       font-size: 12px;
       font-family: inherit;
       outline: none;
+      cursor: pointer;
     }
 
-    /* Auto-Start Box */
-    .autostart-box {
+    .pace-select:focus { border-color: #3b82f6; }
+
+    /* Auto-Start Switch Box */
+    .autostart-container {
       margin-top: 12px;
-      background: rgba(16, 185, 129, 0.06);
-      border: 1px solid rgba(16, 185, 129, 0.22);
-      border-radius: 8px;
-      padding: 12px 14px;
+      background: rgba(16, 185, 129, 0.04);
+      border: 1px solid rgba(16, 185, 129, 0.18);
+      border-radius: 10px;
+      padding: 12px 16px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .autostart-info {
+      display: flex;
+      align-items: center;
       gap: 10px;
     }
 
-    /* Actions */
+    .autostart-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #34d399;
+    }
+
+    .autostart-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* Modern Toggle Switch */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 46px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #334155;
+      transition: .25s ease-in-out;
+      border-radius: 24px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .25s ease-in-out;
+      border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    }
+
+    input:checked + .slider {
+      background-color: #10b981;
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(22px);
+    }
+
+    [dir="rtl"] input:checked + .slider:before {
+      transform: translateX(22px);
+    }
+
+    /* Actions Bar */
     .actions-bar {
       display: flex;
       gap: 10px;
-      margin-top: 16px;
+      margin-top: 18px;
       flex-wrap: wrap;
     }
+
     .btn {
-      padding: 10px 20px;
+      padding: 9px 18px;
       border-radius: 8px;
-      font-size: 14px;
-      font-weight: 700;
+      font-size: 13px;
+      font-weight: 600;
       cursor: pointer;
       border: none;
-      display: flex;
+      display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
       transition: all 0.2s;
+      font-family: inherit;
     }
+
     .btn-primary {
-      background: #2563eb;
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
       color: white;
       box-shadow: 0 2px 10px rgba(37, 99, 235, 0.35);
     }
-    .btn-primary:hover { background: #1d4ed8; }
-    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-secondary {
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--text);
-      border: 1px solid var(--card-border);
-    }
-    .btn-secondary:hover { background: rgba(255, 255, 255, 0.15); }
-    .btn-danger {
-      background: rgba(239, 68, 68, 0.15);
-      color: #f87171;
-      border: 1px solid rgba(239, 68, 68, 0.3);
-    }
-    .btn-danger:hover { background: rgba(239, 68, 68, 0.25); }
 
-    /* Progress & Counters */
-    .progress-wrap {
-      background: rgba(0, 0, 0, 0.3);
-      border-radius: 8px;
-      height: 10px;
-      overflow: hidden;
-      margin: 10px 0;
-      border: 1px solid var(--card-border);
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #1d4ed8, #1e40af);
+      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.45);
     }
+
+    .btn-primary:active { transform: translateY(1px); }
+
+    .btn-secondary {
+      background: #1e293b;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: #283548;
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-warning {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    .btn-warning:hover { background: rgba(245, 158, 11, 0.25); }
+
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.12);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.25);
+    }
+
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.22);
+      color: #fca5a5;
+    }
+
+    /* Progress & Metrics */
+    .progress-wrap {
+      background: rgba(0, 0, 0, 0.35);
+      border-radius: 8px;
+      height: 8px;
+      overflow: hidden;
+      margin: 12px 0 16px 0;
+      border: 1px solid var(--border);
+      position: relative;
+    }
+
     .progress-bar {
       height: 100%;
       background: linear-gradient(90deg, #2563eb, #38bdf8);
       width: 0%;
-      transition: width 0.3s;
+      transition: width 0.4s ease;
+      border-radius: 8px;
     }
+
     .stats-row {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
-      gap: 10px;
-      margin-top: 10px;
+      gap: 12px;
     }
-    @media (max-width: 650px) { .stats-row { grid-template-columns: repeat(2, 1fr); } }
-    .stat-mini {
-      background: rgba(0, 0, 0, 0.2);
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      padding: 10px;
-      text-align: center;
-    }
-    .stat-mini-title { font-size: 11px; color: var(--text-muted); }
-    .stat-mini-val { font-size: 18px; font-weight: 800; color: white; margin-top: 2px; }
 
-    /* Live Log */
-    .log-terminal {
-      background: #06090e;
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      padding: 12px;
-      font-family: 'Consolas', 'Courier New', monospace;
+    @media (max-width: 680px) {
+      .stats-row { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    .stat-card {
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      position: relative;
+    }
+
+    .stat-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .stat-card-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .stat-card-icon {
+      color: #64748b;
+    }
+
+    .stat-card-val {
+      font-size: 20px;
+      font-weight: 700;
+      color: white;
+      font-family: var(--font-en);
+      margin-top: 2px;
+    }
+
+    .stat-card-denom {
+      color: var(--text-sub);
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    /* Terminal Log Window */
+    .terminal-window {
+      background: #040711;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .terminal-header {
+      background: #0b1120;
+      border-bottom: 1px solid var(--border);
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .terminal-dots {
+      display: flex;
+      gap: 6px;
+    }
+
+    .terminal-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .dot-close { background: #ef4444; }
+    .dot-min { background: #f59e0b; }
+    .dot-max { background: #10b981; }
+
+    .terminal-title {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .terminal-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-copy {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-muted);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-family: inherit;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s;
+    }
+
+    .btn-copy:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+    }
+
+    .terminal-body {
+      padding: 12px 14px;
+      font-family: var(--font-mono);
       font-size: 12px;
       color: #94a3b8;
-      height: 160px;
+      height: 170px;
       overflow-y: auto;
+      line-height: 1.6;
+      direction: ltr;
+      text-align: left;
+    }
+
+    .terminal-body::-webkit-scrollbar { width: 6px; }
+    .terminal-body::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+
+    /* Toast Notification Banner */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: #1e293b;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 20px;
+      border-radius: 10px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 100;
+    }
+
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .toast-success { border-color: rgba(16, 185, 129, 0.4); color: #34d399; }
+    .toast-error { border-color: rgba(239, 68, 68, 0.4); color: #f87171; }
+
+    /* Confirmation Modal */
+    .modal-backdrop {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+      z-index: 99;
+    }
+
+    .modal-backdrop.show {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .modal {
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      width: 90%;
+      max-width: 440px;
+      padding: 24px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+      transform: scale(0.95);
+      transition: transform 0.2s;
+    }
+
+    .modal-backdrop.show .modal { transform: scale(1); }
+
+    .modal-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: white;
+      margin-bottom: 8px;
+    }
+
+    .modal-desc {
+      font-size: 13px;
+      color: var(--text-muted);
       line-height: 1.5;
+      margin-bottom: 20px;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
     }
   </style>
 </head>
 <body>
+  <!-- Top Navigation Bar -->
   <div class="topbar">
     <div class="brand">
-      <div class="brand-icon">XP</div>
-      <div class="brand-text">
-        <h1 id="t-brand">وكيل ربط ومزامنة مستودع الأدوية</h1>
-        <p id="t-brand-sub">XPharma Warehouse Sync Agent</p>
+      <div class="brand-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+          <path d="M2 17l10 5 10-5"/>
+          <path d="M2 12l10 5 10-5"/>
+        </svg>
+      </div>
+      <div>
+        <div class="brand-title" id="t-brand">وكيل مزامنة مستودع الأدوية</div>
+        <div class="brand-sub">
+          <span>XPharma Sync Agent</span>
+          <span class="version">v2.4 Enterprise</span>
+        </div>
       </div>
     </div>
-    <button class="lang-toggle" onclick="toggleLanguage()" id="langBtn">English 🌐</button>
+
+    <div class="topbar-right">
+      <div class="daemon-pill">
+        <span class="pulse-dot"></span>
+        <span id="t-daemon-live">يعمل في الخلفية</span>
+      </div>
+      <button class="btn-lang" onclick="toggleLanguage()" id="langBtn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" x2="22" y1="12" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        <span id="t-lang-text">English</span>
+      </button>
+    </div>
   </div>
 
+  <!-- Main View -->
   <div class="main">
-    <!-- Status Pills -->
-    <div class="status-bar">
-      <div class="status-pill">
-        <span class="status-label" id="t-st-fb">قاعدة بيانات الفايربيرد (ORGA.GDB):</span>
-        <div class="status-indicator" id="indFb">
-          <span class="dot dot-red" id="dotFb"></span>
+    <!-- Live Status Cards -->
+    <div class="status-grid">
+      <!-- Firebird DB Status -->
+      <div class="status-card">
+        <div class="status-info">
+          <div class="status-icon-box">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+          </div>
+          <div>
+            <div class="status-title" id="t-st-fb">قاعدة بيانات الفايربيرد (ORGA.GDB)</div>
+            <div class="status-sub">Firebird 2.5 / Port 3050</div>
+          </div>
+        </div>
+        <div class="badge badge-wait" id="badgeFb">
+          <span class="badge-dot"></span>
           <span id="textFb">جاري الفحص...</span>
         </div>
       </div>
-      <div class="status-pill">
-        <span class="status-label" id="t-st-cloud">خادم المنصة السحابية:</span>
-        <div class="status-indicator" id="indCloud">
-          <span class="dot dot-red" id="dotCloud"></span>
+
+      <!-- Cloud Status -->
+      <div class="status-card">
+        <div class="status-info">
+          <div class="status-icon-box">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
+          </div>
+          <div>
+            <div class="status-title" id="t-st-cloud">خادم المنصة السحابية</div>
+            <div class="status-sub">api.xpharma.cloud</div>
+          </div>
+        </div>
+        <div class="badge badge-wait" id="badgeCloud">
+          <span class="badge-dot"></span>
           <span id="textCloud">جاري الفحص...</span>
         </div>
       </div>
     </div>
 
-    <!-- Main Config Form -->
+    <!-- Connection Configuration Form -->
     <div class="card">
-      <div class="card-title">
-        <span>⚙️</span>
-        <span id="t-sec-conn">بيانات الربط والاتصال الأساسية (مطلوب 3 بيانات فقط)</span>
-      </div>
-      <div class="form-grid">
-        <div class="form-group">
-          <label class="form-label" id="t-lbl-path">1. مسار ملف قاعدة بيانات الفايربيرد (Firebird DB Path):</label>
-          <input type="text" class="form-input" id="inPath" placeholder="D:\ORGA_SOFT\DATA\ORGA.GDB" />
-        </div>
-        <div class="form-group">
-          <label class="form-label" id="t-lbl-ip">2. عنوان IP الماستر أو السيرفر (Master IP):</label>
-          <input type="text" class="form-input" id="inHost" placeholder="127.0.0.1" />
-        </div>
-        <div class="form-group full">
-          <label class="form-label" id="t-lbl-key">3. مفتاح الربط والتوكن السحابي (API Token):</label>
-          <input type="password" class="form-input" id="inKey" placeholder="xph_agt_..." />
+      <div class="card-header">
+        <div class="card-title-group">
+          <div class="card-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </div>
+          <div>
+            <div class="card-title" id="t-sec-conn">بيانات الربط والاتصال الأساسية</div>
+            <div class="card-subtitle" id="t-sec-conn-sub">مطلوب 3 حقول فقط لبدء عملية المزامنة</div>
+          </div>
         </div>
       </div>
 
-      <!-- Pacing Mode -->
-      <div class="pace-box">
-        <div class="pace-text">
-          <span id="t-pace-title">🐢 سرعة الرفع: </span>
-          <strong id="t-pace-desc">نمط هادئ وخفيف جداً (يحمي داتابيز المخزن وسيرفر السحابة من أي تهنيج)</strong>
+      <div class="form-grid">
+        <!-- DB Path -->
+        <div class="form-group">
+          <label class="form-label" id="t-lbl-path">
+            <span>مسار ملف قاعدة بيانات الفايربيرد (Firebird DB Path):</span>
+          </label>
+          <div class="input-wrapper">
+            <div class="input-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+            </div>
+            <input type="text" class="form-input has-icon" id="inPath" placeholder="D:\ORGA_SOFT\DATA\ORGA.GDB" />
+          </div>
+        </div>
+
+        <!-- Master Host / IP -->
+        <div class="form-group">
+          <label class="form-label" id="t-lbl-ip">
+            <span>عنوان IP الماستر أو السيرفر (Master IP):</span>
+          </label>
+          <div class="input-wrapper">
+            <div class="input-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg>
+            </div>
+            <input type="text" class="form-input has-icon" id="inHost" placeholder="127.0.0.1" />
+          </div>
+        </div>
+
+        <!-- API Token -->
+        <div class="form-group full">
+          <label class="form-label" id="t-lbl-key">
+            <span>مفتاح التوكن السحابي (Cloud API Token):</span>
+          </label>
+          <div class="input-wrapper">
+            <div class="input-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
+            </div>
+            <input type="password" class="form-input has-icon has-toggle" id="inKey" placeholder="xph_agt_..." />
+            <button type="button" class="input-toggle" onclick="togglePasswordVisibility()" title="عرض / إخفاء التوكن">
+              <svg id="eyeIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sync Pacing Mode -->
+      <div class="pace-container">
+        <div class="pace-info">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="1" x2="7" y1="14" y2="14"/><line x1="9" x2="15" y1="8" y2="8"/><line x1="17" x2="23" y1="16" y2="16"/></svg>
+          <div>
+            <div class="pace-text-title" id="t-pace-title">معدل تدفق المزامنة (Throttling Mode)</div>
+            <div class="pace-text-sub" id="t-pace-desc">نمط هادئ وخفيف يحمي أداء وسرعة أجهزة المبيعات بالمستودع</div>
+          </div>
         </div>
         <select class="pace-select" id="selMode">
-          <option value="gentle">🐢 هادئ وخفيف جداً (موصى به - 100 سجل مع راحة)</option>
-          <option value="balanced">⚖️ متوازن (150 سجل)</option>
-          <option value="fast">⚡ سريع (300 سجل)</option>
+          <option value="gentle" selected>هادئ وخفيف (100 سجل مع راحة 1.5 ثانية - موصى به)</option>
+          <option value="balanced">متوازن (150 سجل مع راحة 0.8 ثانية)</option>
+          <option value="fast">سريع (300 سجل مع راحة 0.3 ثانية)</option>
         </select>
       </div>
 
-      <!-- Auto-Start with Windows Box -->
-      <div class="autostart-box">
-        <div>
-          <div style="font-weight: 700; font-size: 13px; color: #34d399; display: flex; align-items: center; gap: 6px;">
-            <span>⚡</span>
-            <span id="t-autostart-title">التشغيل التلقائي الذاتي (Auto-Start & Background Sync)</span>
-          </div>
-          <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;" id="t-autostart-desc">
-            يبدأ البرنامج في العمل ذاتياً عند تشغيل الكمبيوتر أو إعادة تشغيله، ويقوم بتحديث البيانات دورياً كل 60 ثانية بدون تدخل يدوي.
+      <!-- Auto-Start with Windows -->
+      <div class="autostart-container">
+        <div class="autostart-info">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          <div>
+            <div class="autostart-title" id="t-autostart-title">التشغيل التلقائي مع إقلاع النظام (Windows Auto-Start)</div>
+            <div class="autostart-sub" id="t-autostart-desc">يبدأ البرنامج تلقائياً في الخلفية عند إعادة تشغيل الكمبيوتر، ويستمر في التحديث كل دقيقة.</div>
           </div>
         </div>
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; font-weight: 600;">
-            <input type="checkbox" id="chkAutoStart" checked style="width: 18px; height: 18px; cursor: pointer; accent-color: #10b981;">
-            <span id="t-chk-autostart">تشغيل تلقائي مع إقلاع الويندوز</span>
-          </label>
-        </div>
+        <label class="switch">
+          <input type="checkbox" id="chkAutoStart" checked>
+          <span class="slider"></span>
+        </label>
       </div>
 
       <!-- Action Buttons -->
       <div class="actions-bar">
         <button class="btn btn-primary" id="btnStart" onclick="startSync()">
-          <span>▶️</span>
-          <span id="t-btn-start">حفظ وبدء المزامنة التلقائية</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          <span id="t-btn-start">حفظ وبدء المزامنة</span>
         </button>
-        <button class="btn btn-secondary" id="btnPause" onclick="pauseSync()" style="display:none;">
-          <span>⏸️</span>
+
+        <button class="btn btn-warning" id="btnPause" onclick="pauseSync()" style="display:none;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
           <span id="t-btn-pause">إيقاف مؤقت</span>
         </button>
+
         <button class="btn btn-secondary" onclick="saveSettingsOnly()">
-          <span>💾</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
           <span id="t-btn-save">حفظ الإعدادات فقط</span>
         </button>
-        <button class="btn btn-danger" onclick="resetSync()" title="إعادة رفع الداتا من أول سجل">
-          <span>🔄</span>
+
+        <button class="btn btn-danger" onclick="openResetModal()" title="إعادة مزامنة البيانات من البداية">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
           <span id="t-btn-reset">إعادة من البداية</span>
         </button>
       </div>
     </div>
 
-    <!-- Live Progress & Stats -->
+    <!-- Live Progress & Metrics -->
     <div class="card">
-      <div class="card-title" style="justify-content: space-between;">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span>📊</span>
-          <span id="t-sec-prog">حالة المزامنة والتقدم المباشر</span>
+      <div class="card-header">
+        <div class="card-title-group">
+          <div class="card-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          </div>
+          <div>
+            <div class="card-title" id="t-sec-prog">حالة المزامنة والتقدم المباشر</div>
+            <div class="card-subtitle" id="currentTask">جاهز للبدء</div>
+          </div>
         </div>
-        <span style="font-size: 12px; color: #38bdf8;" id="currentTask">جاهز</span>
       </div>
 
       <div class="progress-wrap">
@@ -1468,96 +2088,170 @@ const appHTML = `<!DOCTYPE html>
       </div>
 
       <div class="stats-row">
-        <div class="stat-mini">
-          <div class="stat-mini-title" id="t-st-invoices">الفواتير المرفوعة</div>
-          <div class="stat-mini-val"><span id="cntInvoices">0</span> / <span id="totInvoices" style="color:var(--text-muted); font-size:13px;">0</span></div>
+        <!-- Invoices -->
+        <div class="stat-card">
+          <div class="stat-card-header">
+            <span class="stat-card-title" id="t-st-invoices">الفواتير المرفوعة</span>
+            <div class="stat-card-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            </div>
+          </div>
+          <div class="stat-card-val"><span id="cntInvoices">0</span> <span class="stat-card-denom">/ <span id="totInvoices">0</span></span></div>
         </div>
-        <div class="stat-mini">
-          <div class="stat-mini-title" id="t-st-receipts">سندات القبض المرفوعة</div>
-          <div class="stat-mini-val"><span id="cntReceipts">0</span> / <span id="totReceipts" style="color:var(--text-muted); font-size:13px;">0</span></div>
+
+        <!-- Cash Receipts -->
+        <div class="stat-card">
+          <div class="stat-card-header">
+            <span class="stat-card-title" id="t-st-receipts">سندات القبض</span>
+            <div class="stat-card-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
+            </div>
+          </div>
+          <div class="stat-card-val"><span id="cntReceipts">0</span> <span class="stat-card-denom">/ <span id="totReceipts">0</span></span></div>
         </div>
-        <div class="stat-mini">
-          <div class="stat-mini-title" id="t-st-custs">دليل الصيدليات</div>
-          <div class="stat-mini-val" id="cntCusts">0</div>
+
+        <!-- Customers -->
+        <div class="stat-card">
+          <div class="stat-card-header">
+            <span class="stat-card-title" id="t-st-custs">دليل العملاء والصيدليات</span>
+            <div class="stat-card-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            </div>
+          </div>
+          <div class="stat-card-val" id="cntCusts">0</div>
         </div>
-        <div class="stat-mini">
-          <div class="stat-mini-title" id="t-st-status">حالة الوكيل</div>
-          <div class="stat-mini-val" id="stVal" style="font-size:15px; color:#34d399;">مفعل ويعمل في الخلفية</div>
+
+        <!-- Agent Status -->
+        <div class="stat-card">
+          <div class="stat-card-header">
+            <span class="stat-card-title" id="t-st-status">حالة المحرك</span>
+            <div class="stat-card-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </div>
+          </div>
+          <div class="stat-card-val" id="stVal" style="font-size: 14px; color: #34d399; margin-top: 6px;">نشط في الخلفية</div>
         </div>
       </div>
     </div>
 
-    <!-- Clean Log Box -->
-    <div class="card">
-      <div class="card-title">
-        <span>📋</span>
-        <span id="t-sec-log">سجل العمليات المباشر</span>
+    <!-- Live Operation Log Terminal -->
+    <div class="terminal-window">
+      <div class="terminal-header">
+        <div class="terminal-dots">
+          <div class="terminal-dot dot-close"></div>
+          <div class="terminal-dot dot-min"></div>
+          <div class="terminal-dot dot-max"></div>
+        </div>
+        <div class="terminal-title">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+          <span id="t-sec-log">سجل النشاط والعمليات المباشر</span>
+        </div>
+        <div class="terminal-actions">
+          <button class="btn-copy" onclick="copyTerminalLogs()">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+            <span id="t-btn-copy">نسخ السجل</span>
+          </button>
+        </div>
       </div>
-      <div class="log-terminal" id="logBox">
-        <div>جاري قراءة سجل العمليات...</div>
+      <div class="terminal-body" id="logBox">
+        <div>Initializing sync engine log monitor...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast"></div>
+
+  <!-- Reset Confirmation Modal -->
+  <div id="resetModal" class="modal-backdrop">
+    <div class="modal">
+      <div class="modal-title" id="t-modal-title">تأكيد إعادة المزامنة من البداية</div>
+      <div class="modal-desc" id="t-modal-desc">
+        سيتم إعادة تعيين مؤشرات الفواتير وسندات القبض للبدء برفع كافة السجلات التاريخية من جديد. لن يتم حذف أي بيانات على السحابة، بل سيتم تحديث السجلات فقط.
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeResetModal()" id="t-modal-cancel">إلغاء</button>
+        <button class="btn btn-danger" onclick="confirmResetSync()" id="t-modal-confirm">تأكيد الإعادة</button>
       </div>
     </div>
   </div>
 
   <script>
     let currentLang = localStorage.getItem('agent_ui_lang') || 'ar';
+    let isInitialized = false;
 
     const translations = {
       ar: {
-        brand: 'وكيل ربط ومزامنة مستودع الأدوية',
-        stFb: 'قاعدة بيانات الفايربيرد (ORGA.GDB):',
-        stCloud: 'خادم المنصة السحابية:',
-        secConn: 'بيانات الربط والاتصال الأساسية (مطلوب 3 بيانات فقط)',
-        lblPath: '1. مسار ملف قاعدة بيانات الفايربيرد (Firebird DB Path):',
-        lblIp: '2. عنوان IP الماستر أو السيرفر (Master IP):',
-        lblKey: '3. مفتاح الربط والتوكن السحابي (API Token):',
-        paceTitle: '🐢 سرعة الرفع: ',
-        paceDesc: 'نمط هادئ وخفيف جداً (يحمي داتابيز المخزن وسيرفر السحابة من أي تهنيج)',
-        autostartTitle: 'التشغيل التلقائي الذاتي (Auto-Start & Background Sync)',
-        autostartDesc: 'يبدأ البرنامج في العمل ذاتياً عند تشغيل الكمبيوتر أو إعادة تشغيله، ويقوم بتحديث البيانات دورياً كل 60 ثانية بدون تدخل يدوي.',
-        chkAutostart: 'تشغيل تلقائي مع إقلاع الويندوز',
-        btnStart: 'حفظ وبدء المزامنة التلقائية',
+        brand: 'وكيل مزامنة مستودع الأدوية',
+        daemonLive: 'يعمل في الخلفية',
+        stFb: 'قاعدة بيانات الفايربيرد (ORGA.GDB)',
+        stCloud: 'خادم المنصة السحابية',
+        secConn: 'بيانات الربط والاتصال الأساسية',
+        secConnSub: 'مطلوب 3 حقول فقط لبدء عملية المزامنة',
+        lblPath: 'مسار ملف قاعدة بيانات الفايربيرد (Firebird DB Path):',
+        lblIp: 'عنوان IP الماستر أو السيرفر (Master IP):',
+        lblKey: 'مفتاح التوكن السحابي (Cloud API Token):',
+        paceTitle: 'معدل تدفق المزامنة (Throttling Mode)',
+        paceDesc: 'نمط هادئ وخفيف يحمي أداء وسرعة أجهزة المبيعات بالمستودع',
+        autostartTitle: 'التشغيل التلقائي مع إقلاع النظام (Windows Auto-Start)',
+        autostartDesc: 'يبدأ البرنامج تلقائياً في الخلفية عند إعادة تشغيل الكمبيوتر، ويستمر في التحديث كل دقيقة.',
+        btnStart: 'حفظ وبدء المزامنة',
         btnPause: 'إيقاف مؤقت',
         btnSave: 'حفظ الإعدادات فقط',
         btnReset: 'إعادة من البداية',
         secProg: 'حالة المزامنة والتقدم المباشر',
         stInvoices: 'الفواتير المرفوعة',
-        stReceipts: 'سندات القبض المرفوعة',
-        stCusts: 'دليل الصيدليات',
-        stStatus: 'حالة الوكيل',
-        secLog: 'سجل العمليات المباشر',
-        langBtn: 'English 🌐',
-        connected: 'متصل بنجاح 🟢',
-        disconnected: 'غير متصل 🔴',
-        testing: 'جاري الفحص...'
+        stReceipts: 'سندات القبض',
+        stCusts: 'دليل العملاء والصيدليات',
+        stStatus: 'حالة المحرك',
+        secLog: 'سجل النشاط والعمليات المباشر',
+        btnCopy: 'نسخ السجل',
+        langBtn: 'English',
+        connected: 'متصل بنجاح',
+        disconnected: 'غير متصل',
+        testing: 'جاري الفحص...',
+        modalTitle: 'تأكيد إعادة المزامنة من البداية',
+        modalDesc: 'سيتم إعادة تعيين مؤشرات الفواتير وسندات القبض للبدء برفع كافة السجلات التاريخية من جديد. لن يتم حذف أي بيانات على السحابة، بل سيتم تحديث السجلات فقط.',
+        modalCancel: 'إلغاء',
+        modalConfirm: 'تأكيد الإعادة',
+        toastSaved: 'تم حفظ الإعدادات بنجاح',
+        toastCopied: 'تم نسخ السجل إلى الحافظة'
       },
       en: {
         brand: 'XPharma Warehouse Sync Agent',
-        stFb: 'Firebird Database (ORGA.GDB):',
-        stCloud: 'Cloud Server Backend:',
-        secConn: 'Connection Settings (Only 3 fields needed)',
-        lblPath: '1. Firebird Database File Path (ORGA.GDB):',
-        lblIp: '2. Master Server IP / Host:',
-        lblKey: '3. Cloud API Token:',
-        paceTitle: '🐢 Upload Pace: ',
-        paceDesc: 'Gentle & Light (Protects warehouse DB and server from freezing)',
-        autostartTitle: 'Auto-Start & Continuous Background Sync',
-        autostartDesc: 'Starts automatically when Windows boots or restarts, and syncs new data continuously every 60 seconds.',
-        chkAutostart: 'Auto-start with Windows',
-        btnStart: 'Save & Start Auto Sync',
+        daemonLive: 'Active Background Daemon',
+        stFb: 'Firebird Database (ORGA.GDB)',
+        stCloud: 'Cloud Platform Backend',
+        secConn: 'Connection Settings',
+        secConnSub: 'Only 3 fields required for complete synchronization',
+        lblPath: 'Firebird DB Path (ORGA.GDB):',
+        lblIp: 'Master Host / Server IP:',
+        lblKey: 'Cloud API Token:',
+        paceTitle: 'Sync Pacing (Throttling Mode)',
+        paceDesc: 'Gentle mode protects local database and sales terminals from locks',
+        autostartTitle: 'Windows Auto-Start on Boot',
+        autostartDesc: 'Launches automatically in background on system reboot and syncs updates continuously.',
+        btnStart: 'Save & Start Sync',
         btnPause: 'Pause Sync',
         btnSave: 'Save Settings Only',
         btnReset: 'Reset & Re-sync',
-        secProg: 'Live Sync Progress & Status',
-        stInvoices: 'Uploaded Invoices',
-        stReceipts: 'Uploaded Receipts',
-        stCusts: 'Pharmacies',
-        stStatus: 'Agent Status',
-        secLog: 'Live Operation Log',
-        langBtn: 'العربية 🌐',
-        connected: 'Connected 🟢',
-        disconnected: 'Disconnected 🔴',
-        testing: 'Checking...'
+        secProg: 'Live Sync Progress & Health',
+        stInvoices: 'Synced Invoices',
+        stReceipts: 'Cash Receipts',
+        stCusts: 'Pharmacies Directory',
+        stStatus: 'Engine Status',
+        secLog: 'Live Synchronization Log',
+        btnCopy: 'Copy Log',
+        langBtn: 'العربية',
+        connected: 'Connected',
+        disconnected: 'Disconnected',
+        testing: 'Checking...',
+        modalTitle: 'Confirm Re-sync from Beginning',
+        modalDesc: 'Sync cursors will be reset to 0. Historical invoices and receipts will be scanned and re-uploaded smoothly. No remote cloud records will be deleted.',
+        modalCancel: 'Cancel',
+        modalConfirm: 'Confirm Reset',
+        toastSaved: 'Settings saved successfully',
+        toastCopied: 'Logs copied to clipboard'
       }
     };
 
@@ -1571,9 +2265,11 @@ const appHTML = `<!DOCTYPE html>
 
       const t = translations[lang];
       document.getElementById('t-brand').innerText = t.brand;
+      document.getElementById('t-daemon-live').innerText = t.daemonLive;
       document.getElementById('t-st-fb').innerText = t.stFb;
       document.getElementById('t-st-cloud').innerText = t.stCloud;
       document.getElementById('t-sec-conn').innerText = t.secConn;
+      document.getElementById('t-sec-conn-sub').innerText = t.secConnSub;
       document.getElementById('t-lbl-path').innerText = t.lblPath;
       document.getElementById('t-lbl-ip').innerText = t.lblIp;
       document.getElementById('t-lbl-key').innerText = t.lblKey;
@@ -1581,7 +2277,6 @@ const appHTML = `<!DOCTYPE html>
       document.getElementById('t-pace-desc').innerText = t.paceDesc;
       document.getElementById('t-autostart-title').innerText = t.autostartTitle;
       document.getElementById('t-autostart-desc').innerText = t.autostartDesc;
-      document.getElementById('t-chk-autostart').innerText = t.chkAutostart;
       document.getElementById('t-btn-start').innerText = t.btnStart;
       document.getElementById('t-btn-pause').innerText = t.btnPause;
       document.getElementById('t-btn-save').innerText = t.btnSave;
@@ -1592,16 +2287,62 @@ const appHTML = `<!DOCTYPE html>
       document.getElementById('t-st-custs').innerText = t.stCusts;
       document.getElementById('t-st-status').innerText = t.stStatus;
       document.getElementById('t-sec-log').innerText = t.secLog;
-      document.getElementById('langBtn').innerText = t.langBtn;
+      document.getElementById('t-btn-copy').innerText = t.btnCopy;
+      document.getElementById('t-lang-text').innerText = t.langBtn;
+      document.getElementById('t-modal-title').innerText = t.modalTitle;
+      document.getElementById('t-modal-desc').innerText = t.modalDesc;
+      document.getElementById('t-modal-cancel').innerText = t.modalCancel;
+      document.getElementById('t-modal-confirm').innerText = t.modalConfirm;
     }
 
     function toggleLanguage() {
       applyLanguage(currentLang === 'ar' ? 'en' : 'ar');
     }
 
-    applyLanguage(currentLang);
+    function showToast(msg, type = 'success') {
+      const toast = document.getElementById('toast');
+      toast.innerText = msg;
+      toast.className = 'toast toast-' + type + ' show';
+      setTimeout(() => {
+        toast.className = 'toast toast-' + type;
+      }, 3200);
+    }
 
-    let isInitialized = false;
+    function togglePasswordVisibility() {
+      const input = document.getElementById('inKey');
+      const icon = document.getElementById('eyeIcon');
+      if (input.type === 'password') {
+        input.type = 'text';
+        icon.innerHTML = '<path d="m9.88 9.88 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/>';
+      } else {
+        input.type = 'password';
+        icon.innerHTML = '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>';
+      }
+    }
+
+    function openResetModal() {
+      document.getElementById('resetModal').classList.add('show');
+    }
+
+    function closeResetModal() {
+      document.getElementById('resetModal').classList.remove('show');
+    }
+
+    async function confirmResetSync() {
+      closeResetModal();
+      await fetch('/api/reset', { method: 'POST' });
+      showToast(currentLang === 'ar' ? 'تمت إعادة التعيين للبدء من البداية' : 'Sync cursors reset successfully');
+      fetchStatus();
+    }
+
+    function copyTerminalLogs() {
+      const logBox = document.getElementById('logBox');
+      navigator.clipboard.writeText(logBox.innerText).then(() => {
+        showToast(translations[currentLang].toastCopied);
+      });
+    }
+
+    applyLanguage(currentLang);
 
     async function fetchStatus() {
       try {
@@ -1609,28 +2350,29 @@ const appHTML = `<!DOCTYPE html>
         const data = await res.json();
         const t = translations[currentLang];
 
-        // Connection Indicators
-        const dotFb = document.getElementById('dotFb');
+        // Firebird Status Badge
+        const badgeFb = document.getElementById('badgeFb');
         const textFb = document.getElementById('textFb');
         if (data.firebird_connected) {
-          dotFb.className = 'dot dot-green';
+          badgeFb.className = 'badge badge-ok';
           textFb.innerText = t.connected;
         } else {
-          dotFb.className = 'dot dot-red';
+          badgeFb.className = 'badge badge-err';
           textFb.innerText = t.disconnected;
         }
 
-        const dotCloud = document.getElementById('dotCloud');
+        // Cloud Status Badge
+        const badgeCloud = document.getElementById('badgeCloud');
         const textCloud = document.getElementById('textCloud');
         if (data.cloud_connected) {
-          dotCloud.className = 'dot dot-green';
+          badgeCloud.className = 'badge badge-ok';
           textCloud.innerText = t.connected;
         } else {
-          dotCloud.className = 'dot dot-red';
+          badgeCloud.className = 'badge badge-err';
           textCloud.innerText = t.disconnected;
         }
 
-        // Fill Form Fields on first load
+        // Initialize form fields once
         if (!isInitialized && data.config) {
           document.getElementById('inPath').value = data.config.firebird.db_path || '';
           document.getElementById('inHost').value = data.config.firebird.host || '127.0.0.1';
@@ -1642,48 +2384,48 @@ const appHTML = `<!DOCTYPE html>
           isInitialized = true;
         }
 
-        // Progress and Counts
+        // Counter Numbers
         document.getElementById('cntInvoices').innerText = (data.synced_invoices || 0).toLocaleString();
         document.getElementById('totInvoices').innerText = (data.total_invoices || 0).toLocaleString();
         document.getElementById('cntReceipts').innerText = (data.synced_receipts || 0).toLocaleString();
         document.getElementById('totReceipts').innerText = (data.total_receipts || 0).toLocaleString();
         document.getElementById('cntCusts').innerText = (data.total_customers || 0).toLocaleString();
 
+        // Progress
         const pct = data.progress_percent || 0;
         document.getElementById('progressBar').style.width = pct + '%';
-        document.getElementById('currentTask').innerText = data.current_task || 'جاهز';
+        document.getElementById('currentTask').innerText = data.current_task || 'جاهز للبدء';
 
+        // Engine Status Text
         const stVal = document.getElementById('stVal');
         const btnStart = document.getElementById('btnStart');
         const btnPause = document.getElementById('btnPause');
 
         if (data.status === 'syncing') {
-          stVal.innerText = currentLang === 'ar' ? 'جاري الرفع بهدوء...' : 'Gentle Syncing...';
+          stVal.innerText = currentLang === 'ar' ? 'جاري الرفع بهدوء...' : 'Syncing Gently...';
           stVal.style.color = '#38bdf8';
           btnStart.style.display = 'none';
-          btnPause.style.display = 'flex';
+          btnPause.style.display = 'inline-flex';
         } else if (data.status === 'paused') {
           stVal.innerText = currentLang === 'ar' ? 'متوقف مؤقتاً' : 'Paused';
           stVal.style.color = '#f59e0b';
-          btnStart.style.display = 'flex';
+          btnStart.style.display = 'inline-flex';
           btnPause.style.display = 'none';
-        } else if (data.status === 'success') {
-          stVal.innerText = currentLang === 'ar' ? 'نشط ويعمل تلقائياً في الخلفية' : 'Active Auto-Sync (Background)';
-          stVal.style.color = '#10b981';
-          btnStart.style.display = 'none';
-          btnPause.style.display = 'flex';
         } else {
-          stVal.innerText = currentLang === 'ar' ? 'نشط في الخلفية' : 'Background Active';
-          stVal.style.color = '#10b981';
-          btnStart.style.display = 'flex';
-          btnPause.style.display = 'none';
+          stVal.innerText = currentLang === 'ar' ? 'نشط ويعمل في الخلفية' : 'Background Active';
+          stVal.style.color = '#34d399';
+          btnStart.style.display = 'none';
+          btnPause.style.display = 'inline-flex';
         }
 
-        // Logs
+        // Live Logs
         if (data.logs && data.logs.length > 0) {
           const logBox = document.getElementById('logBox');
+          const isScrolledToBottom = logBox.scrollHeight - logBox.clientHeight <= logBox.scrollTop + 30;
           logBox.innerHTML = data.logs.map(l => '<div>' + escapeHtml(l) + '</div>').join('');
-          logBox.scrollTop = logBox.scrollHeight;
+          if (isScrolledToBottom) {
+            logBox.scrollTop = logBox.scrollHeight;
+          }
         }
       } catch (_) {}
     }
@@ -1700,12 +2442,22 @@ const appHTML = `<!DOCTYPE html>
       const key = document.getElementById('inKey').value;
       const mode = document.getElementById('selMode').value;
       const autoStart = document.getElementById('chkAutoStart').checked;
+
       await fetch('/api/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ db_path: dbPath, host: host, api_key: key, sync_mode: mode, auto_start: autoStart, auto_sync: true, language: currentLang })
+        body: JSON.stringify({
+          db_path: dbPath,
+          host: host,
+          api_key: key,
+          sync_mode: mode,
+          auto_start: autoStart,
+          auto_sync: true,
+          language: currentLang
+        })
       });
-      alert(currentLang === 'ar' ? 'تم حفظ الإعدادات بنجاح!' : 'Settings saved successfully!');
+
+      showToast(translations[currentLang].toastSaved);
       fetchStatus();
     }
 
@@ -1717,34 +2469,37 @@ const appHTML = `<!DOCTYPE html>
       const autoStart = document.getElementById('chkAutoStart').checked;
 
       if (!dbPath) {
-        alert(currentLang === 'ar' ? 'يرجى إدخال مسار ملف قاعدة البيانات أولاً' : 'Please enter database path first');
+        showToast(currentLang === 'ar' ? 'يرجى إدخال مسار قاعدة بيانات الفايربيرد' : 'Please enter database path', 'error');
         return;
       }
       if (!key) {
-        alert(currentLang === 'ar' ? 'يرجى إدخال مفتاح التوكن السحابي (API Token)' : 'Please enter cloud API token');
+        showToast(currentLang === 'ar' ? 'يرجى إدخال مفتاح التوكن السحابي' : 'Please enter cloud API token', 'error');
         return;
       }
 
       await fetch('/api/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ db_path: dbPath, host: host, api_key: key, sync_mode: mode, auto_start: autoStart, auto_sync: true, language: currentLang })
+        body: JSON.stringify({
+          db_path: dbPath,
+          host: host,
+          api_key: key,
+          sync_mode: mode,
+          auto_start: autoStart,
+          auto_sync: true,
+          language: currentLang
+        })
       });
 
       await fetch('/api/start', { method: 'POST' });
+      showToast(currentLang === 'ar' ? 'تم بدء المزامنة التلقائية بنجاح' : 'Sync started successfully');
       fetchStatus();
     }
 
     async function pauseSync() {
       await fetch('/api/pause', { method: 'POST' });
+      showToast(currentLang === 'ar' ? 'تم إيقاف المزامنة مؤقتاً' : 'Sync paused');
       fetchStatus();
-    }
-
-    async function resetSync() {
-      if (confirm(currentLang === 'ar' ? 'هل تريد بالتأكيد إعادة رفع البيانات من البداية؟' : 'Are you sure you want to re-sync from beginning?')) {
-        await fetch('/api/reset', { method: 'POST' });
-        fetchStatus();
-      }
     }
 
     fetchStatus();
@@ -1767,14 +2522,11 @@ func main() {
 
 	cfg := loadConfig()
 
-	log.Println("==========================================================")
-	log.Println("   XPharma Warehouse Sync Agent - وكيل مزامنة المستودع     ")
-	log.Println("==========================================================")
-	log.Printf("🔹 رابط السحابة: %s", cfg.Cloud.APIURL)
-	log.Printf("🔹 خادم الفايربيرد: %s:%d", cfg.Firebird.Host, cfg.Firebird.Port)
-	log.Printf("🔹 مسار قاعدة البيانات: %s", cfg.Firebird.DBPath)
-	log.Printf("🔹 نمط المزامنة: %s (دفعات %d سجل مع راحة %d مللي ثانية)", cfg.SyncMode, cfg.BatchSize, cfg.BatchDelayMs)
-	log.Printf("🔹 التشغيل التلقائي مع فتح الويندوز: %v", cfg.AutoStart)
+	log.Println("[INIT] XPharma Warehouse Sync Agent starting...")
+	log.Printf("[CLOUD] API URL: %s", cfg.Cloud.APIURL)
+	log.Printf("[FIREBIRD] Host: %s:%d, DBPath: %s", cfg.Firebird.Host, cfg.Firebird.Port, cfg.Firebird.DBPath)
+	log.Printf("[SYNC] Mode: %s (Batch: %d, Delay: %dms)", cfg.SyncMode, cfg.BatchSize, cfg.BatchDelayMs)
+	log.Printf("[BOOT] Auto-start with Windows: %v", cfg.AutoStart)
 
 	// Ensure Windows Auto-Start is configured according to config
 	if cfg.AutoStart {
@@ -1794,12 +2546,12 @@ func main() {
 	// If launched with -daemon (e.g. from Windows boot):
 	// Do NOT open window automatically, start continuous daemon directly
 	if *daemon {
-		log.Println("🔄 يعمل البرنامج في خلفية الويندوز بمزامنة مستمرة تلقائية...")
+		log.Println("[DAEMON] Running continuously in Windows background...")
 		go startContinuousDaemon(cfg)
 	} else if !*noWindow {
 		// Launched by user double clicking:
 		// Open the clean desktop app window
-		log.Printf("🚀 تم تشغيل واجهة البرنامج على: %s", appURL)
+		log.Printf("[GUI] Launching application window on: %s", appURL)
 		go func() {
 			time.Sleep(600 * time.Millisecond)
 			openAppWindow(appURL)
@@ -1826,6 +2578,6 @@ func main() {
 
 	select {
 	case sig := <-sigChan:
-		log.Printf("Stop signal received (%v). Exiting cleanly...", sig)
+		log.Printf("[EXIT] Stop signal received (%v). Exiting cleanly...", sig)
 	}
 }
