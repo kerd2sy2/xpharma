@@ -37,8 +37,9 @@ export default function LoginPage() {
           .then((res) => res.json())
           .then((data) => {
             if (data.success && data.user) {
+              document.cookie = 'xpharma_session=authenticated; path=/; max-age=604800; SameSite=Lax';
               localStorage.setItem('xpharma_user', JSON.stringify(data.user));
-              router.push('/dashboard/overview');
+              window.location.href = '/dashboard/overview';
             } else {
               setErrorMsg(data.error || 'عذراً، هذا الحساب غير مصرح له بالوصول إلى لوحة التحكم');
               setGoogleLoading(false);
@@ -93,8 +94,9 @@ export default function LoginPage() {
         const data = await res.json();
 
         if (data.success && data.user) {
+          document.cookie = 'xpharma_session=authenticated; path=/; max-age=604800; SameSite=Lax';
           localStorage.setItem('xpharma_user', JSON.stringify(data.user));
-          router.push('/dashboard/overview');
+          window.location.href = '/dashboard/overview';
         } else {
           setErrorMsg(data.error || 'عذراً، هذا الحساب غير مصرح له بالوصول إلى لوحة التحكم');
           setGoogleLoading(false);

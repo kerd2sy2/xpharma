@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       user: {
         email,
@@ -63,6 +63,15 @@ export async function POST(req: NextRequest) {
         role: 'superadmin'
       }
     });
+
+    response.cookies.set('xpharma_session', 'authenticated', {
+      path: '/',
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+      sameSite: 'lax',
+      httpOnly: false
+    });
+
+    return response;
   } catch (err: any) {
     return NextResponse.json(
       { success: false, error: 'حدث خطأ في معالجة طلب المصادقة' },

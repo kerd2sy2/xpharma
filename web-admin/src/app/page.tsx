@@ -1,16 +1,13 @@
-import { auth } from '@clerk/nextjs/server';
+import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 export default async function Page() {
-  if (!process.env.CLERK_SECRET_KEY) {
+  const cookieStore = await cookies();
+  const session = cookieStore.get('xpharma_session');
+
+  if (session && session.value) {
     redirect('/dashboard/overview');
-  }
-
-  const { userId } = await auth();
-
-  if (!userId) {
-    return redirect('/auth/sign-in');
   } else {
-    redirect('/dashboard/overview');
+    redirect('/login');
   }
 }

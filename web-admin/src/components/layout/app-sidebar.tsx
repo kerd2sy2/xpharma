@@ -68,8 +68,12 @@ export default function AppSidebar() {
 
   const handleLogout = async () => {
     try {
+      document.cookie = 'xpharma_session=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0; SameSite=Lax';
       localStorage.removeItem('xpharma_user');
       sessionStorage.clear();
+      try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+      } catch (_) {}
       if (signOut) {
         try {
           await signOut();
