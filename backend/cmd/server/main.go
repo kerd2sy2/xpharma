@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -163,10 +164,14 @@ func main() {
 				superAdminEmail = "kerd2sy@gmail.com"
 			}
 
-			role := "user"
-			if profile.Email == superAdminEmail {
-				role = "superadmin"
+			if strings.ToLower(strings.TrimSpace(profile.Email)) != strings.ToLower(strings.TrimSpace(superAdminEmail)) {
+				c.JSON(http.StatusForbidden, gin.H{
+					"error": "غير مصرح: هذا الحساب غير مسموح له بالدخول كمدير للمنصة. الدخول مخصص فقط للحساب المعتمد",
+				})
+				return
 			}
+
+			role := "superadmin"
 
 			token, err := tokenService.GenerateToken(auth.Claims{
 				UserID: profile.Sub,
