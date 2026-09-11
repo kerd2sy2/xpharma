@@ -435,6 +435,10 @@ func saveConfig(cfg *Config) {
 
 func connectFirebird(cfg *Config) (*sql.DB, error) {
 	fb := cfg.Firebird
+	if fb.DBPath == "" {
+		return nil, fmt.Errorf("مسار قاعدة البيانات فارغ")
+	}
+
 	cleanPath := filepath.ToSlash(fb.DBPath)
 	if !strings.HasPrefix(cleanPath, "/") && len(cleanPath) > 1 && cleanPath[1] == ':' {
 		cleanPath = "/" + cleanPath
@@ -560,12 +564,14 @@ func runGentleSync(cfg *Config) {
 	state.Lock()
 	if state.IsRunning {
 		state.Unlock()
+		addLog("محرك المزامنة قيد العمل حالياً.")
 		return
 	}
 	state.IsRunning = true
 	state.ShouldPause = false
 	state.Status = "syncing"
 	state.LastError = ""
+	state.CurrentTask = "جاري الاتصال والتحقق من السجلات..."
 	state.Unlock()
 
 	defer func() {
@@ -579,14 +585,26 @@ func runGentleSync(cfg *Config) {
 
 	isAr := cfg.Language != "en"
 
+	if cfg.Firebird.DBPath == "" {
+		state.Lock()
+		state.Status = "idle"
+		state.CurrentTask = "مسار قاعدة البيانات غير محدد"
+		state.Unlock()
+		addLog("تنبيه: مسار ملف قاعدة بيانات الفايربيرد غير محدد.")
+		return
+	}
+
+	addLog(fmt.Sprintf("بدء الاتصال بقاعدة بيانات الفايربيرد: %s (الخادم: %s:%d)", cfg.Firebird.DBPath, cfg.Firebird.Host, cfg.Firebird.Port))
+
 	db, err := connectFirebird(cfg)
 	if err != nil {
 		state.Lock()
 		state.Status = "error"
-		state.LastError = fmt.Sprintf("فشل الاتصال بقاعدة بيانات الفايربيرد: %v", err)
+		state.LastError = fmt.Sprintf("فشل الاتصال بالفايربيرد: %v", err)
 		state.FirebirdConnected = false
+		state.CurrentTask = "خطأ في الاتصال بالفايربيرد"
 		state.Unlock()
-		addLog(fmt.Sprintf("خطأ في الاتصال بقاعدة البيانات: %v", err))
+		addLog(fmt.Sprintf("خطأ: تعذر الاتصال بملف قاعدة البيانات (%v). يرجى التأكد من تشغيل خدمة Firebird وصحة المسار.", err))
 		return
 	}
 	defer db.Close()
@@ -594,6 +612,7 @@ func runGentleSync(cfg *Config) {
 	state.Lock()
 	state.FirebirdConnected = true
 	state.Unlock()
+	addLog("تم الاتصال بقاعدة بيانات الفايربيرد بنجاح.")
 
 	// 1. Quick indexed counts
 	var totalInvoices, totalReceipts int
@@ -604,6 +623,8 @@ func runGentleSync(cfg *Config) {
 	state.TotalInvoices = totalInvoices
 	state.TotalReceipts = totalReceipts
 	state.Unlock()
+
+	addLog(fmt.Sprintf("فحص المخزن: تم العثور على %d فاتورة و %d سند قبض.", totalInvoices, totalReceipts))
 
 	batchSize := cfg.BatchSize
 	if batchSize <= 0 {
@@ -620,6 +641,7 @@ func runGentleSync(cfg *Config) {
 	state.Unlock()
 
 	if currCusts == 0 {
+		addLog("فحص دليل العملاء والصيدليات...")
 		custRows, err := db.Query("SELECT * FROM ACCOUNTS")
 		if err == nil {
 			cols, _ := custRows.Columns()
@@ -695,22 +717,27 @@ func runGentleSync(cfg *Config) {
 			state.TotalCustomers = len(custList)
 			state.Unlock()
 
-			// Upload in small chunks of 300
-			for i := 0; i < len(custList); i += 300 {
-				end := i + 300
-				if end > len(custList) {
-					end = len(custList)
+			if len(custList) > 0 {
+				addLog(fmt.Sprintf("تم استخراج %d عميل، جاري الرفع للسحابة...", len(custList)))
+				for i := 0; i < len(custList); i += 300 {
+					end := i + 300
+					if end > len(custList) {
+						end = len(custList)
+					}
+					p := IngestionPayload{Customers: custList[i:end]}
+					_ = postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, p)
+					time.Sleep(300 * time.Millisecond)
 				}
-				p := IngestionPayload{Customers: custList[i:end]}
-				_ = postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, p)
-				time.Sleep(400 * time.Millisecond)
+				addLog("اكتمل تحديث دليل العملاء بنجاح.")
 			}
 		}
 	}
 
-	// 3. Gentle Indexed Invoices Extraction (Takes < 2ms, frees DB locks immediately)
+	// 3. Gentle Indexed Invoices Extraction
 	lastInvID := cfg.Cursors.LastInvoiceID
 	syncedInvoices := 0
+
+	addLog(fmt.Sprintf("بدء فحص الفواتير من المعرف %d (حجم الدفعة: %d)...", lastInvID, batchSize))
 
 	for {
 		state.Lock()
@@ -718,6 +745,7 @@ func runGentleSync(cfg *Config) {
 			state.Status = "paused"
 			state.CurrentTask = "المزامنة متوقفة مؤقتاً"
 			state.Unlock()
+			addLog("تم إيقاف المزامنة مؤقتاً.")
 			return
 		}
 		state.CurrentTask = fmt.Sprintf("رفع الفواتير بهدوء... تم رفع %d فاتورة", syncedInvoices)
@@ -733,6 +761,7 @@ func runGentleSync(cfg *Config) {
 
 		rows, err := db.Query(q)
 		if err != nil {
+			addLog(fmt.Sprintf("تنبيه في الاستعلام من جدول الفواتير: %v", err))
 			break
 		}
 
@@ -791,6 +820,8 @@ func runGentleSync(cfg *Config) {
 		}
 		state.Unlock()
 
+		addLog(fmt.Sprintf("تم رفع دفعة (%d فاتورة) بنجاح - الإجمالي المرفوع: %d فاتورة.", len(batch), syncedInvoices))
+
 		// Gentle pause between batches
 		time.Sleep(time.Duration(delayMs) * time.Millisecond)
 	}
@@ -798,6 +829,8 @@ func runGentleSync(cfg *Config) {
 	// 4. Gentle Indexed Cash Receipts Extraction
 	lastRcptID := cfg.Cursors.LastReceiptID
 	syncedRcpts := 0
+
+	addLog(fmt.Sprintf("بدء فحص سندات القبض من المعرف %d...", lastRcptID))
 
 	for {
 		state.Lock()
@@ -819,6 +852,7 @@ func runGentleSync(cfg *Config) {
 
 		rows, err := db.Query(q)
 		if err != nil {
+			addLog(fmt.Sprintf("تنبيه في الاستعلام من جدول سندات القبض: %v", err))
 			break
 		}
 
@@ -858,6 +892,7 @@ func runGentleSync(cfg *Config) {
 
 		payload := IngestionPayload{CashReceipts: batch}
 		if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, payload); err != nil {
+			addLog(fmt.Sprintf("تنبيه أثناء إرسال سندات القبض: %v", err))
 			time.Sleep(2 * time.Second)
 			continue
 		}
@@ -871,6 +906,8 @@ func runGentleSync(cfg *Config) {
 		state.SyncedReceipts = syncedRcpts
 		state.Unlock()
 
+		addLog(fmt.Sprintf("تم رفع دفعة (%d سند قبض) بنجاح - الإجمالي المرفوع: %d سند.", len(batch), syncedRcpts))
+
 		time.Sleep(time.Duration(delayMs) * time.Millisecond)
 	}
 
@@ -883,9 +920,9 @@ func runGentleSync(cfg *Config) {
 	state.Unlock()
 
 	if isAr {
-		addLog(fmt.Sprintf("اكتملت المزامنة بنجاح. آخر فحص: %s", time.Now().Format("15:04:05")))
+		addLog(fmt.Sprintf("اكتملت المزامنة بنجاح. المحرك الآن في وضع المراقبة التلقائية كل %d ثانية.", cfg.SyncIntervalSeconds))
 	} else {
-		addLog(fmt.Sprintf("Sync cycle completed successfully. Last checked: %s", time.Now().Format("15:04:05")))
+		addLog(fmt.Sprintf("Sync cycle completed. Continuous monitoring every %d seconds.", cfg.SyncIntervalSeconds))
 	}
 }
 
@@ -903,11 +940,6 @@ func startContinuousDaemon(cfg *Config) {
 	state.Unlock()
 
 	addLog("تم تفعيل وضع التحديث التلقائي المستمر (يعمل في الخلفية باستمرار).")
-
-	// Run initial sync cycle
-	if cfg.Firebird.DBPath != "" && cfg.Cloud.APIKey != "" {
-		runGentleSync(cfg)
-	}
 
 	interval := cfg.SyncIntervalSeconds
 	if interval <= 0 {
@@ -1022,10 +1054,48 @@ func startInternalServer(cfg *Config) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
 	})
 
+	mux.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
+		fbOk, cloudOk := checkConnections(cfg)
+		state.Lock()
+		state.FirebirdConnected = fbOk
+		state.CloudConnected = cloudOk
+		state.Unlock()
+
+		if fbOk {
+			addLog(fmt.Sprintf("فحص الاتصال: تم الاتصال بقاعدة بيانات الفايربيرد بنجاح (%s)", cfg.Firebird.DBPath))
+		} else {
+			addLog(fmt.Sprintf("فحص الاتصال: تعذر الاتصال بملف الفايربيرد (%s:%d - %s). تأكد من صحة المسار وتشغيل خدمة Firebird.", cfg.Firebird.Host, cfg.Firebird.Port, cfg.Firebird.DBPath))
+		}
+
+		if cloudOk {
+			addLog("فحص الاتصال: تم الاتصال بالسيرفر السحابي بنجاح.")
+		} else {
+			addLog(fmt.Sprintf("فحص الاتصال: تعذر الاتصال بالسيرفر السحابي (%s).", cfg.Cloud.APIURL))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{
+			"firebird": fbOk,
+			"cloud":    cloudOk,
+		})
+	})
+
 	mux.HandleFunc("/api/start", func(w http.ResponseWriter, r *http.Request) {
 		cfg.AutoSync = true
 		saveConfig(cfg)
+		state.Lock()
+		state.ShouldPause = false
+		state.Status = "syncing"
+		state.Unlock()
+
+		addLog("تم إرسال أمر بدء المزامنة فورياً.")
+
+		// 1. Run sync immediately in background
+		go runGentleSync(cfg)
+
+		// 2. Ensure daemon ticker is running
 		go startContinuousDaemon(cfg)
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "started"})
 	})
@@ -1035,7 +1105,9 @@ func startInternalServer(cfg *Config) {
 		saveConfig(cfg)
 		state.Lock()
 		state.ShouldPause = true
+		state.Status = "paused"
 		state.Unlock()
+		addLog("تم إيقاف المزامنة مؤقتاً.")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "paused"})
 	})
@@ -1048,8 +1120,9 @@ func startInternalServer(cfg *Config) {
 		state.SyncedInvoices = 0
 		state.SyncedReceipts = 0
 		state.ProgressPercent = 0
+		state.ShouldPause = false
 		state.Unlock()
-		addLog("تمت إعادة تعيين مؤشرات المزامنة للبدء من البداية.")
+		addLog("تمت إعادة تعيين مؤشرات المزامنة للبدء من أول سجل.")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "reset"})
 	})
@@ -1829,6 +1902,7 @@ const appHTML = `<!DOCTYPE html>
 
     .toast-success { border-color: rgba(16, 185, 129, 0.4); color: #34d399; }
     .toast-error { border-color: rgba(239, 68, 68, 0.4); color: #f87171; }
+    .toast-info { border-color: rgba(59, 130, 246, 0.4); color: #60a5fa; }
 
     /* Confirmation Modal */
     .modal-backdrop {
@@ -1929,7 +2003,7 @@ const appHTML = `<!DOCTYPE html>
           </div>
           <div>
             <div class="status-title" id="t-st-fb">قاعدة بيانات الفايربيرد (ORGA.GDB)</div>
-            <div class="status-sub">Firebird 2.5 / Port 3050</div>
+            <div class="status-sub" id="subFb">Firebird 2.5 / Port 3050</div>
           </div>
         </div>
         <div class="badge badge-wait" id="badgeFb">
@@ -2057,6 +2131,11 @@ const appHTML = `<!DOCTYPE html>
           <span id="t-btn-pause">إيقاف مؤقت</span>
         </button>
 
+        <button class="btn btn-secondary" onclick="testConnectionNow()" id="btnTestConn">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          <span id="t-btn-test">فحص الاتصال</span>
+        </button>
+
         <button class="btn btn-secondary" onclick="saveSettingsOnly()">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
           <span id="t-btn-save">حفظ الإعدادات فقط</span>
@@ -2129,7 +2208,7 @@ const appHTML = `<!DOCTYPE html>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
             </div>
           </div>
-          <div class="stat-card-val" id="stVal" style="font-size: 14px; color: #34d399; margin-top: 6px;">نشط في الخلفية</div>
+          <div class="stat-card-val" id="stVal" style="font-size: 13px; color: #94a3b8; margin-top: 6px;">جاهز لبدء المزامنة</div>
         </div>
       </div>
     </div>
@@ -2154,7 +2233,7 @@ const appHTML = `<!DOCTYPE html>
         </div>
       </div>
       <div class="terminal-body" id="logBox">
-        <div>Initializing sync engine log monitor...</div>
+        <div>جاري قراءة سجل العمليات والمزامنة...</div>
       </div>
     </div>
   </div>
@@ -2167,11 +2246,11 @@ const appHTML = `<!DOCTYPE html>
     <div class="modal">
       <div class="modal-title" id="t-modal-title">تأكيد إعادة المزامنة من البداية</div>
       <div class="modal-desc" id="t-modal-desc">
-        سيتم إعادة تعيين مؤشرات الفواتير وسندات القبض للبدء برفع كافة السجلات التاريخية من جديد. لن يتم حذف أي بيانات على السحابة، بل سيتم تحديث السجلات فقط.
+        سيتم حفظ البيانات المدخلة وتصفير مؤشرات الرفع للبدء بنسخ كافة الفواتير والسجلات التاريخية من جديد وبشكل هادئ. لن تُحذف أي بيانات سحابية.
       </div>
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick="closeResetModal()" id="t-modal-cancel">إلغاء</button>
-        <button class="btn btn-danger" onclick="confirmResetSync()" id="t-modal-confirm">تأكيد الإعادة</button>
+        <button class="btn btn-danger" onclick="confirmResetSync()" id="t-modal-confirm">تأكيد والبدء الآن</button>
       </div>
     </div>
   </div>
@@ -2197,6 +2276,7 @@ const appHTML = `<!DOCTYPE html>
         autostartDesc: 'يبدأ البرنامج تلقائياً في الخلفية عند إعادة تشغيل الكمبيوتر، ويستمر في التحديث كل دقيقة.',
         btnStart: 'حفظ وبدء المزامنة',
         btnPause: 'إيقاف مؤقت',
+        btnTest: 'فحص الاتصال',
         btnSave: 'حفظ الإعدادات فقط',
         btnReset: 'إعادة من البداية',
         secProg: 'حالة المزامنة والتقدم المباشر',
@@ -2211,9 +2291,9 @@ const appHTML = `<!DOCTYPE html>
         disconnected: 'غير متصل',
         testing: 'جاري الفحص...',
         modalTitle: 'تأكيد إعادة المزامنة من البداية',
-        modalDesc: 'سيتم إعادة تعيين مؤشرات الفواتير وسندات القبض للبدء برفع كافة السجلات التاريخية من جديد. لن يتم حذف أي بيانات على السحابة، بل سيتم تحديث السجلات فقط.',
+        modalDesc: 'سيتم حفظ البيانات المدخلة وتصفير مؤشرات الرفع للبدء بنسخ كافة الفواتير والسجلات التاريخية من جديد وبشكل هادئ. لن تُحذف أي بيانات سحابية.',
         modalCancel: 'إلغاء',
-        modalConfirm: 'تأكيد الإعادة',
+        modalConfirm: 'تأكيد والبدء الآن',
         toastSaved: 'تم حفظ الإعدادات بنجاح',
         toastCopied: 'تم نسخ السجل إلى الحافظة'
       },
@@ -2233,6 +2313,7 @@ const appHTML = `<!DOCTYPE html>
         autostartDesc: 'Launches automatically in background on system reboot and syncs updates continuously.',
         btnStart: 'Save & Start Sync',
         btnPause: 'Pause Sync',
+        btnTest: 'Test Connection',
         btnSave: 'Save Settings Only',
         btnReset: 'Reset & Re-sync',
         secProg: 'Live Sync Progress & Health',
@@ -2247,9 +2328,9 @@ const appHTML = `<!DOCTYPE html>
         disconnected: 'Disconnected',
         testing: 'Checking...',
         modalTitle: 'Confirm Re-sync from Beginning',
-        modalDesc: 'Sync cursors will be reset to 0. Historical invoices and receipts will be scanned and re-uploaded smoothly. No remote cloud records will be deleted.',
+        modalDesc: 'Current settings will be saved, cursors reset to 0, and historical records uploaded freshly with gentle pacing.',
         modalCancel: 'Cancel',
-        modalConfirm: 'Confirm Reset',
+        modalConfirm: 'Confirm & Start',
         toastSaved: 'Settings saved successfully',
         toastCopied: 'Logs copied to clipboard'
       }
@@ -2279,6 +2360,7 @@ const appHTML = `<!DOCTYPE html>
       document.getElementById('t-autostart-desc').innerText = t.autostartDesc;
       document.getElementById('t-btn-start').innerText = t.btnStart;
       document.getElementById('t-btn-pause').innerText = t.btnPause;
+      document.getElementById('t-btn-test').innerText = t.btnTest;
       document.getElementById('t-btn-save').innerText = t.btnSave;
       document.getElementById('t-btn-reset').innerText = t.btnReset;
       document.getElementById('t-sec-prog').innerText = t.secProg;
@@ -2330,8 +2412,85 @@ const appHTML = `<!DOCTYPE html>
 
     async function confirmResetSync() {
       closeResetModal();
+
+      const dbPath = document.getElementById('inPath').value.trim();
+      const host = document.getElementById('inHost').value.trim();
+      const key = document.getElementById('inKey').value.trim();
+      const mode = document.getElementById('selMode').value;
+      const autoStart = document.getElementById('chkAutoStart').checked;
+
+      if (!dbPath) {
+        showToast(currentLang === 'ar' ? 'يرجى إدخال مسار قاعدة بيانات الفايربيرد أولاً' : 'Please enter database path first', 'error');
+        document.getElementById('inPath').focus();
+        return;
+      }
+      if (!key) {
+        showToast(currentLang === 'ar' ? 'يرجى إدخال مفتاح التوكن السحابي (API Token)' : 'Please enter cloud API token', 'error');
+        document.getElementById('inKey').focus();
+        return;
+      }
+
+      showToast(currentLang === 'ar' ? 'جاري تصفير المؤشرات وبدء الرفع من البداية...' : 'Resetting cursors and starting sync...', 'info');
+
+      // 1. Save settings
+      await fetch('/api/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          db_path: dbPath,
+          host: host,
+          api_key: key,
+          sync_mode: mode,
+          auto_start: autoStart,
+          auto_sync: true,
+          language: currentLang
+        })
+      });
+
+      // 2. Reset cursors to 0
       await fetch('/api/reset', { method: 'POST' });
-      showToast(currentLang === 'ar' ? 'تمت إعادة التعيين للبدء من البداية' : 'Sync cursors reset successfully');
+
+      // 3. Trigger immediate sync
+      await fetch('/api/start', { method: 'POST' });
+
+      showToast(currentLang === 'ar' ? 'تمت إعادة التعيين وبدء المزامنة من البداية بنجاح' : 'Sync restarted from beginning');
+      fetchStatus();
+    }
+
+    async function testConnectionNow() {
+      const dbPath = document.getElementById('inPath').value.trim();
+      const host = document.getElementById('inHost').value.trim();
+      const key = document.getElementById('inKey').value.trim();
+
+      if (!dbPath) {
+        showToast(currentLang === 'ar' ? 'يرجى إدخال مسار قاعدة البيانات أولاً' : 'Please enter database path first', 'error');
+        document.getElementById('inPath').focus();
+        return;
+      }
+
+      showToast(currentLang === 'ar' ? 'جاري فحص الاتصال بقاعدة البيانات والسحابة...' : 'Testing connections...', 'info');
+
+      await fetch('/api/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          db_path: dbPath,
+          host: host,
+          api_key: key,
+          auto_sync: true,
+          language: currentLang
+        })
+      });
+
+      const res = await fetch('/api/test');
+      const data = await res.json();
+      if (data.firebird && data.cloud) {
+        showToast(currentLang === 'ar' ? 'تم الاتصال بالفايربيرد والسحابة بنجاح!' : 'Connected to Firebird and Cloud successfully!');
+      } else if (!data.firebird) {
+        showToast(currentLang === 'ar' ? 'تعذر الاتصال بقاعدة بيانات الفايربيرد - تأكد من المسار والخدمة' : 'Firebird connection failed', 'error');
+      } else if (!data.cloud) {
+        showToast(currentLang === 'ar' ? 'تعذر الاتصال بالسيرفر السحابي' : 'Cloud connection failed', 'error');
+      }
       fetchStatus();
     }
 
@@ -2372,11 +2531,14 @@ const appHTML = `<!DOCTYPE html>
           textCloud.innerText = t.disconnected;
         }
 
-        // Initialize form fields once
+        // Fill form fields once if not populated by user
         if (!isInitialized && data.config) {
-          document.getElementById('inPath').value = data.config.firebird.db_path || '';
-          document.getElementById('inHost').value = data.config.firebird.host || '127.0.0.1';
-          document.getElementById('inKey').value = data.config.cloud.api_key || '';
+          const p = document.getElementById('inPath');
+          if (!p.value) p.value = data.config.firebird.db_path || '';
+          const h = document.getElementById('inHost');
+          if (!h.value) h.value = data.config.firebird.host || '127.0.0.1';
+          const k = document.getElementById('inKey');
+          if (!k.value) k.value = data.config.cloud.api_key || '';
           if (data.config.sync_mode) {
             document.getElementById('selMode').value = data.config.sync_mode;
           }
@@ -2396,13 +2558,14 @@ const appHTML = `<!DOCTYPE html>
         document.getElementById('progressBar').style.width = pct + '%';
         document.getElementById('currentTask').innerText = data.current_task || 'جاهز للبدء';
 
-        // Engine Status Text
+        // Engine Status Text & Action Buttons
         const stVal = document.getElementById('stVal');
         const btnStart = document.getElementById('btnStart');
         const btnPause = document.getElementById('btnPause');
+        const btnStartText = document.getElementById('t-btn-start');
 
         if (data.status === 'syncing') {
-          stVal.innerText = currentLang === 'ar' ? 'جاري الرفع بهدوء...' : 'Syncing Gently...';
+          stVal.innerText = currentLang === 'ar' ? 'جاري الرفع والمزامنة...' : 'Syncing in Progress...';
           stVal.style.color = '#38bdf8';
           btnStart.style.display = 'none';
           btnPause.style.display = 'inline-flex';
@@ -2410,18 +2573,33 @@ const appHTML = `<!DOCTYPE html>
           stVal.innerText = currentLang === 'ar' ? 'متوقف مؤقتاً' : 'Paused';
           stVal.style.color = '#f59e0b';
           btnStart.style.display = 'inline-flex';
+          btnStartText.innerText = currentLang === 'ar' ? 'استئناف المزامنة' : 'Resume Sync';
+          btnPause.style.display = 'none';
+        } else if (data.status === 'success') {
+          stVal.innerText = currentLang === 'ar' ? 'مكتمل - مراقبة مستمرة' : 'Completed (Monitoring)';
+          stVal.style.color = '#34d399';
+          btnStart.style.display = 'inline-flex';
+          btnStartText.innerText = currentLang === 'ar' ? 'مزامنة الآن' : 'Sync Now';
+          btnPause.style.display = 'none';
+        } else if (data.status === 'error') {
+          stVal.innerText = currentLang === 'ar' ? 'تنبيه في الاتصال' : 'Connection Error';
+          stVal.style.color = '#ef4444';
+          btnStart.style.display = 'inline-flex';
+          btnStartText.innerText = currentLang === 'ar' ? 'إعادة المحاولة' : 'Retry Sync';
           btnPause.style.display = 'none';
         } else {
-          stVal.innerText = currentLang === 'ar' ? 'نشط ويعمل في الخلفية' : 'Background Active';
-          stVal.style.color = '#34d399';
-          btnStart.style.display = 'none';
-          btnPause.style.display = 'inline-flex';
+          // Status is 'idle'
+          stVal.innerText = currentLang === 'ar' ? 'جاهز لبدء المزامنة' : 'Ready to Start';
+          stVal.style.color = '#94a3b8';
+          btnStart.style.display = 'inline-flex';
+          btnStartText.innerText = currentLang === 'ar' ? 'حفظ وبدء المزامنة' : 'Save & Start Sync';
+          btnPause.style.display = 'none';
         }
 
         // Live Logs
         if (data.logs && data.logs.length > 0) {
           const logBox = document.getElementById('logBox');
-          const isScrolledToBottom = logBox.scrollHeight - logBox.clientHeight <= logBox.scrollTop + 30;
+          const isScrolledToBottom = logBox.scrollHeight - logBox.clientHeight <= logBox.scrollTop + 40;
           logBox.innerHTML = data.logs.map(l => '<div>' + escapeHtml(l) + '</div>').join('');
           if (isScrolledToBottom) {
             logBox.scrollTop = logBox.scrollHeight;
@@ -2437,9 +2615,9 @@ const appHTML = `<!DOCTYPE html>
     }
 
     async function saveSettingsOnly() {
-      const dbPath = document.getElementById('inPath').value;
-      const host = document.getElementById('inHost').value;
-      const key = document.getElementById('inKey').value;
+      const dbPath = document.getElementById('inPath').value.trim();
+      const host = document.getElementById('inHost').value.trim();
+      const key = document.getElementById('inKey').value.trim();
       const mode = document.getElementById('selMode').value;
       const autoStart = document.getElementById('chkAutoStart').checked;
 
@@ -2462,21 +2640,26 @@ const appHTML = `<!DOCTYPE html>
     }
 
     async function startSync() {
-      const dbPath = document.getElementById('inPath').value;
-      const host = document.getElementById('inHost').value;
-      const key = document.getElementById('inKey').value;
+      const dbPath = document.getElementById('inPath').value.trim();
+      const host = document.getElementById('inHost').value.trim();
+      const key = document.getElementById('inKey').value.trim();
       const mode = document.getElementById('selMode').value;
       const autoStart = document.getElementById('chkAutoStart').checked;
 
       if (!dbPath) {
-        showToast(currentLang === 'ar' ? 'يرجى إدخال مسار قاعدة بيانات الفايربيرد' : 'Please enter database path', 'error');
+        showToast(currentLang === 'ar' ? 'يرجى إدخال مسار قاعدة بيانات الفايربيرد أولاً' : 'Please enter database path first', 'error');
+        document.getElementById('inPath').focus();
         return;
       }
       if (!key) {
-        showToast(currentLang === 'ar' ? 'يرجى إدخال مفتاح التوكن السحابي' : 'Please enter cloud API token', 'error');
+        showToast(currentLang === 'ar' ? 'يرجى إدخال مفتاح التوكن السحابي (API Token)' : 'Please enter cloud API token', 'error');
+        document.getElementById('inKey').focus();
         return;
       }
 
+      showToast(currentLang === 'ar' ? 'جاري حفظ الإعدادات وبدء المزامنة...' : 'Saving settings and starting sync...', 'info');
+
+      // 1. Save settings
       await fetch('/api/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2491,8 +2674,9 @@ const appHTML = `<!DOCTYPE html>
         })
       });
 
+      // 2. Start sync
       await fetch('/api/start', { method: 'POST' });
-      showToast(currentLang === 'ar' ? 'تم بدء المزامنة التلقائية بنجاح' : 'Sync started successfully');
+      showToast(currentLang === 'ar' ? 'تم بدء المزامنة بنجاح' : 'Sync started successfully');
       fetchStatus();
     }
 
