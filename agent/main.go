@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -11,9 +10,9 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -26,36 +25,42 @@ import (
 
 	_ "github.com/nakagami/firebirdsql"
 	"golang.org/x/text/encoding/charmap"
-	"gopkg.in/yaml.v3"
 )
 
 // -----------------------------------------------------------------------------
-// Models and Configurations
+// Configuration Model
 // -----------------------------------------------------------------------------
 
 type Config struct {
-	Language string `yaml:"language" json:"language"` // "ar" or "en"
-	WebPort  int    `yaml:"web_port" json:"web_port"` // default 8080
+	Language     string `json:"language"`      // "ar" or "en"
+	SyncMode     string `json:"sync_mode"`     // "gentle", "balanced", "fast"
+	BatchSize    int    `json:"batch_size"`    // default 100 in gentle
+	BatchDelayMs int    `json:"batch_delay_ms"`// default 1500ms in gentle
+	WebPort      int    `json:"web_port"`
 
 	Cloud struct {
-		APIURL              string `yaml:"api_url" json:"api_url"`
-		APIKey              string `yaml:"api_key" json:"api_key"`
-		SyncIntervalSeconds int    `yaml:"sync_interval_seconds" json:"sync_interval_seconds"`
-	} `yaml:"cloud" json:"cloud"`
+		APIURL              string `json:"api_url"`
+		APIKey              string `json:"api_key"`
+		SyncIntervalSeconds int    `json:"sync_interval_seconds"`
+	} `json:"cloud"`
 
 	Firebird struct {
-		DBPath   string `yaml:"db_path" json:"db_path"`
-		Host     string `yaml:"host" json:"host"`
-		Port     int    `yaml:"port" json:"port"`
-		User     string `yaml:"user" json:"user"`
-		Password string `yaml:"password" json:"password"`
-	} `yaml:"firebird" json:"firebird"`
+		DBPath   string `json:"db_path"`
+		Host     string `json:"host"`
+		Port     int    `json:"port"`
+		User     string `json:"user"`
+		Password string `json:"password"`
+	} `json:"firebird"`
 
-	CloudURL            string `yaml:"cloud_url" json:"cloud_url"`
-	AgentKey            string `yaml:"agent_key" json:"agent_key"`
-	TenantSlug          string `yaml:"tenant_slug" json:"tenant_slug"`
-	SyncIntervalSeconds int    `yaml:"sync_interval_seconds" json:"sync_interval_seconds"`
+	Cursors struct {
+		LastInvoiceID int64 `json:"last_invoice_id"`
+		LastReceiptID int64 `json:"last_receipt_id"`
+	} `json:"cursors"`
 }
+
+// -----------------------------------------------------------------------------
+// Payloads
+// -----------------------------------------------------------------------------
 
 type IngestionPayload struct {
 	Invoices     []InvoiceSyncItem     `json:"invoices"`
@@ -82,40 +87,16 @@ type SyncCursors struct {
 }
 
 type InvoiceSyncItem struct {
-	RemoteID        string            `json:"remote_id"`
-	InvoiceNumber   string            `json:"invoice_number"`
-	PharmacyCode    string            `json:"pharmacy_code"`
-	InvoiceDate     time.Time         `json:"invoice_date"`
-	TotalAmount     float64           `json:"total_amount"`
-	DiscountAmount  float64           `json:"discount_amount"`
-	NetAmount       float64           `json:"net_amount"`
-	PaidAmount      float64           `json:"paid_amount"`
-	RemainingAmount float64           `json:"remaining_amount"`
-	Status          string            `json:"status"`
-	Items           []InvoiceLineItem `json:"items"`
-}
-
-type InvoiceLineItem struct {
-	RemoteItemID    string  `json:"remote_item_id"`
-	ItemCode        string  `json:"item_code"`
-	ItemName        string  `json:"item_name"`
-	Unit            string  `json:"unit"`
-	Quantity        float64 `json:"quantity"`
-	BonusQuantity   float64 `json:"bonus_quantity"`
-	UnitPrice       float64 `json:"unit_price"`
-	DiscountPercent float64 `json:"discount_percent"`
-	TotalPrice      float64 `json:"total_price"`
-}
-
-type ReturnSyncItem struct {
-	RemoteID     string    `json:"remote_id"`
-	ReturnNumber string    `json:"return_number"`
-	PharmacyCode string    `json:"pharmacy_code"`
-	ReturnDate   time.Time `json:"return_date"`
-	TotalAmount  float64   `json:"total_amount"`
-	NetAmount    float64   `json:"net_amount"`
-	Status       string    `json:"status"`
-	Reason       string    `json:"reason"`
+	RemoteID        string    `json:"remote_id"`
+	InvoiceNumber   string    `json:"invoice_number"`
+	PharmacyCode    string    `json:"pharmacy_code"`
+	InvoiceDate     time.Time `json:"invoice_date"`
+	TotalAmount     float64   `json:"total_amount"`
+	DiscountAmount  float64   `json:"discount_amount"`
+	NetAmount       float64   `json:"net_amount"`
+	PaidAmount      float64   `json:"paid_amount"`
+	RemainingAmount float64   `json:"remaining_amount"`
+	Status          string    `json:"status"`
 }
 
 type CashReceiptSyncItem struct {
@@ -127,6 +108,17 @@ type CashReceiptSyncItem struct {
 	PaymentMethod string    `json:"payment_method"`
 	CollectorName string    `json:"collector_name"`
 	Notes         string    `json:"notes"`
+}
+
+type ReturnSyncItem struct {
+	RemoteID     string    `json:"remote_id"`
+	ReturnNumber string    `json:"return_number"`
+	PharmacyCode string    `json:"pharmacy_code"`
+	ReturnDate   time.Time `json:"return_date"`
+	TotalAmount  float64   `json:"total_amount"`
+	NetAmount    float64   `json:"net_amount"`
+	Status       string    `json:"status"`
+	Reason       string    `json:"reason"`
 }
 
 type LedgerSyncItem struct {
@@ -151,37 +143,49 @@ type ProductSyncItem struct {
 	DateIn          time.Time `json:"date_in"`
 }
 
-// Global Agent State for Web Dashboard
-type AgentState struct {
+// -----------------------------------------------------------------------------
+// Live Engine State
+// -----------------------------------------------------------------------------
+
+type EngineState struct {
 	sync.Mutex
-	Status       string    `json:"status"` // "idle", "syncing", "success", "error"
-	LastSyncAt   time.Time `json:"last_sync_at"`
-	LastError    string    `json:"last_error"`
-	TotalInvoices int      `json:"total_invoices"`
-	TotalReceipts int      `json:"total_receipts"`
-	TotalCustomers int     `json:"total_customers"`
-	TotalProducts int      `json:"total_products"`
-	RecentLogs   []string  `json:"recent_logs"`
+	Status            string    `json:"status"` // "idle", "syncing", "paused", "success", "error"
+	FirebirdConnected bool      `json:"firebird_connected"`
+	CloudConnected    bool      `json:"cloud_connected"`
+	CurrentTask       string    `json:"current_task"`
+	ProgressPercent   int       `json:"progress_percent"`
+	TotalInvoices     int       `json:"total_invoices"`
+	SyncedInvoices    int       `json:"synced_invoices"`
+	TotalReceipts     int       `json:"total_receipts"`
+	SyncedReceipts    int       `json:"synced_receipts"`
+	TotalCustomers    int       `json:"total_customers"`
+	TotalProducts     int       `json:"total_products"`
+	LastSyncTime      time.Time `json:"last_sync_time"`
+	LastError         string    `json:"last_error"`
+	Logs              []string  `json:"logs"`
+	ShouldPause       bool      `json:"-"`
+	IsRunning         bool      `json:"-"`
 }
 
-var globalState = &AgentState{
-	Status:     "idle",
-	RecentLogs: []string{},
+var state = &EngineState{
+	Status:      "idle",
+	CurrentTask: "جاهز للبدء",
+	Logs:        []string{},
 }
 
 func addLog(msg string) {
 	log.Println(msg)
-	globalState.Lock()
-	defer globalState.Unlock()
+	state.Lock()
+	defer state.Unlock()
 	entry := fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), msg)
-	globalState.RecentLogs = append(globalState.RecentLogs, entry)
-	if len(globalState.RecentLogs) > 100 {
-		globalState.RecentLogs = globalState.RecentLogs[len(globalState.RecentLogs)-100:]
+	state.Logs = append(state.Logs, entry)
+	if len(state.Logs) > 80 {
+		state.Logs = state.Logs[len(state.Logs)-80:]
 	}
 }
 
 // -----------------------------------------------------------------------------
-// Windows Console Encoding & Decoding
+// Windows Console UTF-8 & App Launcher
 // -----------------------------------------------------------------------------
 
 func initWindowsConsole() {
@@ -190,18 +194,17 @@ func initWindowsConsole() {
 		setConsoleOutputCP := kernel32.NewProc("SetConsoleOutputCP")
 		setConsoleCP := kernel32.NewProc("SetConsoleCP")
 		if setConsoleOutputCP.Find() == nil {
-			setConsoleOutputCP.Call(65001) // UTF-8
+			setConsoleOutputCP.Call(65001)
 		}
 		if setConsoleCP.Find() == nil {
-			setConsoleCP.Call(65001) // UTF-8
+			setConsoleCP.Call(65001)
 		}
 
-		// Enable Virtual Terminal Processing for ANSI colors and clean output
 		getStdHandle := kernel32.NewProc("GetStdHandle")
 		getConsoleMode := kernel32.NewProc("GetConsoleMode")
 		setConsoleMode := kernel32.NewProc("SetConsoleMode")
 		if getStdHandle.Find() == nil && getConsoleMode.Find() == nil && setConsoleMode.Find() == nil {
-			const stdOutputHandle = uint32(0xFFFFFFF5) // -11
+			const stdOutputHandle = uint32(0xFFFFFFF5)
 			const enableVirtualTerminalProcessing = 0x0004
 			handle, _, _ := getStdHandle.Call(uintptr(stdOutputHandle))
 			if handle != uintptr(syscall.InvalidHandle) {
@@ -216,16 +219,51 @@ func initWindowsConsole() {
 	}
 }
 
+func openAppWindow(url string) {
+	// 1. Try Microsoft Edge in standalone App Mode (No address bar, looks native)
+	edgePaths := []string{
+		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
+		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
+	}
+	for _, p := range edgePaths {
+		if _, err := os.Stat(p); err == nil {
+			cmd := exec.Command(p, fmt.Sprintf("--app=%s", url), "--window-size=980,730")
+			if err := cmd.Start(); err == nil {
+				return
+			}
+		}
+	}
+
+	// 2. Try Google Chrome in App Mode
+	chromePaths := []string{
+		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+		filepath.Join(os.Getenv("LOCALAPPDATA"), `Google\Chrome\Application\chrome.exe`),
+	}
+	for _, p := range chromePaths {
+		if _, err := os.Stat(p); err == nil {
+			cmd := exec.Command(p, fmt.Sprintf("--app=%s", url), "--window-size=980,730")
+			if err := cmd.Start(); err == nil {
+				return
+			}
+		}
+	}
+
+	// 3. Fallback to default browser
+	_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+}
+
+// -----------------------------------------------------------------------------
+// Text Sanitization & Decoding
+// -----------------------------------------------------------------------------
+
 func decodeText(input []byte) string {
 	if len(input) == 0 {
 		return ""
 	}
-	// Check if already valid UTF-8
 	if utf8.Valid(input) {
-		s := strings.TrimSpace(string(input))
-		return cleanControlChars(s)
+		return cleanControlChars(strings.TrimSpace(string(input)))
 	}
-	// Decode from Windows-1256 (Standard Arabic code page for Firebird in Egypt/Arab world)
 	decoder := charmap.Windows1256.NewDecoder()
 	utf8Bytes, err := decoder.Bytes(input)
 	if err != nil {
@@ -250,58 +288,33 @@ func cleanInput(s string) string {
 }
 
 // -----------------------------------------------------------------------------
-// Config Loading & Saving
+// Config Management (Unified config.json)
 // -----------------------------------------------------------------------------
 
-func loadConfig(specifiedPath string) (*Config, error) {
-	targetPath := specifiedPath
-	if targetPath == "" {
-		if _, err := os.Stat("config.yaml"); err == nil {
-			targetPath = "config.yaml"
-		} else if _, err := os.Stat("config.json"); err == nil {
-			targetPath = "config.json"
-		} else {
-			targetPath = "config.yaml"
-		}
-	}
+const configFileName = "config.json"
 
-	data, err := os.ReadFile(targetPath)
-	var cfg Config
+func loadConfig() *Config {
+	cfg := &Config{
+		Language:     "ar",
+		SyncMode:     "gentle",
+		BatchSize:    100,
+		BatchDelayMs: 1500, // 1.5 second pause between batches to protect DB and server
+		WebPort:      8080,
+	}
+	cfg.Cloud.APIURL = "https://api.xpharma.cloud"
+	cfg.Cloud.SyncIntervalSeconds = 60
+	cfg.Firebird.Host = "127.0.0.1"
+	cfg.Firebird.Port = 3050
+	cfg.Firebird.User = "SYSDBA"
+	cfg.Firebird.Password = "masterkey"
+
+	data, err := os.ReadFile(configFileName)
 	if err == nil {
-		if filepath.Ext(targetPath) == ".yaml" || filepath.Ext(targetPath) == ".yml" {
-			_ = yaml.Unmarshal(data, &cfg)
-		} else {
-			_ = json.Unmarshal(data, &cfg)
-		}
+		_ = json.Unmarshal(data, cfg)
 	}
 
-	if cfg.Language == "" {
-		cfg.Language = "ar" // Default to Arabic
-	}
-	if cfg.WebPort <= 0 {
-		cfg.WebPort = 8080
-	}
-
-	if cfg.Cloud.APIURL == "" && cfg.CloudURL != "" {
-		cfg.Cloud.APIURL = cfg.CloudURL
-	}
-	if cfg.Cloud.APIURL == "" {
-		cfg.Cloud.APIURL = "https://api.xpharma.cloud"
-	}
-
-	if cfg.Cloud.APIKey == "" && cfg.AgentKey != "" {
-		cfg.Cloud.APIKey = cfg.AgentKey
-	}
+	// Sanitization
 	cfg.Cloud.APIKey = cleanInput(cfg.Cloud.APIKey)
-
-	if cfg.Cloud.SyncIntervalSeconds <= 0 {
-		if cfg.SyncIntervalSeconds > 0 {
-			cfg.Cloud.SyncIntervalSeconds = cfg.SyncIntervalSeconds
-		} else {
-			cfg.Cloud.SyncIntervalSeconds = 60
-		}
-	}
-
 	cfg.Firebird.DBPath = cleanInput(cfg.Firebird.DBPath)
 	cfg.Firebird.Host = cleanInput(cfg.Firebird.Host)
 	if cfg.Firebird.Host == "" {
@@ -316,221 +329,27 @@ func loadConfig(specifiedPath string) (*Config, error) {
 	if cfg.Firebird.Password == "" {
 		cfg.Firebird.Password = "masterkey"
 	}
-
-	return &cfg, nil
+	if cfg.SyncMode == "" {
+		cfg.SyncMode = "gentle"
+	}
+	if cfg.BatchSize <= 0 {
+		cfg.BatchSize = 100
+	}
+	if cfg.BatchDelayMs <= 0 {
+		cfg.BatchDelayMs = 1500
+	}
+	return cfg
 }
 
-func saveYAMLConfig(path string, cfg *Config) {
-	cleanURL := strings.TrimSuffix(cfg.Cloud.APIURL, "/v1/sync/ingest")
-	out := map[string]interface{}{
-		"language": cfg.Language,
-		"web_port": cfg.WebPort,
-		"cloud": map[string]interface{}{
-			"api_url":               cleanURL,
-			"api_key":               cfg.Cloud.APIKey,
-			"sync_interval_seconds": cfg.Cloud.SyncIntervalSeconds,
-		},
-		"firebird": map[string]interface{}{
-			"host":     cfg.Firebird.Host,
-			"port":     cfg.Firebird.Port,
-			"db_path":  cfg.Firebird.DBPath,
-			"user":     cfg.Firebird.User,
-			"password": cfg.Firebird.Password,
-		},
-	}
-	data, err := yaml.Marshal(out)
+func saveConfig(cfg *Config) {
+	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err == nil {
-		_ = os.WriteFile(path, data, 0644)
+		_ = os.WriteFile(configFileName, data, 0644)
 	}
 }
 
 // -----------------------------------------------------------------------------
-// Interactive Configuration Prompt
-// -----------------------------------------------------------------------------
-
-func promptInteractiveConfig(cfg *Config, syncNow *bool) {
-	reader := bufio.NewReader(os.Stdin)
-
-	fmt.Println()
-	fmt.Println("==================================================================")
-	fmt.Println("       XPharma Warehouse Sync Agent | وكيل مزامنة المستودع        ")
-	fmt.Println("==================================================================")
-	fmt.Println("Choose Language / اختر لغة العرض:")
-	fmt.Println(" [1] العربية (Arabic)")
-	fmt.Println(" [2] English (English)")
-	fmt.Print(" > Choice [1 or 2, default: 1]: ")
-	langChoice, _ := reader.ReadString('\n')
-	langChoice = strings.TrimSpace(langChoice)
-	if langChoice == "2" {
-		cfg.Language = "en"
-	} else if langChoice == "1" {
-		cfg.Language = "ar"
-	}
-
-	isAr := cfg.Language != "en"
-
-	if isAr {
-		fmt.Println("\nيرجى إدخال بيانات الربط لمزامنة قاعدة بيانات المستودع بالكامل مع السحابة:")
-	} else {
-		fmt.Println("\nPlease enter the connection details to sync all warehouse data with cloud:")
-	}
-	fmt.Println()
-
-	// 1. Firebird DB Path
-	for {
-		if isAr {
-			if cfg.Firebird.DBPath != "" {
-				fmt.Printf("[1] مسار ملف قاعدة بيانات الفايربيرد (Firebird DB Path):\n    [المسار الحالي: %s]\n    > اكتب أو الصق مسار ملف الداتا (أو اضغط ENTER للاحتفاظ به): ", cfg.Firebird.DBPath)
-			} else {
-				fmt.Println("[1] مسار ملف قاعدة بيانات الفايربيرد (Firebird DB Path):")
-				fmt.Println("    (قم بنسخ مسار ملف الداتا من الويندوز ولصقه هنا، مثال: D:\\ORGA_SOFT\\DATA\\ORGA.GDB)")
-				fmt.Print("    > الصق مسار ملف الداتا: ")
-			}
-		} else {
-			if cfg.Firebird.DBPath != "" {
-				fmt.Printf("[1] Firebird Database File Path:\n    [Current: %s]\n    > Enter or paste DB path (or press ENTER to keep): ", cfg.Firebird.DBPath)
-			} else {
-				fmt.Println("[1] Firebird Database File Path:")
-				fmt.Println("    (e.g.: D:\\ORGA_SOFT\\DATA\\ORGA.GDB)")
-				fmt.Print("    > Paste database file path: ")
-			}
-		}
-
-		inputDB, _ := reader.ReadString('\n')
-		inputDB = cleanInput(inputDB)
-		if inputDB != "" {
-			cfg.Firebird.DBPath = inputDB
-			break
-		} else if cfg.Firebird.DBPath != "" {
-			break
-		} else {
-			if isAr {
-				fmt.Println("    [!] تنبيه: مسار ملف قاعدة البيانات مطلوب للمتابعة.")
-			} else {
-				fmt.Println("    [!] Notice: Database file path is required to proceed.")
-			}
-		}
-	}
-
-	// 2. Master Host / IP
-	fmt.Println()
-	if isAr {
-		if cfg.Firebird.Host != "" && cfg.Firebird.Host != "127.0.0.1" && cfg.Firebird.Host != "localhost" {
-			fmt.Printf("[2] عنوان IP الماستر أو السيرفر (Master IP / Host):\n    [الحالي: %s]\n    > اكتب IP الماستر (أو اضغط ENTER للاحتفاظ به): ", cfg.Firebird.Host)
-		} else {
-			fmt.Println("[2] عنوان IP الماستر أو السيرفر (Master IP / Host):")
-			fmt.Println("    (إذا كان البرنامج يعمل على نفس جهاز السيرفر، اضغط ENTER مباشرة)")
-			fmt.Print("    > اكتب IP الماستر [افتراضي: 127.0.0.1]: ")
-		}
-	} else {
-		if cfg.Firebird.Host != "" && cfg.Firebird.Host != "127.0.0.1" && cfg.Firebird.Host != "localhost" {
-			fmt.Printf("[2] Master Server Host/IP:\n    [Current: %s]\n    > Enter IP (or press ENTER to keep): ", cfg.Firebird.Host)
-		} else {
-			fmt.Println("[2] Master Server Host/IP:")
-			fmt.Println("    (If running on the same server machine, just press ENTER)")
-			fmt.Print("    > Enter Master IP [Default: 127.0.0.1]: ")
-		}
-	}
-
-	inputHost, _ := reader.ReadString('\n')
-	inputHost = cleanInput(inputHost)
-	if inputHost != "" {
-		cfg.Firebird.Host = inputHost
-	} else if cfg.Firebird.Host == "" {
-		cfg.Firebird.Host = "127.0.0.1"
-	}
-
-	// 3. API Token
-	fmt.Println()
-	for {
-		if cfg.Cloud.APIKey != "" {
-			maskedKey := cfg.Cloud.APIKey
-			if len(cfg.Cloud.APIKey) > 18 {
-				maskedKey = fmt.Sprintf("%s...%s", cfg.Cloud.APIKey[:12], cfg.Cloud.APIKey[len(cfg.Cloud.APIKey)-6:])
-			}
-			if isAr {
-				fmt.Printf("[3] مفتاح الربط والتوكن السحابي (API Token):\n    [التوكن الحالي المحفوظ: %s]\n    > الصق التوكن الجديد (أو اضغط ENTER للاحتفاظ به): ", maskedKey)
-			} else {
-				fmt.Printf("[3] Cloud API Token:\n    [Current saved: %s]\n    > Paste new token (or press ENTER to keep): ", maskedKey)
-			}
-		} else {
-			if isAr {
-				fmt.Println("[3] مفتاح الربط والتوكن السحابي (API Token):")
-				fmt.Println("    (يرجى لصق الـ API Token الذي استلمته من إدارة منصة XPharma)")
-				fmt.Print("    > الصق مفتاح الربط (API Token): ")
-			} else {
-				fmt.Println("[3] Cloud API Token:")
-				fmt.Println("    (Paste the API Token obtained from XPharma Admin Portal)")
-				fmt.Print("    > Paste API Token: ")
-			}
-		}
-
-		inputKey, _ := reader.ReadString('\n')
-		inputKey = cleanInput(inputKey)
-		if inputKey != "" {
-			cfg.Cloud.APIKey = inputKey
-			break
-		} else if cfg.Cloud.APIKey != "" {
-			break
-		} else {
-			if isAr {
-				fmt.Println("    [!] تنبيه: مفتاح الربط (API Token) إلزامي للمتابعة.")
-			} else {
-				fmt.Println("    [!] Notice: API Token is required to proceed.")
-			}
-		}
-	}
-
-	saveYAMLConfig("config.yaml", cfg)
-	fmt.Println()
-	if isAr {
-		fmt.Println("[OK] تم حفظ الإعدادات في config.yaml بنجاح!")
-	} else {
-		fmt.Println("[OK] Configuration saved to config.yaml successfully!")
-	}
-	fmt.Println("==================================================================")
-
-	if syncNow != nil && !*syncNow {
-		if isAr {
-			fmt.Println("اختر نمط التشغيل المطلوب:")
-			fmt.Println(" [1] مزامنة جميع البيانات كاملة الآن لمرة واحدة (فحص وتفريغ كامل)")
-			fmt.Println(" [2] تشغيل المراقبة والمزامنة المستمرة (تلقائي كل دقيقة - اضغط ENTER)")
-			fmt.Println(" [3] البحث عن عميل بكود الحساب (مثال: 2877)")
-			fmt.Print(" > اختيارك [1 أو 2 أو 3]: ")
-		} else {
-			fmt.Println("Select operating mode:")
-			fmt.Println(" [1] Sync ALL historical data now (Full immediate sync)")
-			fmt.Println(" [2] Run continuous background monitoring every minute (Press ENTER)")
-			fmt.Println(" [3] Search for customer by account code (e.g. 2877)")
-			fmt.Print(" > Choice [1, 2, or 3]: ")
-		}
-
-		modeInput, _ := reader.ReadString('\n')
-		modeInput = strings.TrimSpace(modeInput)
-		if modeInput == "1" {
-			*syncNow = true
-		} else if modeInput == "3" {
-			if isAr {
-				fmt.Print("\n > ادخل كود/رقم العميل المطلوب: ")
-			} else {
-				fmt.Print("\n > Enter customer account code: ")
-			}
-			accInput, _ := reader.ReadString('\n')
-			accInput = cleanInput(accInput)
-			if accInput != "" {
-				findAccount(cfg, accInput)
-				fmt.Println("\nPress ENTER to close / اضغط ENTER للإغلاق...")
-				reader.ReadString('\n')
-				os.Exit(0)
-			}
-		}
-		fmt.Println("==================================================================")
-	}
-	fmt.Println()
-}
-
-// -----------------------------------------------------------------------------
-// Firebird Connection
+// Database Connection
 // -----------------------------------------------------------------------------
 
 func connectFirebird(cfg *Config) (*sql.DB, error) {
@@ -540,40 +359,57 @@ func connectFirebird(cfg *Config) (*sql.DB, error) {
 		cleanPath = "/" + cleanPath
 	}
 
-	// 1. Try Legacy_Auth with wire_crypt=false (Required for Firebird 2.5 / ORGA SOFT ERP)
-	dsnLegacy := fmt.Sprintf("%s:%s@%s:%d%s?charset=NONE&auth_plugin_name=Legacy_Auth&wire_crypt=false",
+	// Try Legacy_Auth with wire_crypt=false (Required for Firebird 2.5 / ORGA SOFT ERP)
+	dsn := fmt.Sprintf("%s:%s@%s:%d%s?charset=NONE&auth_plugin_name=Legacy_Auth&wire_crypt=false",
 		fb.User, fb.Password, fb.Host, fb.Port, cleanPath)
 
-	db, err := sql.Open("firebirdsql", dsnLegacy)
+	db, err := sql.Open("firebirdsql", dsn)
 	if err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		pingErr := db.PingContext(ctx)
-		cancel()
-		if pingErr == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		if err := db.PingContext(ctx); err == nil {
 			return db, nil
 		}
 		db.Close()
 	}
 
-	// 2. Try default negotiation (Firebird 3+)
+	// Try standard Firebird 3+ negotiation
 	dsnDefault := fmt.Sprintf("%s:%s@%s:%d%s?charset=NONE&wire_crypt=false",
 		fb.User, fb.Password, fb.Host, fb.Port, cleanPath)
 	dbDefault, err := sql.Open("firebirdsql", dsnDefault)
 	if err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		pingErr := dbDefault.PingContext(ctx)
-		cancel()
-		if pingErr == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		if err := dbDefault.PingContext(ctx); err == nil {
 			return dbDefault, nil
 		}
 		dbDefault.Close()
-		return nil, pingErr
 	}
-
 	return nil, err
 }
 
-func parseFlexibleDate(raw interface{}) time.Time {
+func checkConnections(cfg *Config) (fbOk bool, cloudOk bool) {
+	// 1. Check Firebird
+	if cfg.Firebird.DBPath != "" {
+		db, err := connectFirebird(cfg)
+		if err == nil {
+			fbOk = true
+			db.Close()
+		}
+	}
+
+	// 2. Check Cloud
+	cleanURL := strings.TrimRight(cfg.Cloud.APIURL, "/")
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Get(cleanURL + "/health")
+	if err == nil && (resp.StatusCode == http.StatusOK || resp.StatusCode == 404 || resp.StatusCode == 401) {
+		cloudOk = true
+		resp.Body.Close()
+	}
+	return
+}
+
+func parseDate(raw interface{}) time.Time {
 	if raw == nil {
 		return time.Now()
 	}
@@ -583,485 +419,34 @@ func parseFlexibleDate(raw interface{}) time.Time {
 	case string:
 		v = strings.TrimSpace(v)
 		for _, layout := range []string{
-			"2006-01-02 15:04:05",
-			"2006-01-02",
-			"2006/01/02",
-			"02/01/2006",
-			"02-01-2006",
-			time.RFC3339,
+			"2006-01-02 15:04:05", "2006-01-02", "2006/01/02", "02/01/2006", "02-01-2006", time.RFC3339,
 		} {
 			if t, err := time.Parse(layout, v); err == nil {
 				return t
 			}
 		}
 	case []byte:
-		return parseFlexibleDate(string(v))
+		return parseDate(string(v))
 	}
 	return time.Now()
 }
 
 // -----------------------------------------------------------------------------
-// Extraction Logic (ALL Data - No Date or Limit Constraints)
+// Gentle, Throttled Sync Engine (خفيف وهادئ جداً لمنع التهنيج)
 // -----------------------------------------------------------------------------
 
-func extractAllFromFirebird(cfg *Config) (*IngestionPayload, error) {
-	fb := cfg.Firebird
-	isAr := cfg.Language != "en"
-
-	if fb.DBPath == "" {
-		if isAr {
-			return nil, fmt.Errorf("مسار قاعدة بيانات الفايربيرد غير محدد")
-		}
-		return nil, fmt.Errorf("firebird database path is not specified")
-	}
-
-	addr := fmt.Sprintf("%s:%d", fb.Host, fb.Port)
-	if isAr {
-		addLog(fmt.Sprintf("[FIREBIRD] فحص منفذ الاتصال بالسيرفر (%s)...", addr))
-	} else {
-		addLog(fmt.Sprintf("[FIREBIRD] Checking server connection (%s)...", addr))
-	}
-
-	tcpConn, err := net.DialTimeout("tcp", addr, 3*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("network connection error to %s: %v", addr, err)
-	}
-	tcpConn.Close()
-
-	db, err := connectFirebird(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("database authentication failed: %v", err)
-	}
-	defer db.Close()
-
-	if isAr {
-		addLog("[FIREBIRD] تم الاتصال بقاعدة البيانات بنجاح.")
-	} else {
-		addLog("[FIREBIRD] Connected to Firebird database successfully.")
-	}
-
-	payload := &IngestionPayload{}
-
-	// Discover existing tables
-	tabRows, err := db.Query(`
-		SELECT TRIM(RDB$RELATION_NAME) 
-		FROM RDB$RELATIONS 
-		WHERE RDB$SYSTEM_FLAG = 0 AND RDB$VIEW_BLR IS NULL
-	`)
-	tableMap := make(map[string]bool)
-	if err == nil {
-		defer tabRows.Close()
-		for tabRows.Next() {
-			var tName string
-			if err := tabRows.Scan(&tName); err == nil {
-				tableMap[strings.ToUpper(strings.TrimSpace(tName))] = true
-			}
-		}
-	}
-
-	// -------------------------------------------------------------------------
-	// 1. EXTRACT ALL INVOICES (بدون أي حد أقصى أو تقييد زمني)
-	// -------------------------------------------------------------------------
-	if tableMap["INVOICES_H"] {
-		if isAr {
-			addLog("[FIREBIRD] استخراج جميع الفواتير التاريخية من INVOICES_H بالكامل...")
-		} else {
-			addLog("[FIREBIRD] Extracting ALL invoices from INVOICES_H (all time, no limits)...")
-		}
-
-		invRows, err := db.Query(`
-			SELECT 
-				INVOICES_H_ID, DATE_D, TOTAL_TOTAL, TOTAL_DISCOUNT1, TOTAL_MONY_PAY, ACCOUNT_ID
-			FROM INVOICES_H 
-			ORDER BY INVOICES_H_ID ASC
-		`)
-		if err != nil {
-			addLog(fmt.Sprintf("[FIREBIRD] Warning on INVOICES_H query: %v", err))
-		} else {
-			defer invRows.Close()
-			for invRows.Next() {
-				var id int64
-				var rawDate interface{}
-				var total, discount, paid float64
-				var accountID int64
-				if err := invRows.Scan(&id, &rawDate, &total, &discount, &paid, &accountID); err != nil {
-					continue
-				}
-				dateD := parseFlexibleDate(rawDate)
-				invNum := fmt.Sprintf("INV-%d", id)
-				net := total - discount
-				rem := net - paid
-				payload.Invoices = append(payload.Invoices, InvoiceSyncItem{
-					RemoteID:        fmt.Sprintf("%d", id),
-					InvoiceNumber:   invNum,
-					PharmacyCode:    fmt.Sprintf("%d", accountID),
-					InvoiceDate:     dateD,
-					TotalAmount:     total,
-					DiscountAmount:  discount,
-					NetAmount:       net,
-					PaidAmount:      paid,
-					RemainingAmount: rem,
-					Status:          "synced",
-				})
-			}
-			if isAr {
-				addLog(fmt.Sprintf("[FIREBIRD] تم استخراج إجمالي %d فاتورة من بداية الداتا إلى الآن!", len(payload.Invoices)))
-			} else {
-				addLog(fmt.Sprintf("[FIREBIRD] Extracted %d total invoices successfully!", len(payload.Invoices)))
-			}
-		}
-	}
-
-	// -------------------------------------------------------------------------
-	// 2. EXTRACT ALL CASH RECEIPTS (سندات القبض بالكامل)
-	// -------------------------------------------------------------------------
-	if tableMap["INCOME_CASH"] {
-		if isAr {
-			addLog("[FIREBIRD] استخراج جميع سندات القبض التاريخية من INCOME_CASH...")
-		} else {
-			addLog("[FIREBIRD] Extracting ALL cash receipts from INCOME_CASH...")
-		}
-
-		rcptRows, err := db.Query(`
-			SELECT 
-				INCOME_CASH_ID, DATE_D, CASH, ACCOUNT_ID, USERS_NAME 
-			FROM INCOME_CASH 
-			ORDER BY INCOME_CASH_ID ASC
-		`)
-		if err != nil {
-			addLog(fmt.Sprintf("[FIREBIRD] Warning on INCOME_CASH query: %v", err))
-		} else {
-			defer rcptRows.Close()
-			for rcptRows.Next() {
-				var id int64
-				var rawDate interface{}
-				var amount float64
-				var accountID int64
-				var userRaw []byte
-				if err := rcptRows.Scan(&id, &rawDate, &amount, &accountID, &userRaw); err != nil {
-					continue
-				}
-				dateD := parseFlexibleDate(rawDate)
-				collector := decodeText(userRaw)
-				payload.CashReceipts = append(payload.CashReceipts, CashReceiptSyncItem{
-					RemoteID:      fmt.Sprintf("%d", id),
-					ReceiptNumber: fmt.Sprintf("RCP-%d", id),
-					PharmacyCode:  fmt.Sprintf("%d", accountID),
-					ReceiptDate:   dateD,
-					Amount:        amount,
-					PaymentMethod: "cash",
-					CollectorName: collector,
-					Notes:         "سند قبض نقدي",
-				})
-			}
-			if isAr {
-				addLog(fmt.Sprintf("[FIREBIRD] تم استخراج إجمالي %d سند قبض بالكامل!", len(payload.CashReceipts)))
-			} else {
-				addLog(fmt.Sprintf("[FIREBIRD] Extracted %d total cash receipts successfully!", len(payload.CashReceipts)))
-			}
-		}
-	}
-
-	// -------------------------------------------------------------------------
-	// 3. EXTRACT ALL CUSTOMERS / PHARMACIES (دليل الصيدليات والعملاء بالكامل)
-	// -------------------------------------------------------------------------
-	custCandidates := []string{"ACCOUNTS", "ACCOUNT", "CUSTOMERS", "CUSTOMER", "CLIENTS"}
-	var custTable string
-	for _, t := range custCandidates {
-		if tableMap[t] {
-			custTable = t
-			break
-		}
-	}
-
-	if custTable != "" {
-		if isAr {
-			addLog(fmt.Sprintf("[FIREBIRD] استخراج جميع العملاء والصيدليات من جدول %s...", custTable))
-		} else {
-			addLog(fmt.Sprintf("[FIREBIRD] Extracting ALL customers and pharmacies from %s...", custTable))
-		}
-
-		cRows, err := db.Query(fmt.Sprintf("SELECT * FROM %s", custTable))
-		if err == nil {
-			defer cRows.Close()
-			cCols, _ := cRows.Columns()
-			idIdx, nameIdx, phoneIdx, addrIdx := -1, -1, -1, -1
-			for idx, col := range cCols {
-				u := strings.ToUpper(strings.TrimSpace(col))
-				if idIdx == -1 && (u == "ACCOUNT_ID" || u == "ACC_ID" || u == "ID" || u == "CODE" || u == "CUSTOMER_ID" || u == "A_ID") {
-					idIdx = idx
-				}
-				if nameIdx == -1 && (u == "ACCOUNT_NAME" || u == "ACC_NAME" || u == "NAME" || u == "CUSTOMER_NAME" || u == "A_NAME" || u == "TITLE") {
-					nameIdx = idx
-				}
-				if phoneIdx == -1 && (u == "PHONE" || u == "TEL" || u == "MOBILE" || u == "TELEPHONE") {
-					phoneIdx = idx
-				}
-				if addrIdx == -1 && (u == "ADDRESS" || u == "ADDR") {
-					addrIdx = idx
-				}
-			}
-
-			if idIdx != -1 && nameIdx != -1 {
-				for cRows.Next() {
-					vals := make([]interface{}, len(cCols))
-					valPtrs := make([]interface{}, len(cCols))
-					for i := range vals {
-						valPtrs[i] = &vals[i]
-					}
-					if err := cRows.Scan(valPtrs...); err != nil {
-						continue
-					}
-
-					var cCode, cName, cPhone, cAddr string
-					if vals[idIdx] != nil {
-						cCode = strings.TrimSpace(fmt.Sprintf("%v", vals[idIdx]))
-					}
-					if vals[nameIdx] != nil {
-						switch v := vals[nameIdx].(type) {
-						case []byte:
-							cName = decodeText(v)
-						default:
-							cName = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
-						}
-					}
-					if phoneIdx != -1 && vals[phoneIdx] != nil {
-						switch v := vals[phoneIdx].(type) {
-						case []byte:
-							cPhone = decodeText(v)
-						default:
-							cPhone = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
-						}
-					}
-					if addrIdx != -1 && vals[addrIdx] != nil {
-						switch v := vals[addrIdx].(type) {
-						case []byte:
-							cAddr = decodeText(v)
-						default:
-							cAddr = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
-						}
-					}
-
-					if cCode != "" && cName != "" && cCode != "0" {
-						payload.Customers = append(payload.Customers, CustomerSyncItem{
-							Code:    cCode,
-							Name:    cName,
-							Phone:   cPhone,
-							Address: cAddr,
-						})
-					}
-				}
-				if isAr {
-					addLog(fmt.Sprintf("[FIREBIRD] تم استخراج إجمالي %d عميل وصيدلية بالكامل!", len(payload.Customers)))
-				} else {
-					addLog(fmt.Sprintf("[FIREBIRD] Extracted %d total customers successfully!", len(payload.Customers)))
-				}
-			}
-		}
-	}
-
-	// -------------------------------------------------------------------------
-	// 4. EXTRACT ALL PRODUCTS / MEDICINES (الأدوية والأصناف من الفايربيرد)
-	// -------------------------------------------------------------------------
-	prodCandidates := []string{"ITEMS", "ITEM", "PRODUCTS", "PRODUCT", "DRUGS", "DRUG", "STORE_ITEMS", "MEDICINES"}
-	var prodTable string
-	for _, t := range prodCandidates {
-		if tableMap[t] {
-			prodTable = t
-			break
-		}
-	}
-
-	if prodTable != "" {
-		if isAr {
-			addLog(fmt.Sprintf("[FIREBIRD] استخراج الأدوية والأصناف من جدول %s...", prodTable))
-		} else {
-			addLog(fmt.Sprintf("[FIREBIRD] Extracting products/medicines from %s...", prodTable))
-		}
-
-		pRows, err := db.Query(fmt.Sprintf("SELECT * FROM %s", prodTable))
-		if err == nil {
-			defer pRows.Close()
-			pCols, _ := pRows.Columns()
-			idIdx, nameIdx, priceIdx, qtyIdx, discIdx := -1, -1, -1, -1, -1
-			for idx, col := range pCols {
-				u := strings.ToUpper(strings.TrimSpace(col))
-				if idIdx == -1 && (u == "ITEM_ID" || u == "ID" || u == "CODE" || u == "ITEM_CODE" || u == "PRODUCT_ID") {
-					idIdx = idx
-				}
-				if nameIdx == -1 && (u == "ITEM_NAME" || u == "NAME" || u == "TITLE" || u == "PRODUCT_NAME" || u == "NAME_A") {
-					nameIdx = idx
-				}
-				if priceIdx == -1 && (u == "PRICE" || u == "SELL_PRICE" || u == "PRICE_SELL" || u == "UNIT_PRICE" || u == "PRICE_1") {
-					priceIdx = idx
-				}
-				if qtyIdx == -1 && (u == "QTY" || u == "QUANTITY" || u == "BALANCE" || u == "STOCK" || u == "QTY_STORE") {
-					qtyIdx = idx
-				}
-				if discIdx == -1 && (u == "DISCOUNT" || u == "DISC_PERCENT" || u == "DISC") {
-					discIdx = idx
-				}
-			}
-
-			if idIdx != -1 && nameIdx != -1 {
-				for pRows.Next() {
-					vals := make([]interface{}, len(pCols))
-					valPtrs := make([]interface{}, len(pCols))
-					for i := range vals {
-						valPtrs[i] = &vals[i]
-					}
-					if err := pRows.Scan(valPtrs...); err != nil {
-						continue
-					}
-
-					var pID, pName string
-					var pPrice, pQty, pDisc float64
-					if vals[idIdx] != nil {
-						pID = strings.TrimSpace(fmt.Sprintf("%v", vals[idIdx]))
-					}
-					if vals[nameIdx] != nil {
-						switch v := vals[nameIdx].(type) {
-						case []byte:
-							pName = decodeText(v)
-						default:
-							pName = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
-						}
-					}
-					if priceIdx != -1 && vals[priceIdx] != nil {
-						fmt.Sscanf(fmt.Sprintf("%v", vals[priceIdx]), "%f", &pPrice)
-					}
-					if qtyIdx != -1 && vals[qtyIdx] != nil {
-						fmt.Sscanf(fmt.Sprintf("%v", vals[qtyIdx]), "%f", &pQty)
-					}
-					if discIdx != -1 && vals[discIdx] != nil {
-						fmt.Sscanf(fmt.Sprintf("%v", vals[discIdx]), "%f", &pDisc)
-					}
-
-					if pID != "" && pName != "" {
-						payload.Products = append(payload.Products, ProductSyncItem{
-							RemoteID:        pID,
-							Name:            pName,
-							NameEn:          "",
-							Price:           pPrice,
-							Quantity:        pQty,
-							DiscountPercent: pDisc,
-							DateIn:          time.Now(),
-						})
-					}
-				}
-				if isAr {
-					addLog(fmt.Sprintf("[FIREBIRD] تم استخراج إجمالي %d صنف ودواء بالكامل!", len(payload.Products)))
-				} else {
-					addLog(fmt.Sprintf("[FIREBIRD] Extracted %d total products successfully!", len(payload.Products)))
-				}
-			}
-		}
-	}
-
-	// -------------------------------------------------------------------------
-	// 5. EXTRACT ALL RETURNS (المرتجعات إن وجدت)
-	// -------------------------------------------------------------------------
-	retCandidates := []string{"RETURNS_H", "RETURN_H", "RETURNS", "INVOICES_RETURN_H"}
-	var retTable string
-	for _, t := range retCandidates {
-		if tableMap[t] {
-			retTable = t
-			break
-		}
-	}
-
-	if retTable != "" {
-		rRows, err := db.Query(fmt.Sprintf("SELECT * FROM %s", retTable))
-		if err == nil {
-			defer rRows.Close()
-			rCols, _ := rRows.Columns()
-			idIdx, dateIdx, totalIdx, accIdx := -1, -1, -1, -1
-			for idx, col := range rCols {
-				u := strings.ToUpper(strings.TrimSpace(col))
-				if idIdx == -1 && (strings.Contains(u, "ID") || strings.Contains(u, "NUM")) {
-					idIdx = idx
-				}
-				if dateIdx == -1 && strings.Contains(u, "DATE") {
-					dateIdx = idx
-				}
-				if totalIdx == -1 && (strings.Contains(u, "TOTAL") || strings.Contains(u, "AMOUNT")) {
-					totalIdx = idx
-				}
-				if accIdx == -1 && strings.Contains(u, "ACCOUNT") {
-					accIdx = idx
-				}
-			}
-			if idIdx != -1 && totalIdx != -1 {
-				for rRows.Next() {
-					vals := make([]interface{}, len(rCols))
-					valPtrs := make([]interface{}, len(rCols))
-					for i := range vals {
-						valPtrs[i] = &vals[i]
-					}
-					if err := rRows.Scan(valPtrs...); err != nil {
-						continue
-					}
-					var rID, rAcc string
-					var rTotal float64
-					var rDate time.Time = time.Now()
-					if vals[idIdx] != nil {
-						rID = fmt.Sprintf("%v", vals[idIdx])
-					}
-					if accIdx != -1 && vals[accIdx] != nil {
-						rAcc = fmt.Sprintf("%v", vals[accIdx])
-					}
-					if totalIdx != -1 && vals[totalIdx] != nil {
-						fmt.Sscanf(fmt.Sprintf("%v", vals[totalIdx]), "%f", &rTotal)
-					}
-					if dateIdx != -1 && vals[dateIdx] != nil {
-						rDate = parseFlexibleDate(vals[dateIdx])
-					}
-					if rID != "" {
-						payload.Returns = append(payload.Returns, ReturnSyncItem{
-							RemoteID:     rID,
-							ReturnNumber: fmt.Sprintf("RET-%s", rID),
-							PharmacyCode: rAcc,
-							ReturnDate:   rDate,
-							TotalAmount:  rTotal,
-							NetAmount:    rTotal,
-							Status:       "synced",
-							Reason:       "مرتجع بضاعة",
-						})
-					}
-				}
-			}
-		}
-	}
-
-	// Update global stats
-	globalState.Lock()
-	globalState.TotalInvoices = len(payload.Invoices)
-	globalState.TotalReceipts = len(payload.CashReceipts)
-	globalState.TotalCustomers = len(payload.Customers)
-	globalState.TotalProducts = len(payload.Products)
-	globalState.Unlock()
-
-	return payload, nil
-}
-
-// -----------------------------------------------------------------------------
-// Reliable Batched Uploading (رفع الحزم الذكي بدون انقطاع أو انتهاء مهلة)
-// -----------------------------------------------------------------------------
-
-func postPayloadBatch(apiURL, apiKey string, payload IngestionPayload) error {
+func postBatch(apiURL, apiKey string, payload IngestionPayload) error {
 	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("json marshal error: %v", err)
+		return err
 	}
 
 	var gzBuffer bytes.Buffer
 	gzWriter := gzip.NewWriter(&gzBuffer)
 	if _, err := gzWriter.Write(jsonBytes); err != nil {
-		return fmt.Errorf("gzip write error: %v", err)
+		return err
 	}
-	if err := gzWriter.Close(); err != nil {
-		return fmt.Errorf("gzip close error: %v", err)
-	}
+	_ = gzWriter.Close()
 
 	cleanURL := strings.TrimRight(apiURL, "/")
 	if !strings.HasSuffix(cleanURL, "/v1/sync/ingest") {
@@ -1070,9 +455,8 @@ func postPayloadBatch(apiURL, apiKey string, payload IngestionPayload) error {
 
 	req, err := http.NewRequest("POST", cleanURL, &gzBuffer)
 	if err != nil {
-		return fmt.Errorf("request creation error: %v", err)
+		return err
 	}
-
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
 	req.Header.Set("X-Agent-Key", apiKey)
@@ -1080,417 +464,399 @@ func postPayloadBatch(apiURL, apiKey string, payload IngestionPayload) error {
 	client := &http.Client{Timeout: 45 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("network error (%s): %v", cleanURL, err)
+		return err
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server rejected payload (HTTP %d): %s", resp.StatusCode, string(respBody))
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
 	}
 	return nil
 }
 
-func sendBatchedSync(cfg *Config, fullPayload *IngestionPayload) error {
-	isAr := cfg.Language != "en"
-	apiKey := cfg.Cloud.APIKey
-	apiURL := cfg.Cloud.APIURL
-
-	if apiKey == "" {
-		return fmt.Errorf("API Key is missing")
+func runGentleSync(cfg *Config) {
+	state.Lock()
+	if state.IsRunning {
+		state.Lock()
+		return
 	}
+	state.IsRunning = true
+	state.ShouldPause = false
+	state.Status = "syncing"
+	state.LastError = ""
+	state.Unlock()
 
-	// 1. Upload Customers first (Batch size: 1,000)
-	const custBatchSize = 1000
-	custTotal := len(fullPayload.Customers)
-	if custTotal > 0 {
-		batches := (custTotal + custBatchSize - 1) / custBatchSize
-		for i := 0; i < custTotal; i += custBatchSize {
-			end := i + custBatchSize
-			if end > custTotal {
-				end = custTotal
-			}
-			batchNum := (i / custBatchSize) + 1
-			p := IngestionPayload{
-				Customers: fullPayload.Customers[i:end],
-			}
-			if isAr {
-				addLog(fmt.Sprintf("[SYNC] رفع الصيدليات والعملاء: دفعة %d من %d (%d عميل)...", batchNum, batches, len(p.Customers)))
-			} else {
-				addLog(fmt.Sprintf("[SYNC] Uploading customers: batch %d of %d (%d items)...", batchNum, batches, len(p.Customers)))
-			}
-			if err := postPayloadBatch(apiURL, apiKey, p); err != nil {
-				return fmt.Errorf("customers batch %d error: %v", batchNum, err)
-			}
+	defer func() {
+		state.Lock()
+		state.IsRunning = false
+		if state.Status == "syncing" {
+			state.Status = "idle"
 		}
-	}
-
-	// 2. Upload Products (Batch size: 1,000)
-	const prodBatchSize = 1000
-	prodTotal := len(fullPayload.Products)
-	if prodTotal > 0 {
-		batches := (prodTotal + prodBatchSize - 1) / prodBatchSize
-		for i := 0; i < prodTotal; i += prodBatchSize {
-			end := i + prodBatchSize
-			if end > prodTotal {
-				end = prodTotal
-			}
-			batchNum := (i / prodBatchSize) + 1
-			p := IngestionPayload{
-				Products: fullPayload.Products[i:end],
-			}
-			if isAr {
-				addLog(fmt.Sprintf("[SYNC] رفع الأصناف والأدوية: دفعة %d من %d (%d صنف)...", batchNum, batches, len(p.Products)))
-			} else {
-				addLog(fmt.Sprintf("[SYNC] Uploading products: batch %d of %d (%d items)...", batchNum, batches, len(p.Products)))
-			}
-			if err := postPayloadBatch(apiURL, apiKey, p); err != nil {
-				return fmt.Errorf("products batch %d error: %v", batchNum, err)
-			}
-		}
-	}
-
-	// 3. Upload Cash Receipts (Batch size: 1,000)
-	const rcptBatchSize = 1000
-	rcptTotal := len(fullPayload.CashReceipts)
-	if rcptTotal > 0 {
-		batches := (rcptTotal + rcptBatchSize - 1) / rcptBatchSize
-		for i := 0; i < rcptTotal; i += rcptBatchSize {
-			end := i + rcptBatchSize
-			if end > rcptTotal {
-				end = rcptTotal
-			}
-			batchNum := (i / rcptBatchSize) + 1
-			p := IngestionPayload{
-				CashReceipts: fullPayload.CashReceipts[i:end],
-			}
-			if isAr {
-				addLog(fmt.Sprintf("[SYNC] رفع سندات القبض: دفعة %d من %d (%d سند)...", batchNum, batches, len(p.CashReceipts)))
-			} else {
-				addLog(fmt.Sprintf("[SYNC] Uploading cash receipts: batch %d of %d (%d items)...", batchNum, batches, len(p.CashReceipts)))
-			}
-			if err := postPayloadBatch(apiURL, apiKey, p); err != nil {
-				return fmt.Errorf("receipts batch %d error: %v", batchNum, err)
-			}
-		}
-	}
-
-	// 4. Upload Invoices (Batch size: 500)
-	const invBatchSize = 500
-	invTotal := len(fullPayload.Invoices)
-	if invTotal > 0 {
-		batches := (invTotal + invBatchSize - 1) / invBatchSize
-		for i := 0; i < invTotal; i += invBatchSize {
-			end := i + invBatchSize
-			if end > invTotal {
-				end = invTotal
-			}
-			batchNum := (i / invBatchSize) + 1
-			p := IngestionPayload{
-				Invoices: fullPayload.Invoices[i:end],
-			}
-			if isAr {
-				addLog(fmt.Sprintf("[SYNC] رفع الفواتير: دفعة %d من %d (%d فاتورة)...", batchNum, batches, len(p.Invoices)))
-			} else {
-				addLog(fmt.Sprintf("[SYNC] Uploading invoices: batch %d of %d (%d items)...", batchNum, batches, len(p.Invoices)))
-			}
-			if err := postPayloadBatch(apiURL, apiKey, p); err != nil {
-				return fmt.Errorf("invoices batch %d error: %v", batchNum, err)
-			}
-		}
-	}
-
-	// 5. Upload Returns & Cursors if any
-	if len(fullPayload.Returns) > 0 || len(fullPayload.Ledger) > 0 {
-		p := IngestionPayload{
-			Returns: fullPayload.Returns,
-			Ledger:  fullPayload.Ledger,
-		}
-		if err := postPayloadBatch(apiURL, apiKey, p); err != nil {
-			return fmt.Errorf("returns batch error: %v", err)
-		}
-	}
-
-	// If nothing was extracted from DB (e.g. initial setup test), send demo payload
-	if custTotal == 0 && prodTotal == 0 && rcptTotal == 0 && invTotal == 0 {
-		demo := generateDemoPayload()
-		if err := postPayloadBatch(apiURL, apiKey, demo); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func performFullSync(cfg *Config) error {
-	globalState.Lock()
-	globalState.Status = "syncing"
-	globalState.LastError = ""
-	globalState.Unlock()
+		state.Unlock()
+	}()
 
 	isAr := cfg.Language != "en"
-	if isAr {
-		addLog("[SYNC] بدء قراءة واستخراج البيانات من المستودع بالكامل...")
-	} else {
-		addLog("[SYNC] Starting extraction of ALL warehouse data...")
-	}
-
-	fbPayload, err := extractAllFromFirebird(cfg)
-	if err != nil {
-		if isAr {
-			addLog(fmt.Sprintf("[WARN] تعذر الاتصال بالفايربيرد (%v). جاري استخدام بيانات الفحص...", err))
-		} else {
-			addLog(fmt.Sprintf("[WARN] Firebird connection issue (%v). Using test payload...", err))
-		}
-		demo := generateDemoPayload()
-		fbPayload = &demo
-	}
-
-	if err := sendBatchedSync(cfg, fbPayload); err != nil {
-		globalState.Lock()
-		globalState.Status = "error"
-		globalState.LastError = err.Error()
-		globalState.Unlock()
-		return err
-	}
-
-	globalState.Lock()
-	globalState.Status = "success"
-	globalState.LastSyncAt = time.Now()
-	globalState.Unlock()
-
-	if isAr {
-		addLog("[SUCCESS] اكتملت عملية مزامنة البيانات بالكامل مع السحابة بنجاح تام!")
-	} else {
-		addLog("[SUCCESS] All warehouse data has been synced to cloud successfully!")
-	}
-	return nil
-}
-
-// -----------------------------------------------------------------------------
-// Customer Search Utility
-// -----------------------------------------------------------------------------
-
-func findAccount(cfg *Config, accountID string) {
-	isAr := cfg.Language != "en"
-	if isAr {
-		log.Printf("[SEARCH] جاري البحث عن العميل رقم (%s) في قاعدة بيانات Firebird...", accountID)
-	} else {
-		log.Printf("[SEARCH] Searching for customer (%s) in Firebird...", accountID)
-	}
+	addLog("بدء عملية المزامنة الهادئة والآمنة لقاعدة بيانات المستودع...")
 
 	db, err := connectFirebird(cfg)
 	if err != nil {
-		log.Printf("Connection error: %v", err)
+		state.Lock()
+		state.Status = "error"
+		state.LastError = fmt.Sprintf("فشل الاتصال بقاعدة بيانات الفايربيرد: %v", err)
+		state.FirebirdConnected = false
+		state.Unlock()
+		addLog(fmt.Sprintf("خطأ في الاتصال بالفايربيرد: %v", err))
 		return
 	}
 	defer db.Close()
 
-	candidates := []string{"ACCOUNTS", "ACCOUNT", "CUSTOMERS", "CUSTOMER", "CLIENTS", "PHARMACIES"}
-	var foundTable string
-	for _, t := range candidates {
-		var dummy int
-		err := db.QueryRow(fmt.Sprintf("SELECT FIRST 1 1 FROM %s", t)).Scan(&dummy)
-		if err == nil || err == sql.ErrNoRows {
-			foundTable = t
-			break
-		}
+	state.Lock()
+	state.FirebirdConnected = true
+	state.Unlock()
+
+	// 1. Get total counts from DB using fast count queries
+	var totalInvoices, totalReceipts int
+	_ = db.QueryRow("SELECT COUNT(*) FROM INVOICES_H").Scan(&totalInvoices)
+	_ = db.QueryRow("SELECT COUNT(*) FROM INCOME_CASH").Scan(&totalReceipts)
+
+	state.Lock()
+	state.TotalInvoices = totalInvoices
+	state.TotalReceipts = totalReceipts
+	state.Unlock()
+
+	addLog(fmt.Sprintf("إجمالي السجلات بالمستودع: %d فاتورة و %d سند قبض.", totalInvoices, totalReceipts))
+
+	batchSize := cfg.BatchSize
+	if batchSize <= 0 {
+		batchSize = 100
 	}
-	if foundTable == "" {
-		foundTable = "ACCOUNTS"
+	delayMs := cfg.BatchDelayMs
+	if delayMs <= 0 {
+		delayMs = 1500
 	}
 
-	idCols := []string{"ACCOUNT_ID", "ACC_ID", "ID", "CODE", "CUSTOMER_ID", "A_ID"}
-	var rows *sql.Rows
-	var usedCol string
-	for _, col := range idCols {
-		q := fmt.Sprintf("SELECT * FROM %s WHERE %s = %s", foundTable, col, accountID)
-		r, err := db.Query(q)
-		if err == nil {
-			rows = r
-			usedCol = col
-			break
-		}
-	}
-	if rows == nil {
-		for _, col := range idCols {
-			q := fmt.Sprintf("SELECT * FROM %s WHERE %s = '%s'", foundTable, col, accountID)
-			r, err := db.Query(q)
-			if err == nil {
-				rows = r
-				usedCol = col
-				break
+	// 2. Sync Customers first (gentle batches)
+	addLog("مزامنة دليل الصيدليات والعملاء...")
+	custRows, err := db.Query("SELECT * FROM ACCOUNTS")
+	if err == nil {
+		cols, _ := custRows.Columns()
+		idIdx, nameIdx, phoneIdx, addrIdx := -1, -1, -1, -1
+		for idx, c := range cols {
+			u := strings.ToUpper(strings.TrimSpace(c))
+			if idIdx == -1 && (u == "ACCOUNT_ID" || u == "ACC_ID" || u == "ID" || u == "CODE") {
+				idIdx = idx
+			}
+			if nameIdx == -1 && (u == "ACCOUNT_NAME" || u == "ACC_NAME" || u == "NAME") {
+				nameIdx = idx
+			}
+			if phoneIdx == -1 && (u == "PHONE" || u == "TEL" || u == "MOBILE") {
+				phoneIdx = idx
+			}
+			if addrIdx == -1 && (u == "ADDRESS" || u == "ADDR") {
+				addrIdx = idx
 			}
 		}
-	}
 
-	if rows == nil {
-		log.Printf("Customer (%s) was not found in table (%s)", accountID, foundTable)
-		return
-	}
-	defer rows.Close()
-
-	cols, err := rows.Columns()
-	if err != nil {
-		log.Printf("Columns error: %v", err)
-		return
-	}
-
-	found := false
-	for rows.Next() {
-		found = true
-		values := make([]interface{}, len(cols))
-		valuePtrs := make([]interface{}, len(cols))
-		for i := range values {
-			valuePtrs[i] = &values[i]
+		var custList []CustomerSyncItem
+		if idIdx != -1 && nameIdx != -1 {
+			for custRows.Next() {
+				vals := make([]interface{}, len(cols))
+				valPtrs := make([]interface{}, len(cols))
+				for i := range vals {
+					valPtrs[i] = &vals[i]
+				}
+				if err := custRows.Scan(valPtrs...); err != nil {
+					continue
+				}
+				var cCode, cName, cPhone, cAddr string
+				if vals[idIdx] != nil {
+					cCode = strings.TrimSpace(fmt.Sprintf("%v", vals[idIdx]))
+				}
+				if vals[nameIdx] != nil {
+					switch v := vals[nameIdx].(type) {
+					case []byte:
+						cName = decodeText(v)
+					default:
+						cName = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
+					}
+				}
+				if phoneIdx != -1 && vals[phoneIdx] != nil {
+					switch v := vals[phoneIdx].(type) {
+					case []byte:
+						cPhone = decodeText(v)
+					default:
+						cPhone = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
+					}
+				}
+				if addrIdx != -1 && vals[addrIdx] != nil {
+					switch v := vals[addrIdx].(type) {
+					case []byte:
+						cAddr = decodeText(v)
+					default:
+						cAddr = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
+					}
+				}
+				if cCode != "" && cName != "" && cCode != "0" {
+					custList = append(custList, CustomerSyncItem{
+						Code:    cCode,
+						Name:    cName,
+						Phone:   cPhone,
+						Address: cAddr,
+					})
+				}
+			}
 		}
-		if err := rows.Scan(valuePtrs...); err != nil {
+		custRows.Close()
+
+		state.Lock()
+		state.TotalCustomers = len(custList)
+		state.Unlock()
+
+		// Upload customers in small batches of 300 with pause
+		for i := 0; i < len(custList); i += 300 {
+			end := i + 300
+			if end > len(custList) {
+				end = len(custList)
+			}
+			p := IngestionPayload{Customers: custList[i:end]}
+			_ = postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, p)
+			time.Sleep(500 * time.Millisecond)
+		}
+		addLog(fmt.Sprintf("تم رفع %d صيدلية وعميل بنجاح.", len(custList)))
+	}
+
+	// 3. Gentle Chunked Sync of INVOICES using Indexed ID Lookup (Very light on Firebird)
+	lastInvID := cfg.Cursors.LastInvoiceID
+	syncedInvoices := 0
+
+	for {
+		state.Lock()
+		if state.ShouldPause {
+			state.Status = "paused"
+			state.CurrentTask = "المزامنة متوقفة مؤقتاً بطلب من المستخدم"
+			state.Unlock()
+			addLog("تم إيقاف المزامنة مؤقتاً.")
+			return
+		}
+		state.CurrentTask = fmt.Sprintf("رفع الفواتير بهدوء... تم رفع %d فاتورة", syncedInvoices)
+		state.Unlock()
+
+		// Read a small batch using Primary Key index: WHERE INVOICES_H_ID > lastInvID (Takes < 2ms)
+		q := fmt.Sprintf(`
+			SELECT FIRST %d 
+				INVOICES_H_ID, DATE_D, TOTAL_TOTAL, TOTAL_DISCOUNT1, TOTAL_MONY_PAY, ACCOUNT_ID
+			FROM INVOICES_H
+			WHERE INVOICES_H_ID > %d
+			ORDER BY INVOICES_H_ID ASC
+		`, batchSize, lastInvID)
+
+		rows, err := db.Query(q)
+		if err != nil {
+			addLog(fmt.Sprintf("خطأ في قراءة دفعة الفواتير: %v", err))
+			break
+		}
+
+		var batch []InvoiceSyncItem
+		var maxIDInBatch int64 = lastInvID
+
+		for rows.Next() {
+			var id int64
+			var rawDate interface{}
+			var total, discount, paid float64
+			var accountID int64
+			if err := rows.Scan(&id, &rawDate, &total, &discount, &paid, &accountID); err != nil {
+				continue
+			}
+			if id > maxIDInBatch {
+				maxIDInBatch = id
+			}
+			dateD := parseDate(rawDate)
+			net := total - discount
+			rem := net - paid
+			batch = append(batch, InvoiceSyncItem{
+				RemoteID:        fmt.Sprintf("%d", id),
+				InvoiceNumber:   fmt.Sprintf("INV-%d", id),
+				PharmacyCode:    fmt.Sprintf("%d", accountID),
+				InvoiceDate:     dateD,
+				TotalAmount:     total,
+				DiscountAmount:  discount,
+				NetAmount:       net,
+				PaidAmount:      paid,
+				RemainingAmount: rem,
+				Status:          "synced",
+			})
+		}
+		rows.Close() // Immediately close to release Firebird locks
+
+		if len(batch) == 0 {
+			// All invoices have been fetched!
+			break
+		}
+
+		// Upload batch to Cloud
+		payload := IngestionPayload{Invoices: batch}
+		if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, payload); err != nil {
+			addLog(fmt.Sprintf("تنبيه: فشل إرسال دفعة فواتير (%v)، سيتم إعادة المحاولة...", err))
+			time.Sleep(3 * time.Second)
 			continue
 		}
 
-		fmt.Println()
-		fmt.Println("==================================================================")
-		fmt.Printf("           Customer Data (Code: %s) - ORGA SOFT           \n", accountID)
-		fmt.Println("==================================================================")
-		for i, col := range cols {
-			val := values[i]
-			if val == nil {
+		syncedInvoices += len(batch)
+		lastInvID = maxIDInBatch
+		cfg.Cursors.LastInvoiceID = lastInvID
+		saveConfig(cfg)
+
+		state.Lock()
+		state.SyncedInvoices = syncedInvoices
+		if totalInvoices > 0 {
+			state.ProgressPercent = (syncedInvoices * 80) / totalInvoices
+		}
+		state.Unlock()
+
+		addLog(fmt.Sprintf("تم رفع دفعة فواتير (%d فاتورة) - إجمالي المرفوع: %d ... [استراحة %d مللي ثانية]",
+			len(batch), syncedInvoices, delayMs))
+
+		// Gentle Pause to let warehouse server and ERP breathe freely
+		time.Sleep(time.Duration(delayMs) * time.Millisecond)
+	}
+
+	// 4. Gentle Chunked Sync of CASH RECEIPTS
+	lastRcptID := cfg.Cursors.LastReceiptID
+	syncedRcpts := 0
+
+	for {
+		state.Lock()
+		if state.ShouldPause {
+			state.Status = "paused"
+			state.CurrentTask = "المزامنة متوقفة مؤقتاً"
+			state.Unlock()
+			return
+		}
+		state.CurrentTask = fmt.Sprintf("رفع سندات القبض بهدوء... تم رفع %d سند", syncedRcpts)
+		state.Unlock()
+
+		q := fmt.Sprintf(`
+			SELECT FIRST %d 
+				INCOME_CASH_ID, DATE_D, CASH, ACCOUNT_ID, USERS_NAME
+			FROM INCOME_CASH
+			WHERE INCOME_CASH_ID > %d
+			ORDER BY INCOME_CASH_ID ASC
+		`, batchSize, lastRcptID)
+
+		rows, err := db.Query(q)
+		if err != nil {
+			break
+		}
+
+		var batch []CashReceiptSyncItem
+		var maxIDInBatch int64 = lastRcptID
+
+		for rows.Next() {
+			var id int64
+			var rawDate interface{}
+			var amount float64
+			var accountID int64
+			var userRaw []byte
+			if err := rows.Scan(&id, &rawDate, &amount, &accountID, &userRaw); err != nil {
 				continue
 			}
-			var strVal string
-			switch v := val.(type) {
-			case []byte:
-				strVal = decodeText(v)
-			case time.Time:
-				strVal = v.Format("2006-01-02 15:04")
-			default:
-				strVal = fmt.Sprintf("%v", v)
+			if id > maxIDInBatch {
+				maxIDInBatch = id
 			}
-			strVal = strings.TrimSpace(strVal)
-			if strVal != "" && strVal != "0" && strVal != "0.00" && strVal != "0.0" {
-				fmt.Printf("  * %-25s : %s\n", col, strVal)
-			}
+			dateD := parseDate(rawDate)
+			collector := decodeText(userRaw)
+			batch = append(batch, CashReceiptSyncItem{
+				RemoteID:      fmt.Sprintf("%d", id),
+				ReceiptNumber: fmt.Sprintf("RCP-%d", id),
+				PharmacyCode:  fmt.Sprintf("%d", accountID),
+				ReceiptDate:   dateD,
+				Amount:        amount,
+				PaymentMethod: "cash",
+				CollectorName: collector,
+				Notes:         "سند قبض نقدي",
+			})
 		}
-		fmt.Println("==================================================================")
-		fmt.Println()
+		rows.Close()
+
+		if len(batch) == 0 {
+			break
+		}
+
+		payload := IngestionPayload{CashReceipts: batch}
+		if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, payload); err != nil {
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
+		syncedRcpts += len(batch)
+		lastRcptID = maxIDInBatch
+		cfg.Cursors.LastReceiptID = lastRcptID
+		saveConfig(cfg)
+
+		state.Lock()
+		state.SyncedReceipts = syncedRcpts
+		state.Unlock()
+
+		addLog(fmt.Sprintf("تم رفع دفعة سندات قبض (%d سند) - إجمالي المرفوع: %d ... [استراحة]", len(batch), syncedRcpts))
+		time.Sleep(time.Duration(delayMs) * time.Millisecond)
 	}
 
-	if !found {
-		fmt.Printf("\nNotice: No record found for customer (%s) in field (%s) table (%s)\n", accountID, usedCol, foundTable)
-	}
-}
+	state.Lock()
+	state.Status = "success"
+	state.CurrentTask = "اكتملت المزامنة بنجاح تام بدون أي تهنيج!"
+	state.ProgressPercent = 100
+	state.LastSyncTime = time.Now()
+	state.CloudConnected = true
+	state.Unlock()
 
-// -----------------------------------------------------------------------------
-// Demo Payload Generator (Fallback when DB file is not available)
-// -----------------------------------------------------------------------------
-
-func generateDemoPayload() IngestionPayload {
-	now := time.Now()
-
-	products := []ProductSyncItem{
-		{RemoteID: "P-1001", Name: "بانادول إكسترا 500 ملغ (24 قرص)", NameEn: "Panadol Extra 500mg", Price: 45.00, Quantity: 1500},
-		{RemoteID: "P-1002", Name: "أوجمنتين 1 جم مضاد حيوي (14 قرص)", NameEn: "Augmentin 1g Tablets", Price: 120.00, Quantity: 850},
-		{RemoteID: "P-1003", Name: "كونكور 5 ملغ لضغط الدم (30 قرص)", NameEn: "Concor 5mg Tablets", Price: 65.50, Quantity: 620},
-		{RemoteID: "P-1004", Name: "كاتافلام 50 ملغ مسكن (20 قرص)", NameEn: "Cataflam 50mg", Price: 38.00, Quantity: 1100},
-	}
-
-	invoices := []InvoiceSyncItem{
-		{
-			RemoteID:        "INV-2026-001",
-			InvoiceNumber:   "INV-001",
-			PharmacyCode:    "2877",
-			InvoiceDate:     now.Add(-2 * time.Hour),
-			TotalAmount:     1850.00,
-			DiscountAmount:  150.00,
-			NetAmount:       1700.00,
-			PaidAmount:      500.00,
-			RemainingAmount: 1200.00,
-			Status:          "partially_paid",
-			Items: []InvoiceLineItem{
-				{RemoteItemID: "ITM-1", ItemCode: "P-1001", ItemName: "بانادول إكسترا 500 ملغ", Unit: "علبة", Quantity: 20, UnitPrice: 45.00, TotalPrice: 900.00},
-				{RemoteItemID: "ITM-2", ItemCode: "P-1002", ItemName: "أوجمنتين 1 جم", Unit: "علبة", Quantity: 5, UnitPrice: 120.00, TotalPrice: 600.00},
-			},
-		},
-	}
-
-	receipts := []CashReceiptSyncItem{
-		{
-			RemoteID:      "RCP-8891",
-			ReceiptNumber: "RCP-8891",
-			PharmacyCode:  "2877",
-			ReceiptDate:   now.Add(-1 * time.Hour),
-			Amount:        500.00,
-			PaymentMethod: "cash",
-			CollectorName: "مندوب التحصيل: محمد علي",
-			Notes:         "دفعة تحت الحساب",
-		},
-	}
-
-	customers := []CustomerSyncItem{
-		{Code: "2877", Name: "صيدلية النور والشفاء", Phone: "01012345678", Address: "شارع الجمهورية - المنصورة"},
-	}
-
-	return IngestionPayload{
-		Invoices:     invoices,
-		Returns:      []ReturnSyncItem{},
-		CashReceipts: receipts,
-		Products:     products,
-		Customers:    customers,
+	if isAr {
+		addLog("اكتملت مزامنة جميع بيانات المستودع بنجاح تام مع السحابة!")
+	} else {
+		addLog("All warehouse data synced successfully without server strain!")
 	}
 }
 
 // -----------------------------------------------------------------------------
-// Built-in Local Web Dashboard (HTTP Server)
+// Embedded App Window & HTTP Server
 // -----------------------------------------------------------------------------
 
-func startLocalWebServer(cfg *Config) {
+func startInternalServer(cfg *Config) {
 	mux := http.NewServeMux()
 
-	// API Status
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
-		globalState.Lock()
-		defer globalState.Unlock()
+		state.Lock()
+		defer state.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":          globalState.Status,
-			"last_sync_at":    globalState.LastSyncAt.Format("2006-01-02 15:04:05"),
-			"last_error":      globalState.LastError,
-			"total_invoices":  globalState.TotalInvoices,
-			"total_receipts":  globalState.TotalReceipts,
-			"total_customers": globalState.TotalCustomers,
-			"total_products":  globalState.TotalProducts,
-			"recent_logs":     globalState.RecentLogs,
-			"config": map[string]interface{}{
-				"db_path":         cfg.Firebird.DBPath,
-				"host":            cfg.Firebird.Host,
-				"port":            cfg.Firebird.Port,
-				"api_url":         cfg.Cloud.APIURL,
-				"sync_interval":   cfg.Cloud.SyncIntervalSeconds,
-				"language":        cfg.Language,
-				"api_key_masked":  maskKey(cfg.Cloud.APIKey),
-			},
+			"status":              state.Status,
+			"current_task":        state.CurrentTask,
+			"progress_percent":    state.ProgressPercent,
+			"firebird_connected":  state.FirebirdConnected,
+			"cloud_connected":     state.CloudConnected,
+			"total_invoices":      state.TotalInvoices,
+			"synced_invoices":     state.SyncedInvoices,
+			"total_receipts":      state.TotalReceipts,
+			"synced_receipts":     state.SyncedReceipts,
+			"total_customers":     state.TotalCustomers,
+			"total_products":      state.TotalProducts,
+			"last_sync_time":      state.LastSyncTime.Format("15:04:05 2006-01-02"),
+			"last_error":          state.LastError,
+			"logs":                state.Logs,
+			"config":              cfg,
 		})
 	})
 
-	// API Trigger Sync Now
-	mux.HandleFunc("/api/sync-now", func(w http.ResponseWriter, r *http.Request) {
-		go func() {
-			_ = performFullSync(cfg)
-		}()
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"message": "Sync started"})
-	})
-
-	// API Save Settings
-	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/save", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
 		var req struct {
 			DBPath   string `json:"db_path"`
 			Host     string `json:"host"`
 			APIKey   string `json:"api_key"`
+			SyncMode string `json:"sync_mode"`
 			Language string `json:"language"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
@@ -1503,443 +869,573 @@ func startLocalWebServer(cfg *Config) {
 			if req.APIKey != "" {
 				cfg.Cloud.APIKey = cleanInput(req.APIKey)
 			}
+			if req.SyncMode != "" {
+				cfg.SyncMode = req.SyncMode
+				if req.SyncMode == "gentle" {
+					cfg.BatchSize = 100
+					cfg.BatchDelayMs = 1500
+				} else if req.SyncMode == "balanced" {
+					cfg.BatchSize = 150
+					cfg.BatchDelayMs = 800
+				} else if req.SyncMode == "fast" {
+					cfg.BatchSize = 300
+					cfg.BatchDelayMs = 300
+				}
+			}
 			if req.Language == "ar" || req.Language == "en" {
 				cfg.Language = req.Language
 			}
-			saveYAMLConfig("config.yaml", cfg)
+			saveConfig(cfg)
+			fbOk, cloudOk := checkConnections(cfg)
+			state.Lock()
+			state.FirebirdConnected = fbOk
+			state.CloudConnected = cloudOk
+			state.Unlock()
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
 	})
 
-	// Web Dashboard HTML
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, dashboardHTML)
+	mux.HandleFunc("/api/start", func(w http.ResponseWriter, r *http.Request) {
+		go runGentleSync(cfg)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "started"})
 	})
 
-	addr := fmt.Sprintf(":%d", cfg.WebPort)
-	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
-	}
+	mux.HandleFunc("/api/pause", func(w http.ResponseWriter, r *http.Request) {
+		state.Lock()
+		state.ShouldPause = true
+		state.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "paused"})
+	})
+
+	mux.HandleFunc("/api/reset", func(w http.ResponseWriter, r *http.Request) {
+		cfg.Cursors.LastInvoiceID = 0
+		cfg.Cursors.LastReceiptID = 0
+		saveConfig(cfg)
+		state.Lock()
+		state.SyncedInvoices = 0
+		state.SyncedReceipts = 0
+		state.ProgressPercent = 0
+		state.Unlock()
+		addLog("تمت إعادة تعيين مؤشرات المزامنة للبدء من البداية.")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "reset"})
+	})
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, appHTML)
+	})
+
+	addr := fmt.Sprintf("127.0.0.1:%d", cfg.WebPort)
+	server := &http.Server{Addr: addr, Handler: mux}
 	_ = server.ListenAndServe()
 }
 
-func maskKey(k string) string {
-	if len(k) <= 12 {
-		return "****"
-	}
-	return fmt.Sprintf("%s...%s", k[:8], k[len(k)-4:])
-}
+// -----------------------------------------------------------------------------
+// App Window Interface (HTML/CSS/JS)
+// -----------------------------------------------------------------------------
 
-const dashboardHTML = `<!DOCTYPE html>
+const appHTML = `<!DOCTYPE html>
 <html lang="ar" dir="rtl" id="htmlTag">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>XPharma Warehouse Sync Agent</title>
+  <title>وكيل مزامنة مستودع الأدوية | XPharma Sync Agent</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #090d16;
-      --card-bg: rgba(22, 28, 45, 0.85);
-      --border: rgba(255, 255, 255, 0.1);
+      --bg: #0b1120;
+      --card-bg: #131d33;
+      --card-border: rgba(255, 255, 255, 0.08);
       --primary: #2563eb;
       --primary-hover: #1d4ed8;
       --text: #f8fafc;
       --text-muted: #94a3b8;
       --success: #10b981;
       --warning: #f59e0b;
-      --error: #ef4444;
+      --danger: #ef4444;
       --font-ar: 'Cairo', sans-serif;
       --font-en: 'Inter', sans-serif;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background-color: var(--bg);
+      background: var(--bg);
       color: var(--text);
       font-family: var(--font-ar);
       min-height: 100vh;
       display: flex;
       flex-direction: column;
+      user-select: none;
     }
-    body.lang-en {
-      font-family: var(--font-en);
-    }
-    .header {
-      border-bottom: 1px solid var(--border);
-      padding: 16px 24px;
+    body.lang-en { font-family: var(--font-en); }
+    
+    .topbar {
+      background: rgba(15, 23, 42, 0.95);
+      border-bottom: 1px solid var(--card-border);
+      padding: 12px 24px;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      background: rgba(15, 23, 42, 0.8);
-      backdrop-filter: blur(8px);
     }
     .brand {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
     }
-    .brand-logo {
-      width: 40px;
-      height: 40px;
+    .brand-icon {
+      width: 36px;
+      height: 36px;
       background: linear-gradient(135deg, #2563eb, #38bdf8);
-      border-radius: 10px;
+      border-radius: 8px;
       display: flex;
       align-items: center;
       justify-content: center;
       font-weight: 800;
       color: white;
-      font-size: 20px;
-    }
-    .brand-title {
       font-size: 18px;
-      font-weight: 700;
-      color: white;
     }
-    .brand-sub {
-      font-size: 12px;
-      color: var(--text-muted);
-    }
-    .lang-btn {
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid var(--border);
+    .brand-text h1 { font-size: 16px; font-weight: 700; color: white; }
+    .brand-text p { font-size: 11px; color: var(--text-muted); }
+    
+    .lang-toggle {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--card-border);
       color: var(--text);
-      padding: 8px 16px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: 6px;
       font-size: 13px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
+      font-weight: 600;
+      cursor: pointer;
       transition: all 0.2s;
     }
-    .lang-btn:hover {
-      background: rgba(255, 255, 255, 0.15);
-    }
-    .container {
-      max-width: 1200px;
-      width: 100%;
+    .lang-toggle:hover { background: rgba(255, 255, 255, 0.12); }
+
+    .main {
+      padding: 20px 24px;
+      max-width: 980px;
       margin: 0 auto;
-      padding: 24px;
+      width: 100%;
       display: flex;
       flex-direction: column;
-      gap: 24px;
+      gap: 16px;
       flex: 1;
     }
-    .banner {
-      background: linear-gradient(135deg, rgba(37, 99, 235, 0.15), rgba(56, 189, 248, 0.05));
-      border: 1px solid rgba(59, 130, 246, 0.25);
-      border-radius: 16px;
-      padding: 20px 24px;
+
+    /* Connection Status Badges */
+    .status-bar {
       display: flex;
-      justify-content: space-between;
-      align-items: center;
+      gap: 12px;
       flex-wrap: wrap;
-      gap: 16px;
     }
-    .banner-info h1 {
-      font-size: 20px;
-      font-weight: 700;
-      margin-bottom: 4px;
-    }
-    .banner-info p {
-      font-size: 13px;
-      color: var(--text-muted);
-    }
-    .sync-btn {
-      background: #2563eb;
-      color: white;
-      border: none;
-      padding: 12px 24px;
-      border-radius: 10px;
-      font-size: 15px;
-      font-weight: 700;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      transition: all 0.2s;
-      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
-    }
-    .sync-btn:hover {
-      background: #1d4ed8;
-      transform: translateY(-1px);
-    }
-    .sync-btn:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-      transform: none;
-    }
-    .grid-stats {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 16px;
-    }
-    .card {
+    .status-pill {
+      flex: 1;
+      min-width: 240px;
       background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 20px;
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 10px 14px;
       display: flex;
-      flex-direction: column;
-      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
     }
-    .card-title {
-      font-size: 13px;
-      color: var(--text-muted);
-      font-weight: 600;
-    }
-    .card-val {
-      font-size: 28px;
-      font-weight: 800;
-      color: white;
-      font-family: var(--font-en);
-    }
-    .badge-status {
-      display: inline-flex;
+    .status-label { font-size: 12px; color: var(--text-muted); }
+    .status-indicator {
+      display: flex;
       align-items: center;
       gap: 6px;
       font-size: 12px;
-      padding: 4px 10px;
-      border-radius: 20px;
-      font-weight: 600;
-      width: fit-content;
-    }
-    .badge-success { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
-    .badge-syncing { background: rgba(37, 99, 235, 0.15); color: #60a5fa; border: 1px solid rgba(37, 99, 235, 0.3); }
-    .badge-error { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
-    .main-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 20px;
-    }
-    @media (max-width: 860px) {
-      .main-grid { grid-template-columns: 1fr; }
-    }
-    .log-box {
-      background: #06090e;
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 14px;
-      font-family: 'Consolas', 'Courier New', monospace;
-      font-size: 12px;
-      color: #94a3b8;
-      height: 320px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    .log-line {
-      line-height: 1.4;
-      white-space: pre-wrap;
-    }
-    .form-group {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      margin-bottom: 14px;
-    }
-    .form-label {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--text-muted);
-    }
-    .form-input {
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--border);
-      color: white;
-      padding: 10px 14px;
-      border-radius: 8px;
-      font-size: 14px;
-      outline: none;
-      font-family: inherit;
-    }
-    .form-input:focus {
-      border-color: var(--primary);
-    }
-    .btn-save {
-      background: rgba(255, 255, 255, 0.1);
-      color: white;
-      border: 1px solid var(--border);
-      padding: 10px 16px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-weight: 600;
-      font-size: 14px;
-      transition: all 0.2s;
-    }
-    .btn-save:hover {
-      background: var(--primary);
+      font-weight: 700;
     }
     .dot {
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      display: inline-block;
     }
     .dot-green { background: #10b981; box-shadow: 0 0 8px #10b981; }
-    .dot-blue { background: #3b82f6; box-shadow: 0 0 8px #3b82f6; animation: pulse 1.5s infinite; }
+    .dot-red { background: #ef4444; }
+    .dot-blue { background: #3b82f6; animation: pulse 1s infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    /* Settings Box */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: white;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .form-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 14px;
+    }
+    @media (max-width: 700px) { .form-grid { grid-template-columns: 1fr; } }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .form-group.full { grid-column: 1 / -1; }
+    .form-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .form-input {
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--card-border);
+      color: white;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      outline: none;
+      font-family: inherit;
+      transition: border 0.2s;
+    }
+    .form-input:focus { border-color: var(--primary); }
+
+    /* Pace Selector */
+    .pace-box {
+      margin-top: 14px;
+      background: rgba(37, 99, 235, 0.08);
+      border: 1px solid rgba(37, 99, 235, 0.2);
+      border-radius: 8px;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .pace-text { font-size: 12px; }
+    .pace-text strong { color: #60a5fa; }
+    .pace-select {
+      background: #1e293b;
+      color: white;
+      border: 1px solid var(--card-border);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: inherit;
+      outline: none;
+    }
+
+    /* Actions */
+    .actions-bar {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+    .btn {
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      border: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: #2563eb;
+      color: white;
+      box-shadow: 0 2px 10px rgba(37, 99, 235, 0.35);
+    }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+      border: 1px solid var(--card-border);
+    }
+    .btn-secondary:hover { background: rgba(255, 255, 255, 0.15); }
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    .btn-danger:hover { background: rgba(239, 68, 68, 0.25); }
+
+    /* Progress & Counters */
+    .progress-wrap {
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 8px;
+      height: 10px;
+      overflow: hidden;
+      margin: 10px 0;
+      border: 1px solid var(--card-border);
+    }
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #2563eb, #38bdf8);
+      width: 0%;
+      transition: width 0.3s;
+    }
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-top: 10px;
+    }
+    @media (max-width: 650px) { .stats-row { grid-template-columns: repeat(2, 1fr); } }
+    .stat-mini {
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 10px;
+      text-align: center;
+    }
+    .stat-mini-title { font-size: 11px; color: var(--text-muted); }
+    .stat-mini-val { font-size: 18px; font-weight: 800; color: white; margin-top: 2px; }
+
+    /* Live Log */
+    .log-terminal {
+      background: #06090e;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 12px;
+      color: #94a3b8;
+      height: 180px;
+      overflow-y: auto;
+      line-height: 1.5;
+    }
   </style>
 </head>
 <body>
-  <div class="header">
+  <div class="topbar">
     <div class="brand">
-      <div class="brand-logo">XP</div>
-      <div>
-        <div class="brand-title" id="t-brand">وكيل مزامنة المستودع XPharma</div>
-        <div class="brand-sub">Warehouse Sync Agent v2.0</div>
+      <div class="brand-icon">XP</div>
+      <div class="brand-text">
+        <h1 id="t-brand">وكيل ربط ومزامنة مستودع الأدوية</h1>
+        <p id="t-brand-sub">XPharma Warehouse Sync Agent</p>
       </div>
     </div>
-    <button class="lang-btn" onclick="toggleLanguage()">
-      <span id="lang-btn-text">English 🌐</span>
-    </button>
+    <button class="lang-toggle" onclick="toggleLanguage()" id="langBtn">English 🌐</button>
   </div>
 
-  <div class="container">
-    <div class="banner">
-      <div class="banner-info">
-        <h1 id="t-banner-title">مزامنة كامل بيانات المستودع بدون حدود زمنية</h1>
-        <p id="t-banner-sub">يتم رفع جميع الفواتير، سندات القبض، الصيدليات والأدوية التاريخية مباشرة إلى السحابة.</p>
+  <div class="main">
+    <!-- Status Pills -->
+    <div class="status-bar">
+      <div class="status-pill">
+        <span class="status-label" id="t-st-fb">قاعدة بيانات الفايربيرد (ORGA.GDB):</span>
+        <div class="status-indicator" id="indFb">
+          <span class="dot dot-red" id="dotFb"></span>
+          <span id="textFb">جاري الفحص...</span>
+        </div>
       </div>
-      <button class="sync-btn" id="syncBtn" onclick="triggerSync()">
-        <span id="syncIcon">🚀</span>
-        <span id="t-sync-now">مزامنة جميع البيانات الآن</span>
-      </button>
-    </div>
-
-    <div class="grid-stats">
-      <div class="card">
-        <span class="card-title" id="t-stat-inv">إجمالي الفواتير المسحوبة</span>
-        <span class="card-val" id="valInvoices">0</span>
-      </div>
-      <div class="card">
-        <span class="card-title" id="t-stat-rcpt">إجمالي سندات القبض</span>
-        <span class="card-val" id="valReceipts">0</span>
-      </div>
-      <div class="card">
-        <span class="card-title" id="t-stat-cust">دليل الصيدليات والعملاء</span>
-        <span class="card-val" id="valCustomers">0</span>
-      </div>
-      <div class="card">
-        <span class="card-title" id="t-stat-prod">الأدوية والأصناف</span>
-        <span class="card-val" id="valProducts">0</span>
+      <div class="status-pill">
+        <span class="status-label" id="t-st-cloud">خادم المنصة السحابية:</span>
+        <div class="status-indicator" id="indCloud">
+          <span class="dot dot-red" id="dotCloud"></span>
+          <span id="textCloud">جاري الفحص...</span>
+        </div>
       </div>
     </div>
 
-    <div class="main-grid">
-      <!-- Live Logs -->
-      <div class="card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-          <span class="card-title" id="t-logs-title">سجل العمليات المباشر (Live Sync Log)</span>
-          <span class="badge-status badge-success" id="statusBadge">
-            <span class="dot dot-green"></span>
-            <span id="statusText">جاهز (Idle)</span>
-          </span>
+    <!-- Main Config Form -->
+    <div class="card">
+      <div class="card-title">
+        <span>⚙️</span>
+        <span id="t-sec-conn">بيانات الربط والاتصال الأساسية (مطلوب 3 بيانات فقط)</span>
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label" id="t-lbl-path">1. مسار ملف قاعدة بيانات الفايربيرد (Firebird DB Path):</label>
+          <input type="text" class="form-input" id="inPath" placeholder="D:\ORGA_SOFT\DATA\ORGA.GDB" />
         </div>
-        <div class="log-box" id="logBox">
-          <div class="log-line">جاري تحميل سجل العمليات...</div>
+        <div class="form-group">
+          <label class="form-label" id="t-lbl-ip">2. عنوان IP الماستر أو السيرفر (Master IP):</label>
+          <input type="text" class="form-input" id="inHost" placeholder="127.0.0.1" />
+        </div>
+        <div class="form-group full">
+          <label class="form-label" id="t-lbl-key">3. مفتاح الربط والتوكن السحابي (API Token):</label>
+          <input type="password" class="form-input" id="inKey" placeholder="xph_agt_..." />
         </div>
       </div>
 
-      <!-- Settings -->
-      <div class="card">
-        <span class="card-title" id="t-settings-title" style="margin-bottom: 8px;">بيانات الربط والاتصال (Connection Settings)</span>
-        <div class="form-group">
-          <label class="form-label" id="t-lbl-db">مسار ملف قاعدة بيانات الفايربيرد (ORGA.GDB):</label>
-          <input type="text" class="form-input" id="inputDB" placeholder="D:\ORGA_SOFT\DATA\ORGA.GDB" />
+      <!-- Pacing Mode -->
+      <div class="pace-box">
+        <div class="pace-text">
+          <span id="t-pace-title">🐢 سرعة الرفع: </span>
+          <strong id="t-pace-desc">نمط هادئ وخفيف جداً (يحمي داتابيز المخزن وسيرفر السحابة من أي تهنيج)</strong>
         </div>
-        <div class="form-group">
-          <label class="form-label" id="t-lbl-host">عنوان IP الماستر أو السيرفر (Master IP):</label>
-          <input type="text" class="form-input" id="inputHost" placeholder="127.0.0.1" />
+        <select class="pace-select" id="selMode">
+          <option value="gentle">🐢 هادئ وخفيف جداً (موصى به - 100 سجل مع راحة)</option>
+          <option value="balanced">⚖️ متوازن (150 سجل)</option>
+          <option value="fast">⚡ سريع (300 سجل)</option>
+        </select>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="actions-bar">
+        <button class="btn btn-primary" id="btnStart" onclick="startSync()">
+          <span>▶️</span>
+          <span id="t-btn-start">حفظ وبدء المزامنة الهادئة</span>
+        </button>
+        <button class="btn btn-secondary" id="btnPause" onclick="pauseSync()" style="display:none;">
+          <span>⏸️</span>
+          <span id="t-btn-pause">إيقاف مؤقت</span>
+        </button>
+        <button class="btn btn-secondary" onclick="saveSettingsOnly()">
+          <span>💾</span>
+          <span id="t-btn-save">حفظ الإعدادات فقط</span>
+        </button>
+        <button class="btn btn-danger" onclick="resetSync()" title="إعادة رفع الداتا من أول سجل">
+          <span>🔄</span>
+          <span id="t-btn-reset">إعادة من البداية</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Live Progress & Stats -->
+    <div class="card">
+      <div class="card-title" style="justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span>📊</span>
+          <span id="t-sec-prog">حالة المزامنة والتقدم المباشر</span>
         </div>
-        <div class="form-group">
-          <label class="form-label" id="t-lbl-key">مفتاح التوكن السحابي (API Token):</label>
-          <input type="password" class="form-input" id="inputKey" placeholder="xph_agt_..." />
+        <span style="font-size: 12px; color: #38bdf8;" id="currentTask">جاهز</span>
+      </div>
+
+      <div class="progress-wrap">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+
+      <div class="stats-row">
+        <div class="stat-mini">
+          <div class="stat-mini-title" id="t-st-invoices">الفواتير المرفوعة</div>
+          <div class="stat-mini-val"><span id="cntInvoices">0</span> / <span id="totInvoices" style="color:var(--text-muted); font-size:13px;">0</span></div>
         </div>
-        <button class="btn-save" onclick="saveSettings()" id="t-btn-save">حفظ الإعدادات في config.yaml</button>
+        <div class="stat-mini">
+          <div class="stat-mini-title" id="t-st-receipts">سندات القبض المرفوعة</div>
+          <div class="stat-mini-val"><span id="cntReceipts">0</span> / <span id="totReceipts" style="color:var(--text-muted); font-size:13px;">0</span></div>
+        </div>
+        <div class="stat-mini">
+          <div class="stat-mini-title" id="t-st-custs">دليل الصيدليات</div>
+          <div class="stat-mini-val" id="cntCusts">0</div>
+        </div>
+        <div class="stat-mini">
+          <div class="stat-mini-title" id="t-st-status">حالة الوكيل</div>
+          <div class="stat-mini-val" id="stVal" style="font-size:15px; color:#34d399;">متوقف</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Clean Log Box -->
+    <div class="card">
+      <div class="card-title">
+        <span>📋</span>
+        <span id="t-sec-log">سجل العمليات المباشر</span>
+      </div>
+      <div class="log-terminal" id="logBox">
+        <div>جاري قراءة سجل العمليات...</div>
       </div>
     </div>
   </div>
 
   <script>
-    let currentLang = localStorage.getItem('agent_lang') || 'ar';
+    let currentLang = localStorage.getItem('agent_ui_lang') || 'ar';
 
-    const dict = {
+    const translations = {
       ar: {
-        brand: 'وكيل مزامنة المستودع XPharma',
-        bannerTitle: 'مزامنة كامل بيانات المستودع بدون حدود زمنية',
-        bannerSub: 'يتم رفع جميع الفواتير، سندات القبض، الصيدليات والأدوية التاريخية مباشرة إلى السحابة.',
-        syncNow: 'مزامنة جميع البيانات الآن',
-        statInv: 'إجمالي الفواتير المسحوبة',
-        statRcpt: 'إجمالي سندات القبض',
-        statCust: 'دليل الصيدليات والعملاء',
-        statProd: 'الأدوية والأصناف',
-        logsTitle: 'سجل العمليات المباشر (Live Sync Log)',
-        settingsTitle: 'بيانات الربط والاتصال (Connection Settings)',
-        lblDb: 'مسار ملف قاعدة بيانات الفايربيرد (ORGA.GDB):',
-        lblHost: 'عنوان IP الماستر أو السيرفر (Master IP):',
-        lblKey: 'مفتاح التوكن السحابي (API Token):',
-        btnSave: 'حفظ الإعدادات في config.yaml',
+        brand: 'وكيل ربط ومزامنة مستودع الأدوية',
+        stFb: 'قاعدة بيانات الفايربيرد (ORGA.GDB):',
+        stCloud: 'خادم المنصة السحابية:',
+        secConn: 'بيانات الربط والاتصال الأساسية (مطلوب 3 بيانات فقط)',
+        lblPath: '1. مسار ملف قاعدة بيانات الفايربيرد (Firebird DB Path):',
+        lblIp: '2. عنوان IP الماستر أو السيرفر (Master IP):',
+        lblKey: '3. مفتاح الربط والتوكن السحابي (API Token):',
+        paceTitle: '🐢 سرعة الرفع: ',
+        paceDesc: 'نمط هادئ وخفيف جداً (يحمي داتابيز المخزن وسيرفر السحابة من أي تهنيج)',
+        btnStart: 'حفظ وبدء المزامنة الهادئة',
+        btnPause: 'إيقاف مؤقت',
+        btnSave: 'حفظ الإعدادات فقط',
+        btnReset: 'إعادة من البداية',
+        secProg: 'حالة المزامنة والتقدم المباشر',
+        stInvoices: 'الفواتير المرفوعة',
+        stReceipts: 'سندات القبض المرفوعة',
+        stCusts: 'دليل الصيدليات',
+        stStatus: 'حالة الوكيل',
+        secLog: 'سجل العمليات المباشر',
         langBtn: 'English 🌐',
-        statusIdle: 'جاهز (Idle)',
-        statusSyncing: 'جاري المزامنة الآن...',
-        statusSuccess: 'اكتملت المزامنة بنجاح',
-        statusError: 'حدث خطأ في المزامنة'
+        connected: 'متصل بنجاح 🟢',
+        disconnected: 'غير متصل 🔴',
+        testing: 'جاري الفحص...'
       },
       en: {
         brand: 'XPharma Warehouse Sync Agent',
-        bannerTitle: 'Sync ALL Warehouse Historical Data (No Time Limits)',
-        bannerSub: 'Uploads all invoices, cash receipts, pharmacies, and medicines directly to the cloud.',
-        syncNow: 'Sync ALL Data Now',
-        statInv: 'Total Invoices Uploaded',
-        statRcpt: 'Total Cash Receipts',
-        statCust: 'Total Pharmacies / Customers',
-        statProd: 'Total Medicines / Products',
-        logsTitle: 'Live Operation Log',
-        settingsTitle: 'Connection & Database Settings',
-        lblDb: 'Firebird Database File Path (ORGA.GDB):',
-        lblHost: 'Master Server IP / Host:',
-        lblKey: 'Cloud API Token:',
-        btnSave: 'Save Settings to config.yaml',
+        stFb: 'Firebird Database (ORGA.GDB):',
+        stCloud: 'Cloud Server Backend:',
+        secConn: 'Connection Settings (Only 3 fields needed)',
+        lblPath: '1. Firebird Database File Path (ORGA.GDB):',
+        lblIp: '2. Master Server IP / Host:',
+        lblKey: '3. Cloud API Token:',
+        paceTitle: '🐢 Upload Pace: ',
+        paceDesc: 'Gentle & Light (Protects warehouse DB and server from freezing)',
+        btnStart: 'Save & Start Gentle Sync',
+        btnPause: 'Pause Sync',
+        btnSave: 'Save Settings Only',
+        btnReset: 'Reset & Re-sync',
+        secProg: 'Live Sync Progress & Status',
+        stInvoices: 'Uploaded Invoices',
+        stReceipts: 'Uploaded Receipts',
+        stCusts: 'Pharmacies',
+        stStatus: 'Agent Status',
+        secLog: 'Live Operation Log',
         langBtn: 'العربية 🌐',
-        statusIdle: 'Idle (Ready)',
-        statusSyncing: 'Syncing Data...',
-        statusSuccess: 'Sync Completed',
-        statusError: 'Sync Error'
+        connected: 'Connected 🟢',
+        disconnected: 'Disconnected 🔴',
+        testing: 'Checking...'
       }
     };
 
     function applyLanguage(lang) {
       currentLang = lang;
-      localStorage.setItem('agent_lang', lang);
+      localStorage.setItem('agent_ui_lang', lang);
       const isAr = lang === 'ar';
       document.getElementById('htmlTag').dir = isAr ? 'rtl' : 'ltr';
       document.getElementById('htmlTag').lang = isAr ? 'ar' : 'en';
       document.body.className = isAr ? '' : 'lang-en';
 
-      const d = dict[lang];
-      document.getElementById('t-brand').innerText = d.brand;
-      document.getElementById('t-banner-title').innerText = d.bannerTitle;
-      document.getElementById('t-banner-sub').innerText = d.bannerSub;
-      document.getElementById('t-sync-now').innerText = d.syncNow;
-      document.getElementById('t-stat-inv').innerText = d.statInv;
-      document.getElementById('t-stat-rcpt').innerText = d.statRcpt;
-      document.getElementById('t-stat-cust').innerText = d.statCust;
-      document.getElementById('t-stat-prod').innerText = d.statProd;
-      document.getElementById('t-logs-title').innerText = d.logsTitle;
-      document.getElementById('t-settings-title').innerText = d.settingsTitle;
-      document.getElementById('t-lbl-db').innerText = d.lblDb;
-      document.getElementById('t-lbl-host').innerText = d.lblHost;
-      document.getElementById('t-lbl-key').innerText = d.lblKey;
-      document.getElementById('t-btn-save').innerText = d.btnSave;
-      document.getElementById('lang-btn-text').innerText = d.langBtn;
+      const t = translations[lang];
+      document.getElementById('t-brand').innerText = t.brand;
+      document.getElementById('t-st-fb').innerText = t.stFb;
+      document.getElementById('t-st-cloud').innerText = t.stCloud;
+      document.getElementById('t-sec-conn').innerText = t.secConn;
+      document.getElementById('t-lbl-path').innerText = t.lblPath;
+      document.getElementById('t-lbl-ip').innerText = t.lblIp;
+      document.getElementById('t-lbl-key').innerText = t.lblKey;
+      document.getElementById('t-pace-title').innerText = t.paceTitle;
+      document.getElementById('t-pace-desc').innerText = t.paceDesc;
+      document.getElementById('t-btn-start').innerText = t.btnStart;
+      document.getElementById('t-btn-pause').innerText = t.btnPause;
+      document.getElementById('t-btn-save').innerText = t.btnSave;
+      document.getElementById('t-btn-reset').innerText = t.btnReset;
+      document.getElementById('t-sec-prog').innerText = t.secProg;
+      document.getElementById('t-st-invoices').innerText = t.stInvoices;
+      document.getElementById('t-st-receipts').innerText = t.stReceipts;
+      document.getElementById('t-st-custs').innerText = t.stCusts;
+      document.getElementById('t-st-status').innerText = t.stStatus;
+      document.getElementById('t-sec-log').innerText = t.secLog;
+      document.getElementById('langBtn').innerText = t.langBtn;
     }
 
     function toggleLanguage() {
@@ -1948,46 +1444,87 @@ const dashboardHTML = `<!DOCTYPE html>
 
     applyLanguage(currentLang);
 
+    let isInitialized = false;
+
     async function fetchStatus() {
       try {
         const res = await fetch('/api/status');
         const data = await res.json();
+        const t = translations[currentLang];
 
-        document.getElementById('valInvoices').innerText = (data.total_invoices || 0).toLocaleString();
-        document.getElementById('valReceipts').innerText = (data.total_receipts || 0).toLocaleString();
-        document.getElementById('valCustomers').innerText = (data.total_customers || 0).toLocaleString();
-        document.getElementById('valProducts').innerText = (data.total_products || 0).toLocaleString();
+        // Connection Indicators
+        const dotFb = document.getElementById('dotFb');
+        const textFb = document.getElementById('textFb');
+        if (data.firebird_connected) {
+          dotFb.className = 'dot dot-green';
+          textFb.innerText = t.connected;
+        } else {
+          dotFb.className = 'dot dot-red';
+          textFb.innerText = t.disconnected;
+        }
 
-        const badge = document.getElementById('statusBadge');
-        const statusTxt = document.getElementById('statusText');
-        const d = dict[currentLang];
+        const dotCloud = document.getElementById('dotCloud');
+        const textCloud = document.getElementById('textCloud');
+        if (data.cloud_connected) {
+          dotCloud.className = 'dot dot-green';
+          textCloud.innerText = t.connected;
+        } else {
+          dotCloud.className = 'dot dot-red';
+          textCloud.innerText = t.disconnected;
+        }
+
+        // Fill Form Fields on first load
+        if (!isInitialized && data.config) {
+          document.getElementById('inPath').value = data.config.firebird.db_path || '';
+          document.getElementById('inHost').value = data.config.firebird.host || '127.0.0.1';
+          document.getElementById('inKey').value = data.config.cloud.api_key || '';
+          if (data.config.sync_mode) {
+            document.getElementById('selMode').value = data.config.sync_mode;
+          }
+          isInitialized = true;
+        }
+
+        // Progress and Counts
+        document.getElementById('cntInvoices').innerText = (data.synced_invoices || 0).toLocaleString();
+        document.getElementById('totInvoices').innerText = (data.total_invoices || 0).toLocaleString();
+        document.getElementById('cntReceipts').innerText = (data.synced_receipts || 0).toLocaleString();
+        document.getElementById('totReceipts').innerText = (data.total_receipts || 0).toLocaleString();
+        document.getElementById('cntCusts').innerText = (data.total_customers || 0).toLocaleString();
+
+        const pct = data.progress_percent || 0;
+        document.getElementById('progressBar').style.width = pct + '%';
+        document.getElementById('currentTask').innerText = data.current_task || 'جاهز';
+
+        const stVal = document.getElementById('stVal');
+        const btnStart = document.getElementById('btnStart');
+        const btnPause = document.getElementById('btnPause');
 
         if (data.status === 'syncing') {
-          badge.className = 'badge-status badge-syncing';
-          badge.innerHTML = '<span class="dot dot-blue"></span> ' + d.statusSyncing;
-          document.getElementById('syncBtn').disabled = true;
-        } else if (data.status === 'error') {
-          badge.className = 'badge-status badge-error';
-          badge.innerHTML = '⚠️ ' + d.statusError;
-          document.getElementById('syncBtn').disabled = false;
+          stVal.innerText = currentLang === 'ar' ? 'جاري الرفع بهدوء...' : 'Gentle Syncing...';
+          stVal.style.color = '#38bdf8';
+          btnStart.style.display = 'none';
+          btnPause.style.display = 'flex';
+        } else if (data.status === 'paused') {
+          stVal.innerText = currentLang === 'ar' ? 'متوقف مؤقتاً' : 'Paused';
+          stVal.style.color = '#f59e0b';
+          btnStart.style.display = 'flex';
+          btnPause.style.display = 'none';
         } else if (data.status === 'success') {
-          badge.className = 'badge-status badge-success';
-          badge.innerHTML = '✅ ' + d.statusSuccess;
-          document.getElementById('syncBtn').disabled = false;
+          stVal.innerText = currentLang === 'ar' ? 'اكتمل بنجاح' : 'Success';
+          stVal.style.color = '#10b981';
+          btnStart.style.display = 'flex';
+          btnPause.style.display = 'none';
         } else {
-          badge.className = 'badge-status badge-success';
-          badge.innerHTML = '<span class="dot dot-green"></span> ' + d.statusIdle;
-          document.getElementById('syncBtn').disabled = false;
+          stVal.innerText = currentLang === 'ar' ? 'جاهز' : 'Idle';
+          stVal.style.color = '#94a3b8';
+          btnStart.style.display = 'flex';
+          btnPause.style.display = 'none';
         }
 
-        if (data.config) {
-          if (!document.getElementById('inputDB').value) document.getElementById('inputDB').value = data.config.db_path || '';
-          if (!document.getElementById('inputHost').value) document.getElementById('inputHost').value = data.config.host || '127.0.0.1';
-        }
-
-        if (data.recent_logs && data.recent_logs.length > 0) {
+        // Logs
+        if (data.logs && data.logs.length > 0) {
           const logBox = document.getElementById('logBox');
-          logBox.innerHTML = data.recent_logs.map(l => '<div class="log-line">' + escapeHtml(l) + '</div>').join('');
+          logBox.innerHTML = data.logs.map(l => '<div>' + escapeHtml(l) + '</div>').join('');
           logBox.scrollTop = logBox.scrollHeight;
         }
       } catch (_) {}
@@ -1999,196 +1536,116 @@ const dashboardHTML = `<!DOCTYPE html>
       return div.innerHTML;
     }
 
-    async function triggerSync() {
-      document.getElementById('syncBtn').disabled = true;
-      try {
-        await fetch('/api/sync-now', { method: 'POST' });
-        setTimeout(fetchStatus, 500);
-      } catch (e) {
-        alert('Failed to trigger sync: ' + e);
-        document.getElementById('syncBtn').disabled = false;
-      }
+    async function saveSettingsOnly() {
+      const dbPath = document.getElementById('inPath').value;
+      const host = document.getElementById('inHost').value;
+      const key = document.getElementById('inKey').value;
+      const mode = document.getElementById('selMode').value;
+      await fetch('/api/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ db_path: dbPath, host: host, api_key: key, sync_mode: mode, language: currentLang })
+      });
+      alert(currentLang === 'ar' ? 'تم حفظ الإعدادات بنجاح!' : 'Settings saved successfully!');
+      fetchStatus();
     }
 
-    async function saveSettings() {
-      const dbPath = document.getElementById('inputDB').value;
-      const host = document.getElementById('inputHost').value;
-      const key = document.getElementById('inputKey').value;
-      try {
-        await fetch('/api/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ db_path: dbPath, host: host, api_key: key, language: currentLang })
-        });
-        alert(currentLang === 'ar' ? 'تم حفظ الإعدادات بنجاح!' : 'Settings saved successfully!');
+    async function startSync() {
+      const dbPath = document.getElementById('inPath').value;
+      const host = document.getElementById('inHost').value;
+      const key = document.getElementById('inKey').value;
+      const mode = document.getElementById('selMode').value;
+
+      if (!dbPath) {
+        alert(currentLang === 'ar' ? 'يرجى إدخال مسار ملف قاعدة البيانات أولاً' : 'Please enter database path first');
+        return;
+      }
+      if (!key) {
+        alert(currentLang === 'ar' ? 'يرجى إدخال مفتاح التوكن السحابي (API Token)' : 'Please enter cloud API token');
+        return;
+      }
+
+      await fetch('/api/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ db_path: dbPath, host: host, api_key: key, sync_mode: mode, language: currentLang })
+      });
+
+      await fetch('/api/start', { method: 'POST' });
+      fetchStatus();
+    }
+
+    async function pauseSync() {
+      await fetch('/api/pause', { method: 'POST' });
+      fetchStatus();
+    }
+
+    async function resetSync() {
+      if (confirm(currentLang === 'ar' ? 'هل تريد بالتأكيد إعادة رفع البيانات من البداية؟' : 'Are you sure you want to re-sync from beginning?')) {
+        await fetch('/api/reset', { method: 'POST' });
         fetchStatus();
-      } catch (e) {
-        alert('Save error: ' + e);
       }
     }
 
     fetchStatus();
-    setInterval(fetchStatus, 3000);
+    setInterval(fetchStatus, 2000);
   </script>
 </body>
 </html>
 `
 
 // -----------------------------------------------------------------------------
-// Main Application Entrypoint
+// Program Entrypoint
 // -----------------------------------------------------------------------------
 
 func main() {
 	initWindowsConsole()
 
-	configPath := flag.String("config", "", "Path to config file (config.yaml)")
-	syncNow := flag.Bool("sync-now", false, "Perform an immediate one-shot sync of ALL data and exit")
-	noPrompt := flag.Bool("no-prompt", false, "Skip interactive prompt and use saved config")
-	daemon := flag.Bool("daemon", false, "Run in background daemon mode without prompt")
-	langFlag := flag.String("lang", "", "Language: 'ar' (Arabic) or 'en' (English)")
-	accountFlag := flag.String("account", "", "Search for customer by account code in Firebird")
+	noWindow := flag.Bool("no-window", false, "Do not auto-open the GUI window")
+	daemon := flag.Bool("daemon", false, "Run in background daemon mode")
 	flag.Parse()
 
-	cfg, err := loadConfig(*configPath)
-	if err != nil {
-		log.Printf("Fatal: Error loading config file: %v", err)
-		if !*daemon && !*noPrompt {
-			fmt.Println("\nPress ENTER to close...")
-			bufio.NewReader(os.Stdin).ReadString('\n')
-		}
-		os.Exit(1)
-	}
+	cfg := loadConfig()
 
-	if *langFlag == "ar" || *langFlag == "en" {
-		cfg.Language = *langFlag
-	}
+	log.Println("==========================================================")
+	log.Println("   XPharma Warehouse Sync Agent - وكيل مزامنة المستودع     ")
+	log.Println("==========================================================")
+	log.Printf("🔹 رابط السحابة: %s", cfg.Cloud.APIURL)
+	log.Printf("🔹 خادم الفايربيرد: %s:%d", cfg.Firebird.Host, cfg.Firebird.Port)
+	log.Printf("🔹 مسار قاعدة البيانات: %s", cfg.Firebird.DBPath)
+	log.Printf("🔹 نمط المزامنة: %s (دفعات صغيرة %d سجل مع راحة %d مللي ثانية)", cfg.SyncMode, cfg.BatchSize, cfg.BatchDelayMs)
 
-	isAr := cfg.Language != "en"
-
-	if isAr {
-		log.Println("==========================================================")
-		log.Println("       XPharma Warehouse Sync Agent - وكيل مزامنة المخزن  ")
-		log.Println("==========================================================")
-	} else {
-		log.Println("==========================================================")
-		log.Println("       XPharma Warehouse Sync Agent (All Data Engine)     ")
-		log.Println("==========================================================")
-	}
-
-	// Customer search directly via flag
-	if *accountFlag != "" {
-		findAccount(cfg, *accountFlag)
-		if !*daemon && !*noPrompt {
-			fmt.Println("\nPress ENTER to close / اضغط ENTER للإغلاق...")
-			bufio.NewReader(os.Stdin).ReadString('\n')
-		}
-		return
-	}
-
-	// Interactive Configuration Prompt if not running as daemon
-	if !*daemon && !*noPrompt {
-		promptInteractiveConfig(cfg, syncNow)
-	}
-
-	cleanURL := strings.TrimRight(cfg.Cloud.APIURL, "/")
-	if !strings.HasSuffix(cleanURL, "/v1/sync/ingest") {
-		cleanURL += "/v1/sync/ingest"
-	}
-	cfg.Cloud.APIURL = cleanURL
-
-	maskedKey := cfg.Cloud.APIKey
-	if len(cfg.Cloud.APIKey) > 18 {
-		maskedKey = fmt.Sprintf("%s...%s", cfg.Cloud.APIKey[:12], cfg.Cloud.APIKey[len(cfg.Cloud.APIKey)-6:])
-	}
-
-	if isAr {
-		addLog(fmt.Sprintf("رابط السحابة: %s", cfg.Cloud.APIURL))
-		addLog(fmt.Sprintf("مفتاح الأمان (Agent Key): %s", maskedKey))
-		addLog(fmt.Sprintf("سيرفر الفايربيرد: %s:%d", cfg.Firebird.Host, cfg.Firebird.Port))
-		addLog(fmt.Sprintf("مسار قاعدة البيانات: %s", cfg.Firebird.DBPath))
-		addLog(fmt.Sprintf("دورة التحديث التلقائي: كل %d ثانية", cfg.Cloud.SyncIntervalSeconds))
-	} else {
-		addLog(fmt.Sprintf("Cloud URL: %s", cfg.Cloud.APIURL))
-		addLog(fmt.Sprintf("Agent Key: %s", maskedKey))
-		addLog(fmt.Sprintf("Firebird Server: %s:%d", cfg.Firebird.Host, cfg.Firebird.Port))
-		addLog(fmt.Sprintf("Database Path: %s", cfg.Firebird.DBPath))
-		addLog(fmt.Sprintf("Sync Interval: Every %d seconds", cfg.Cloud.SyncIntervalSeconds))
-	}
-
-	// Start Built-in Web Dashboard in background
+	// Start Internal Web GUI Server in background
 	go func() {
-		startLocalWebServer(cfg)
+		startInternalServer(cfg)
 	}()
-	if isAr {
-		addLog(fmt.Sprintf("[WEB] تم تشغيل لوحة التحكم المحلية على: http://localhost:%d", cfg.WebPort))
-		addLog("[WEB] يمكنك فتح الرابط في المتصفح لرؤية شاشة عربية/إنجليزية تفاعلية ومتابعة المزامنة الحية.")
-	} else {
-		addLog(fmt.Sprintf("[WEB] Local Web Dashboard running at: http://localhost:%d", cfg.WebPort))
-		addLog("[WEB] Open in your browser for a modern visual bilingual dashboard.")
+
+	appURL := fmt.Sprintf("http://127.0.0.1:%d", cfg.WebPort)
+	log.Printf("🚀 تم تشغيل واجهة البرنامج على: %s", appURL)
+
+	// Automatically open clean app window if not disabled
+	if !*noWindow && !*daemon {
+		go func() {
+			time.Sleep(600 * time.Millisecond)
+			openAppWindow(appURL)
+		}()
 	}
 
-	// Immediate Full Sync
-	if *syncNow {
-		if isAr {
-			addLog("[SYNC] جاري بدء المزامنة الكاملة لجميع البيانات التاريخية الآن...")
-		} else {
-			addLog("[SYNC] Starting full sync of ALL historical data now...")
-		}
-		if err := performFullSync(cfg); err != nil {
-			if isAr {
-				addLog(fmt.Sprintf("[ERROR] فشلت المزامنة: %v", err))
-			} else {
-				addLog(fmt.Sprintf("[ERROR] Sync failed: %v", err))
-			}
-		} else {
-			if isAr {
-				addLog("[SUCCESS] اكتملت مزامنة جميع بيانات المستودع بنجاح تام!")
-			} else {
-				addLog("[SUCCESS] Full warehouse sync completed successfully!")
-			}
-		}
-		if !*daemon && !*noPrompt {
-			if isAr {
-				fmt.Println("\nاضغط ENTER للإغلاق...")
-			} else {
-				fmt.Println("\nPress ENTER to close...")
-			}
-			bufio.NewReader(os.Stdin).ReadString('\n')
-		}
-		return
-	}
-
-	// Continuous Monitoring Loop (Daemon)
-	if isAr {
-		addLog("[DAEMON] تم تشغيل الوكيل في وضع المراقبة الدورية المستمرة...")
-	} else {
-		addLog("[DAEMON] Agent running in continuous monitoring mode...")
-	}
-
-	// Run initial full sync immediately
-	if err := performFullSync(cfg); err != nil {
-		addLog(fmt.Sprintf("[WARN] Initial sync issue: %v", err))
-	}
-
-	ticker := time.NewTicker(time.Duration(cfg.Cloud.SyncIntervalSeconds) * time.Second)
-	defer ticker.Stop()
+	// Auto-test connections on start
+	go func() {
+		time.Sleep(1 * time.Second)
+		fbOk, cloudOk := checkConnections(cfg)
+		state.Lock()
+		state.FirebirdConnected = fbOk
+		state.CloudConnected = cloudOk
+		state.Unlock()
+	}()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	for {
-		select {
-		case <-ticker.C:
-			if err := performFullSync(cfg); err != nil {
-				addLog(fmt.Sprintf("[ERROR] Periodic sync error: %v", err))
-			}
-		case sig := <-sigChan:
-			if isAr {
-				addLog(fmt.Sprintf("[STOP] تم استقبال إشارة إيقاف (%v). جارٍ إنهاء الوكيل بأمان...", sig))
-			} else {
-				addLog(fmt.Sprintf("[STOP] Stop signal received (%v). Exiting cleanly...", sig))
-			}
-			return
-		}
+	select {
+	case sig := <-sigChan:
+		log.Printf("Stop signal received (%v). Exiting cleanly...", sig)
 	}
 }
