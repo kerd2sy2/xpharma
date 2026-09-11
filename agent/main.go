@@ -32,11 +32,14 @@ import (
 // -----------------------------------------------------------------------------
 
 type Config struct {
-	Language     string `json:"language"`      // "ar" or "en"
-	SyncMode     string `json:"sync_mode"`     // "gentle", "balanced", "fast"
-	BatchSize    int    `json:"batch_size"`    // default 100 in gentle
-	BatchDelayMs int    `json:"batch_delay_ms"`// default 1500ms in gentle
-	WebPort      int    `json:"web_port"`
+	Language            string `json:"language"`              // "ar" or "en"
+	SyncMode            string `json:"sync_mode"`             // "gentle", "balanced", "fast"
+	BatchSize           int    `json:"batch_size"`            // default 100
+	BatchDelayMs        int    `json:"batch_delay_ms"`        // default 1500ms
+	AutoStart           bool   `json:"auto_start"`            // Auto-start on Windows reboot
+	AutoSync            bool   `json:"auto_sync"`             // Continuous background sync
+	SyncIntervalSeconds int    `json:"sync_interval_seconds"` // default 60s
+	WebPort             int    `json:"web_port"`
 
 	Cloud struct {
 		APIURL              string `json:"api_url"`
@@ -152,6 +155,7 @@ type EngineState struct {
 	Status            string    `json:"status"` // "idle", "syncing", "paused", "success", "error"
 	FirebirdConnected bool      `json:"firebird_connected"`
 	CloudConnected    bool      `json:"cloud_connected"`
+	AutoStartEnabled  bool      `json:"auto_start_enabled"`
 	CurrentTask       string    `json:"current_task"`
 	ProgressPercent   int       `json:"progress_percent"`
 	TotalInvoices     int       `json:"total_invoices"`
@@ -165,6 +169,7 @@ type EngineState struct {
 	Logs              []string  `json:"logs"`
 	ShouldPause       bool      `json:"-"`
 	IsRunning         bool      `json:"-"`
+	DaemonRunning     bool      `json:"-"`
 }
 
 var state = &EngineState{
@@ -182,6 +187,61 @@ func addLog(msg string) {
 	if len(state.Logs) > 80 {
 		state.Logs = state.Logs[len(state.Logs)-80:]
 	}
+}
+
+// -----------------------------------------------------------------------------
+// Windows Auto-Start (Registry & Task Scheduler)
+// -----------------------------------------------------------------------------
+
+func setWindowsAutoStart(enable bool) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	exePath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	exePath, _ = filepath.EvalSymlinks(exePath)
+
+	if enable {
+		// 1. Add to HKCU Run Key (Runs automatically when user logs into Windows without requiring Admin rights)
+		cmdReg := exec.Command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+			"/v", "XPharmaSyncAgent",
+			"/t", "REG_SZ",
+			"/d", fmt.Sprintf("\"%s\" -daemon", exePath),
+			"/f")
+		_ = cmdReg.Run()
+
+		// 2. Also register in Task Scheduler on logon for redundancy
+		cmdTask := exec.Command("schtasks", "/create",
+			"/tn", "XPharmaSyncAgent",
+			"/tr", fmt.Sprintf("\"%s\" -daemon", exePath),
+			"/sc", "onlogon",
+			"/f")
+		_ = cmdTask.Run()
+
+		addLog("تم تفعيل التشغيل التلقائي مع فتح الويندوز بنجاح (Auto-Start Enabled).")
+		return nil
+	} else {
+		cmdReg := exec.Command("reg", "delete", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+			"/v", "XPharmaSyncAgent",
+			"/f")
+		_ = cmdReg.Run()
+
+		cmdTask := exec.Command("schtasks", "/delete", "/tn", "XPharmaSyncAgent", "/f")
+		_ = cmdTask.Run()
+
+		addLog("تم إيقاف التشغيل التلقائي مع فتح الويندوز.")
+		return nil
+	}
+}
+
+func isWindowsAutoStartEnabled() bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	cmd := exec.Command("reg", "query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "XPharmaSyncAgent")
+	return cmd.Run() == nil
 }
 
 // -----------------------------------------------------------------------------
@@ -220,14 +280,14 @@ func initWindowsConsole() {
 }
 
 func openAppWindow(url string) {
-	// 1. Try Microsoft Edge in standalone App Mode (No address bar, looks native)
+	// 1. Try Microsoft Edge in standalone App Mode (No address bar, looks like native desktop window)
 	edgePaths := []string{
 		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
 		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
 	}
 	for _, p := range edgePaths {
 		if _, err := os.Stat(p); err == nil {
-			cmd := exec.Command(p, fmt.Sprintf("--app=%s", url), "--window-size=980,730")
+			cmd := exec.Command(p, fmt.Sprintf("--app=%s", url), "--window-size=980,750")
 			if err := cmd.Start(); err == nil {
 				return
 			}
@@ -242,7 +302,7 @@ func openAppWindow(url string) {
 	}
 	for _, p := range chromePaths {
 		if _, err := os.Stat(p); err == nil {
-			cmd := exec.Command(p, fmt.Sprintf("--app=%s", url), "--window-size=980,730")
+			cmd := exec.Command(p, fmt.Sprintf("--app=%s", url), "--window-size=980,750")
 			if err := cmd.Start(); err == nil {
 				return
 			}
@@ -295,11 +355,14 @@ const configFileName = "config.json"
 
 func loadConfig() *Config {
 	cfg := &Config{
-		Language:     "ar",
-		SyncMode:     "gentle",
-		BatchSize:    100,
-		BatchDelayMs: 1500, // 1.5 second pause between batches to protect DB and server
-		WebPort:      8080,
+		Language:            "ar",
+		SyncMode:            "gentle",
+		BatchSize:           100,
+		BatchDelayMs:        1500, // 1.5 second pause between batches to protect DB and server
+		AutoStart:           true, // Auto-start on boot
+		AutoSync:            true, // Continuous sync every 60s
+		SyncIntervalSeconds: 60,
+		WebPort:             8080,
 	}
 	cfg.Cloud.APIURL = "https://api.xpharma.cloud"
 	cfg.Cloud.SyncIntervalSeconds = 60
@@ -337,6 +400,9 @@ func loadConfig() *Config {
 	}
 	if cfg.BatchDelayMs <= 0 {
 		cfg.BatchDelayMs = 1500
+	}
+	if cfg.SyncIntervalSeconds <= 0 {
+		cfg.SyncIntervalSeconds = 60
 	}
 	return cfg
 }
@@ -478,7 +544,7 @@ func postBatch(apiURL, apiKey string, payload IngestionPayload) error {
 func runGentleSync(cfg *Config) {
 	state.Lock()
 	if state.IsRunning {
-		state.Lock()
+		state.Unlock()
 		return
 	}
 	state.IsRunning = true
@@ -497,7 +563,6 @@ func runGentleSync(cfg *Config) {
 	}()
 
 	isAr := cfg.Language != "en"
-	addLog("بدء عملية المزامنة الهادئة والآمنة لقاعدة بيانات المستودع...")
 
 	db, err := connectFirebird(cfg)
 	if err != nil {
@@ -515,7 +580,7 @@ func runGentleSync(cfg *Config) {
 	state.FirebirdConnected = true
 	state.Unlock()
 
-	// 1. Get total counts from DB using fast count queries
+	// 1. Quick indexed counts
 	var totalInvoices, totalReceipts int
 	_ = db.QueryRow("SELECT COUNT(*) FROM INVOICES_H").Scan(&totalInvoices)
 	_ = db.QueryRow("SELECT COUNT(*) FROM INCOME_CASH").Scan(&totalReceipts)
@@ -524,8 +589,6 @@ func runGentleSync(cfg *Config) {
 	state.TotalInvoices = totalInvoices
 	state.TotalReceipts = totalReceipts
 	state.Unlock()
-
-	addLog(fmt.Sprintf("إجمالي السجلات بالمستودع: %d فاتورة و %d سند قبض.", totalInvoices, totalReceipts))
 
 	batchSize := cfg.BatchSize
 	if batchSize <= 0 {
@@ -536,97 +599,101 @@ func runGentleSync(cfg *Config) {
 		delayMs = 1500
 	}
 
-	// 2. Sync Customers first (gentle batches)
-	addLog("مزامنة دليل الصيدليات والعملاء...")
-	custRows, err := db.Query("SELECT * FROM ACCOUNTS")
-	if err == nil {
-		cols, _ := custRows.Columns()
-		idIdx, nameIdx, phoneIdx, addrIdx := -1, -1, -1, -1
-		for idx, c := range cols {
-			u := strings.ToUpper(strings.TrimSpace(c))
-			if idIdx == -1 && (u == "ACCOUNT_ID" || u == "ACC_ID" || u == "ID" || u == "CODE") {
-				idIdx = idx
-			}
-			if nameIdx == -1 && (u == "ACCOUNT_NAME" || u == "ACC_NAME" || u == "NAME") {
-				nameIdx = idx
-			}
-			if phoneIdx == -1 && (u == "PHONE" || u == "TEL" || u == "MOBILE") {
-				phoneIdx = idx
-			}
-			if addrIdx == -1 && (u == "ADDRESS" || u == "ADDR") {
-				addrIdx = idx
-			}
-		}
+	// 2. Sync Customers once if not yet loaded
+	state.Lock()
+	currCusts := state.TotalCustomers
+	state.Unlock()
 
-		var custList []CustomerSyncItem
-		if idIdx != -1 && nameIdx != -1 {
-			for custRows.Next() {
-				vals := make([]interface{}, len(cols))
-				valPtrs := make([]interface{}, len(cols))
-				for i := range vals {
-					valPtrs[i] = &vals[i]
+	if currCusts == 0 {
+		custRows, err := db.Query("SELECT * FROM ACCOUNTS")
+		if err == nil {
+			cols, _ := custRows.Columns()
+			idIdx, nameIdx, phoneIdx, addrIdx := -1, -1, -1, -1
+			for idx, c := range cols {
+				u := strings.ToUpper(strings.TrimSpace(c))
+				if idIdx == -1 && (u == "ACCOUNT_ID" || u == "ACC_ID" || u == "ID" || u == "CODE") {
+					idIdx = idx
 				}
-				if err := custRows.Scan(valPtrs...); err != nil {
-					continue
+				if nameIdx == -1 && (u == "ACCOUNT_NAME" || u == "ACC_NAME" || u == "NAME") {
+					nameIdx = idx
 				}
-				var cCode, cName, cPhone, cAddr string
-				if vals[idIdx] != nil {
-					cCode = strings.TrimSpace(fmt.Sprintf("%v", vals[idIdx]))
+				if phoneIdx == -1 && (u == "PHONE" || u == "TEL" || u == "MOBILE") {
+					phoneIdx = idx
 				}
-				if vals[nameIdx] != nil {
-					switch v := vals[nameIdx].(type) {
-					case []byte:
-						cName = decodeText(v)
-					default:
-						cName = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
+				if addrIdx == -1 && (u == "ADDRESS" || u == "ADDR") {
+					addrIdx = idx
+				}
+			}
+
+			var custList []CustomerSyncItem
+			if idIdx != -1 && nameIdx != -1 {
+				for custRows.Next() {
+					vals := make([]interface{}, len(cols))
+					valPtrs := make([]interface{}, len(cols))
+					for i := range vals {
+						valPtrs[i] = &vals[i]
+					}
+					if err := custRows.Scan(valPtrs...); err != nil {
+						continue
+					}
+					var cCode, cName, cPhone, cAddr string
+					if vals[idIdx] != nil {
+						cCode = strings.TrimSpace(fmt.Sprintf("%v", vals[idIdx]))
+					}
+					if vals[nameIdx] != nil {
+						switch v := vals[nameIdx].(type) {
+						case []byte:
+							cName = decodeText(v)
+						default:
+							cName = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
+						}
+					}
+					if phoneIdx != -1 && vals[phoneIdx] != nil {
+						switch v := vals[phoneIdx].(type) {
+						case []byte:
+							cPhone = decodeText(v)
+						default:
+							cPhone = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
+						}
+					}
+					if addrIdx != -1 && vals[addrIdx] != nil {
+						switch v := vals[addrIdx].(type) {
+						case []byte:
+							cAddr = decodeText(v)
+						default:
+							cAddr = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
+						}
+					}
+					if cCode != "" && cName != "" && cCode != "0" {
+						custList = append(custList, CustomerSyncItem{
+							Code:    cCode,
+							Name:    cName,
+							Phone:   cPhone,
+							Address: cAddr,
+						})
 					}
 				}
-				if phoneIdx != -1 && vals[phoneIdx] != nil {
-					switch v := vals[phoneIdx].(type) {
-					case []byte:
-						cPhone = decodeText(v)
-					default:
-						cPhone = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
-					}
+			}
+			custRows.Close()
+
+			state.Lock()
+			state.TotalCustomers = len(custList)
+			state.Unlock()
+
+			// Upload in small chunks of 300
+			for i := 0; i < len(custList); i += 300 {
+				end := i + 300
+				if end > len(custList) {
+					end = len(custList)
 				}
-				if addrIdx != -1 && vals[addrIdx] != nil {
-					switch v := vals[addrIdx].(type) {
-					case []byte:
-						cAddr = decodeText(v)
-					default:
-						cAddr = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
-					}
-				}
-				if cCode != "" && cName != "" && cCode != "0" {
-					custList = append(custList, CustomerSyncItem{
-						Code:    cCode,
-						Name:    cName,
-						Phone:   cPhone,
-						Address: cAddr,
-					})
-				}
+				p := IngestionPayload{Customers: custList[i:end]}
+				_ = postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, p)
+				time.Sleep(400 * time.Millisecond)
 			}
 		}
-		custRows.Close()
-
-		state.Lock()
-		state.TotalCustomers = len(custList)
-		state.Unlock()
-
-		// Upload customers in small batches of 300 with pause
-		for i := 0; i < len(custList); i += 300 {
-			end := i + 300
-			if end > len(custList) {
-				end = len(custList)
-			}
-			p := IngestionPayload{Customers: custList[i:end]}
-			_ = postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, p)
-			time.Sleep(500 * time.Millisecond)
-		}
-		addLog(fmt.Sprintf("تم رفع %d صيدلية وعميل بنجاح.", len(custList)))
 	}
 
-	// 3. Gentle Chunked Sync of INVOICES using Indexed ID Lookup (Very light on Firebird)
+	// 3. Gentle Indexed Invoices Extraction (Takes < 2ms, frees DB locks immediately)
 	lastInvID := cfg.Cursors.LastInvoiceID
 	syncedInvoices := 0
 
@@ -634,15 +701,13 @@ func runGentleSync(cfg *Config) {
 		state.Lock()
 		if state.ShouldPause {
 			state.Status = "paused"
-			state.CurrentTask = "المزامنة متوقفة مؤقتاً بطلب من المستخدم"
+			state.CurrentTask = "المزامنة متوقفة مؤقتاً"
 			state.Unlock()
-			addLog("تم إيقاف المزامنة مؤقتاً.")
 			return
 		}
 		state.CurrentTask = fmt.Sprintf("رفع الفواتير بهدوء... تم رفع %d فاتورة", syncedInvoices)
 		state.Unlock()
 
-		// Read a small batch using Primary Key index: WHERE INVOICES_H_ID > lastInvID (Takes < 2ms)
 		q := fmt.Sprintf(`
 			SELECT FIRST %d 
 				INVOICES_H_ID, DATE_D, TOTAL_TOTAL, TOTAL_DISCOUNT1, TOTAL_MONY_PAY, ACCOUNT_ID
@@ -653,7 +718,6 @@ func runGentleSync(cfg *Config) {
 
 		rows, err := db.Query(q)
 		if err != nil {
-			addLog(fmt.Sprintf("خطأ في قراءة دفعة الفواتير: %v", err))
 			break
 		}
 
@@ -687,18 +751,16 @@ func runGentleSync(cfg *Config) {
 				Status:          "synced",
 			})
 		}
-		rows.Close() // Immediately close to release Firebird locks
+		rows.Close() // Release locks immediately
 
 		if len(batch) == 0 {
-			// All invoices have been fetched!
 			break
 		}
 
-		// Upload batch to Cloud
 		payload := IngestionPayload{Invoices: batch}
 		if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, payload); err != nil {
-			addLog(fmt.Sprintf("تنبيه: فشل إرسال دفعة فواتير (%v)، سيتم إعادة المحاولة...", err))
-			time.Sleep(3 * time.Second)
+			addLog(fmt.Sprintf("تنبيه أثناء إرسال الدفعة: %v", err))
+			time.Sleep(2 * time.Second)
 			continue
 		}
 
@@ -714,14 +776,11 @@ func runGentleSync(cfg *Config) {
 		}
 		state.Unlock()
 
-		addLog(fmt.Sprintf("تم رفع دفعة فواتير (%d فاتورة) - إجمالي المرفوع: %d ... [استراحة %d مللي ثانية]",
-			len(batch), syncedInvoices, delayMs))
-
 		// Gentle Pause to let warehouse server and ERP breathe freely
 		time.Sleep(time.Duration(delayMs) * time.Millisecond)
 	}
 
-	// 4. Gentle Chunked Sync of CASH RECEIPTS
+	// 4. Gentle Indexed Cash Receipts Extraction
 	lastRcptID := cfg.Cursors.LastReceiptID
 	syncedRcpts := 0
 
@@ -729,7 +788,6 @@ func runGentleSync(cfg *Config) {
 		state.Lock()
 		if state.ShouldPause {
 			state.Status = "paused"
-			state.CurrentTask = "المزامنة متوقفة مؤقتاً"
 			state.Unlock()
 			return
 		}
@@ -785,7 +843,7 @@ func runGentleSync(cfg *Config) {
 
 		payload := IngestionPayload{CashReceipts: batch}
 		if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, payload); err != nil {
-			time.Sleep(3 * time.Second)
+			time.Sleep(2 * time.Second)
 			continue
 		}
 
@@ -798,22 +856,63 @@ func runGentleSync(cfg *Config) {
 		state.SyncedReceipts = syncedRcpts
 		state.Unlock()
 
-		addLog(fmt.Sprintf("تم رفع دفعة سندات قبض (%d سند) - إجمالي المرفوع: %d ... [استراحة]", len(batch), syncedRcpts))
 		time.Sleep(time.Duration(delayMs) * time.Millisecond)
 	}
 
 	state.Lock()
 	state.Status = "success"
-	state.CurrentTask = "اكتملت المزامنة بنجاح تام بدون أي تهنيج!"
+	state.CurrentTask = "المزامنة مكتملة وفي وضع المراقبة والتحديث التلقائي المستمر"
 	state.ProgressPercent = 100
 	state.LastSyncTime = time.Now()
 	state.CloudConnected = true
 	state.Unlock()
 
 	if isAr {
-		addLog("اكتملت مزامنة جميع بيانات المستودع بنجاح تام مع السحابة!")
+		addLog(fmt.Sprintf("اكتملت المزامنة بنجاح! آخر فحص: %s", time.Now().Format("15:04:05")))
 	} else {
-		addLog("All warehouse data synced successfully without server strain!")
+		addLog(fmt.Sprintf("Sync cycle completed successfully! Last checked: %s", time.Now().Format("15:04:05")))
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Continuous Background Sync Loop (المراقبة والتحديث التلقائي المستمر)
+// -----------------------------------------------------------------------------
+
+func startContinuousDaemon(cfg *Config) {
+	state.Lock()
+	if state.DaemonRunning {
+		state.Unlock()
+		return
+	}
+	state.DaemonRunning = true
+	state.Unlock()
+
+	addLog("تم تفعيل وضع التحديث التلقائي المستمر (يعمل في الخلفية باستمرار).")
+
+	// Run initial sync cycle
+	if cfg.Firebird.DBPath != "" && cfg.Cloud.APIKey != "" {
+		runGentleSync(cfg)
+	}
+
+	interval := cfg.SyncIntervalSeconds
+	if interval <= 0 {
+		interval = 60
+	}
+	ticker := time.NewTicker(time.Duration(interval) * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		state.Lock()
+		autoSync := cfg.AutoSync
+		state.Unlock()
+
+		if !autoSync {
+			continue
+		}
+
+		if cfg.Firebird.DBPath != "" && cfg.Cloud.APIKey != "" {
+			runGentleSync(cfg)
+		}
 	}
 }
 
@@ -834,6 +933,7 @@ func startInternalServer(cfg *Config) {
 			"progress_percent":    state.ProgressPercent,
 			"firebird_connected":  state.FirebirdConnected,
 			"cloud_connected":     state.CloudConnected,
+			"auto_start_enabled":  state.AutoStartEnabled,
 			"total_invoices":      state.TotalInvoices,
 			"synced_invoices":     state.SyncedInvoices,
 			"total_receipts":      state.TotalReceipts,
@@ -853,11 +953,13 @@ func startInternalServer(cfg *Config) {
 			return
 		}
 		var req struct {
-			DBPath   string `json:"db_path"`
-			Host     string `json:"host"`
-			APIKey   string `json:"api_key"`
-			SyncMode string `json:"sync_mode"`
-			Language string `json:"language"`
+			DBPath    string `json:"db_path"`
+			Host      string `json:"host"`
+			APIKey    string `json:"api_key"`
+			SyncMode  string `json:"sync_mode"`
+			AutoStart bool   `json:"auto_start"`
+			AutoSync  bool   `json:"auto_sync"`
+			Language  string `json:"language"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
 			if req.DBPath != "" {
@@ -882,9 +984,18 @@ func startInternalServer(cfg *Config) {
 					cfg.BatchDelayMs = 300
 				}
 			}
+			cfg.AutoStart = req.AutoStart
+			cfg.AutoSync = req.AutoSync
 			if req.Language == "ar" || req.Language == "en" {
 				cfg.Language = req.Language
 			}
+
+			// Apply Auto-Start to Windows Registry
+			_ = setWindowsAutoStart(cfg.AutoStart)
+			state.Lock()
+			state.AutoStartEnabled = isWindowsAutoStartEnabled()
+			state.Unlock()
+
 			saveConfig(cfg)
 			fbOk, cloudOk := checkConnections(cfg)
 			state.Lock()
@@ -897,12 +1008,16 @@ func startInternalServer(cfg *Config) {
 	})
 
 	mux.HandleFunc("/api/start", func(w http.ResponseWriter, r *http.Request) {
-		go runGentleSync(cfg)
+		cfg.AutoSync = true
+		saveConfig(cfg)
+		go startContinuousDaemon(cfg)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "started"})
 	})
 
 	mux.HandleFunc("/api/pause", func(w http.ResponseWriter, r *http.Request) {
+		cfg.AutoSync = false
+		saveConfig(cfg)
 		state.Lock()
 		state.ShouldPause = true
 		state.Unlock()
@@ -1133,6 +1248,20 @@ const appHTML = `<!DOCTYPE html>
       outline: none;
     }
 
+    /* Auto-Start Box */
+    .autostart-box {
+      margin-top: 12px;
+      background: rgba(16, 185, 129, 0.06);
+      border: 1px solid rgba(16, 185, 129, 0.22);
+      border-radius: 8px;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
     /* Actions */
     .actions-bar {
       display: flex;
@@ -1213,7 +1342,7 @@ const appHTML = `<!DOCTYPE html>
       font-family: 'Consolas', 'Courier New', monospace;
       font-size: 12px;
       color: #94a3b8;
-      height: 180px;
+      height: 160px;
       overflow-y: auto;
       line-height: 1.5;
     }
@@ -1284,11 +1413,30 @@ const appHTML = `<!DOCTYPE html>
         </select>
       </div>
 
+      <!-- Auto-Start with Windows Box -->
+      <div class="autostart-box">
+        <div>
+          <div style="font-weight: 700; font-size: 13px; color: #34d399; display: flex; align-items: center; gap: 6px;">
+            <span>⚡</span>
+            <span id="t-autostart-title">التشغيل التلقائي الذاتي (Auto-Start & Background Sync)</span>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;" id="t-autostart-desc">
+            يبدأ البرنامج في العمل ذاتياً عند تشغيل الكمبيوتر أو إعادة تشغيله، ويقوم بتحديث البيانات دورياً كل 60 ثانية بدون تدخل يدوي.
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; font-weight: 600;">
+            <input type="checkbox" id="chkAutoStart" checked style="width: 18px; height: 18px; cursor: pointer; accent-color: #10b981;">
+            <span id="t-chk-autostart">تشغيل تلقائي مع إقلاع الويندوز</span>
+          </label>
+        </div>
+      </div>
+
       <!-- Action Buttons -->
       <div class="actions-bar">
         <button class="btn btn-primary" id="btnStart" onclick="startSync()">
           <span>▶️</span>
-          <span id="t-btn-start">حفظ وبدء المزامنة الهادئة</span>
+          <span id="t-btn-start">حفظ وبدء المزامنة التلقائية</span>
         </button>
         <button class="btn btn-secondary" id="btnPause" onclick="pauseSync()" style="display:none;">
           <span>⏸️</span>
@@ -1334,7 +1482,7 @@ const appHTML = `<!DOCTYPE html>
         </div>
         <div class="stat-mini">
           <div class="stat-mini-title" id="t-st-status">حالة الوكيل</div>
-          <div class="stat-mini-val" id="stVal" style="font-size:15px; color:#34d399;">متوقف</div>
+          <div class="stat-mini-val" id="stVal" style="font-size:15px; color:#34d399;">مفعل ويعمل في الخلفية</div>
         </div>
       </div>
     </div>
@@ -1365,7 +1513,10 @@ const appHTML = `<!DOCTYPE html>
         lblKey: '3. مفتاح الربط والتوكن السحابي (API Token):',
         paceTitle: '🐢 سرعة الرفع: ',
         paceDesc: 'نمط هادئ وخفيف جداً (يحمي داتابيز المخزن وسيرفر السحابة من أي تهنيج)',
-        btnStart: 'حفظ وبدء المزامنة الهادئة',
+        autostartTitle: 'التشغيل التلقائي الذاتي (Auto-Start & Background Sync)',
+        autostartDesc: 'يبدأ البرنامج في العمل ذاتياً عند تشغيل الكمبيوتر أو إعادة تشغيله، ويقوم بتحديث البيانات دورياً كل 60 ثانية بدون تدخل يدوي.',
+        chkAutostart: 'تشغيل تلقائي مع إقلاع الويندوز',
+        btnStart: 'حفظ وبدء المزامنة التلقائية',
         btnPause: 'إيقاف مؤقت',
         btnSave: 'حفظ الإعدادات فقط',
         btnReset: 'إعادة من البداية',
@@ -1390,7 +1541,10 @@ const appHTML = `<!DOCTYPE html>
         lblKey: '3. Cloud API Token:',
         paceTitle: '🐢 Upload Pace: ',
         paceDesc: 'Gentle & Light (Protects warehouse DB and server from freezing)',
-        btnStart: 'Save & Start Gentle Sync',
+        autostartTitle: 'Auto-Start & Continuous Background Sync',
+        autostartDesc: 'Starts automatically when Windows boots or restarts, and syncs new data continuously every 60 seconds.',
+        chkAutostart: 'Auto-start with Windows',
+        btnStart: 'Save & Start Auto Sync',
         btnPause: 'Pause Sync',
         btnSave: 'Save Settings Only',
         btnReset: 'Reset & Re-sync',
@@ -1425,6 +1579,9 @@ const appHTML = `<!DOCTYPE html>
       document.getElementById('t-lbl-key').innerText = t.lblKey;
       document.getElementById('t-pace-title').innerText = t.paceTitle;
       document.getElementById('t-pace-desc').innerText = t.paceDesc;
+      document.getElementById('t-autostart-title').innerText = t.autostartTitle;
+      document.getElementById('t-autostart-desc').innerText = t.autostartDesc;
+      document.getElementById('t-chk-autostart').innerText = t.chkAutostart;
       document.getElementById('t-btn-start').innerText = t.btnStart;
       document.getElementById('t-btn-pause').innerText = t.btnPause;
       document.getElementById('t-btn-save').innerText = t.btnSave;
@@ -1481,6 +1638,7 @@ const appHTML = `<!DOCTYPE html>
           if (data.config.sync_mode) {
             document.getElementById('selMode').value = data.config.sync_mode;
           }
+          document.getElementById('chkAutoStart').checked = data.config.auto_start !== false;
           isInitialized = true;
         }
 
@@ -1510,13 +1668,13 @@ const appHTML = `<!DOCTYPE html>
           btnStart.style.display = 'flex';
           btnPause.style.display = 'none';
         } else if (data.status === 'success') {
-          stVal.innerText = currentLang === 'ar' ? 'اكتمل بنجاح' : 'Success';
+          stVal.innerText = currentLang === 'ar' ? 'نشط ويعمل تلقائياً في الخلفية' : 'Active Auto-Sync (Background)';
           stVal.style.color = '#10b981';
-          btnStart.style.display = 'flex';
-          btnPause.style.display = 'none';
+          btnStart.style.display = 'none';
+          btnPause.style.display = 'flex';
         } else {
-          stVal.innerText = currentLang === 'ar' ? 'جاهز' : 'Idle';
-          stVal.style.color = '#94a3b8';
+          stVal.innerText = currentLang === 'ar' ? 'نشط في الخلفية' : 'Background Active';
+          stVal.style.color = '#10b981';
           btnStart.style.display = 'flex';
           btnPause.style.display = 'none';
         }
@@ -1541,10 +1699,11 @@ const appHTML = `<!DOCTYPE html>
       const host = document.getElementById('inHost').value;
       const key = document.getElementById('inKey').value;
       const mode = document.getElementById('selMode').value;
+      const autoStart = document.getElementById('chkAutoStart').checked;
       await fetch('/api/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ db_path: dbPath, host: host, api_key: key, sync_mode: mode, language: currentLang })
+        body: JSON.stringify({ db_path: dbPath, host: host, api_key: key, sync_mode: mode, auto_start: autoStart, auto_sync: true, language: currentLang })
       });
       alert(currentLang === 'ar' ? 'تم حفظ الإعدادات بنجاح!' : 'Settings saved successfully!');
       fetchStatus();
@@ -1555,6 +1714,7 @@ const appHTML = `<!DOCTYPE html>
       const host = document.getElementById('inHost').value;
       const key = document.getElementById('inKey').value;
       const mode = document.getElementById('selMode').value;
+      const autoStart = document.getElementById('chkAutoStart').checked;
 
       if (!dbPath) {
         alert(currentLang === 'ar' ? 'يرجى إدخال مسار ملف قاعدة البيانات أولاً' : 'Please enter database path first');
@@ -1568,7 +1728,7 @@ const appHTML = `<!DOCTYPE html>
       await fetch('/api/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ db_path: dbPath, host: host, api_key: key, sync_mode: mode, language: currentLang })
+        body: JSON.stringify({ db_path: dbPath, host: host, api_key: key, sync_mode: mode, auto_start: autoStart, auto_sync: true, language: currentLang })
       });
 
       await fetch('/api/start', { method: 'POST' });
@@ -1602,7 +1762,7 @@ func main() {
 	initWindowsConsole()
 
 	noWindow := flag.Bool("no-window", false, "Do not auto-open the GUI window")
-	daemon := flag.Bool("daemon", false, "Run in background daemon mode")
+	daemon := flag.Bool("daemon", false, "Run in background daemon mode without window")
 	flag.Parse()
 
 	cfg := loadConfig()
@@ -1613,7 +1773,16 @@ func main() {
 	log.Printf("🔹 رابط السحابة: %s", cfg.Cloud.APIURL)
 	log.Printf("🔹 خادم الفايربيرد: %s:%d", cfg.Firebird.Host, cfg.Firebird.Port)
 	log.Printf("🔹 مسار قاعدة البيانات: %s", cfg.Firebird.DBPath)
-	log.Printf("🔹 نمط المزامنة: %s (دفعات صغيرة %d سجل مع راحة %d مللي ثانية)", cfg.SyncMode, cfg.BatchSize, cfg.BatchDelayMs)
+	log.Printf("🔹 نمط المزامنة: %s (دفعات %d سجل مع راحة %d مللي ثانية)", cfg.SyncMode, cfg.BatchSize, cfg.BatchDelayMs)
+	log.Printf("🔹 التشغيل التلقائي مع فتح الويندوز: %v", cfg.AutoStart)
+
+	// Ensure Windows Auto-Start is configured according to config
+	if cfg.AutoStart {
+		_ = setWindowsAutoStart(true)
+		state.Lock()
+		state.AutoStartEnabled = true
+		state.Unlock()
+	}
 
 	// Start Internal Web GUI Server in background
 	go func() {
@@ -1621,14 +1790,25 @@ func main() {
 	}()
 
 	appURL := fmt.Sprintf("http://127.0.0.1:%d", cfg.WebPort)
-	log.Printf("🚀 تم تشغيل واجهة البرنامج على: %s", appURL)
 
-	// Automatically open clean app window if not disabled
-	if !*noWindow && !*daemon {
+	// If launched with -daemon (e.g. from Windows boot):
+	// Do NOT open window automatically, start continuous daemon directly
+	if *daemon {
+		log.Println("🔄 يعمل البرنامج في خلفية الويندوز بمزامنة مستمرة تلقائية...")
+		go startContinuousDaemon(cfg)
+	} else if !*noWindow {
+		// Launched by user double clicking:
+		// Open the clean desktop app window
+		log.Printf("🚀 تم تشغيل واجهة البرنامج على: %s", appURL)
 		go func() {
 			time.Sleep(600 * time.Millisecond)
 			openAppWindow(appURL)
 		}()
+
+		// If configured with valid settings, also run continuous sync in background
+		if cfg.Firebird.DBPath != "" && cfg.Cloud.APIKey != "" && cfg.AutoSync {
+			go startContinuousDaemon(cfg)
+		}
 	}
 
 	// Auto-test connections on start
