@@ -371,7 +371,7 @@ export default function HomeScreen() {
         columnWrapperStyle={isTablet ? styles.columnWrapper : undefined}
         contentContainerStyle={[
           styles.listContent,
-          { paddingTop: topInset + 64 + 20 },
+          { paddingTop: topInset + 60 + 44 },
         ]}
         showsVerticalScrollIndicator={false}
         showsHorizontalScrollIndicator={false}
@@ -380,7 +380,7 @@ export default function HomeScreen() {
             refreshing={refreshing}
             onRefresh={onRefresh}
             colors={[colors.primary]}
-            progressViewOffset={topInset + 64}
+            progressViewOffset={topInset + 60}
           />
         }
         renderItem={({ item }) => {
@@ -549,12 +549,17 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Soft bottom feathering transition (Eliminates harsh cut completely without a box) */}
+        {/* Soft bottom feathering transition (Ultra-smooth 9-stop easing curve) */}
         <LinearGradient
           colors={[
             colors.bg,
-            'rgba(249, 247, 253, 0.85)',
+            'rgba(249, 247, 253, 0.98)',
+            'rgba(249, 247, 253, 0.90)',
+            'rgba(249, 247, 253, 0.76)',
+            'rgba(249, 247, 253, 0.56)',
             'rgba(249, 247, 253, 0.35)',
+            'rgba(249, 247, 253, 0.16)',
+            'rgba(249, 247, 253, 0.04)',
             'rgba(249, 247, 253, 0)',
           ]}
           style={styles.featherEdge}
@@ -681,10 +686,10 @@ const styles = StyleSheet.create({
   },
   featherEdge: {
     position: 'absolute',
-    bottom: -18,
+    bottom: -38,
     left: 0,
     right: 0,
-    height: 18,
+    height: 38,
   },
   brandRow: {
     flexDirection: 'row-reverse',
