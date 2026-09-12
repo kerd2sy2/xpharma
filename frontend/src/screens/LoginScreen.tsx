@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Dimensions,
   Platform,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
@@ -11,20 +10,18 @@ import {
   useColorScheme,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, FontAwesome } from '@expo/vector-icons';
 import { useAuth } from '@/context/AuthContext';
 
 const { width } = Dimensions.get('window');
 
 export default function LoginScreen() {
+  const insets = useSafeAreaInsets();
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
   const { loginWithGoogle, loginWithApple, isAuthenticating, error, clearError } = useAuth();
 
-  // Conditionals per user explicit requirements:
-  // Android -> ONLY Google Sign-In
-  // iOS -> ONLY Apple Sign-In
-  // Web / Others -> Google Sign-In (for browser preview compatibility)
   const showGoogle = Platform.OS === 'android' || Platform.OS === 'web';
   const showApple = Platform.OS === 'ios';
 
@@ -42,9 +39,15 @@ export default function LoginScreen() {
     appleBtnText: isDark ? '#000000' : '#FFFFFF',
   };
 
+  const topInset = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 0);
+
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: themeColors.bg }]}>
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+    <View style={[styles.container, { backgroundColor: themeColors.bg, paddingTop: topInset }]}>
+      <StatusBar
+        barStyle={isDark ? 'light-content' : 'dark-content'}
+        backgroundColor={themeColors.bg}
+        translucent={false}
+      />
 
       <View style={styles.content}>
         {/* Top Decorative / Brand Glow */}
@@ -56,11 +59,11 @@ export default function LoginScreen() {
           </View>
 
           <Text style={[styles.brandTitle, { color: themeColors.textPrimary }]}>
-            XPharma
+            إكس فارما
           </Text>
 
           <View style={styles.badgeContainer}>
-            <Text style={styles.badgeText}>B2B PHARMACEUTICAL NETWORK</Text>
+            <Text style={styles.badgeText}>شبكة توزيع الأدوية والمستودعات</Text>
           </View>
 
           <Text style={[styles.subtitle, { color: themeColors.textSecondary }]}>
@@ -166,7 +169,7 @@ export default function LoginScreen() {
           </Text>
         </View>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 

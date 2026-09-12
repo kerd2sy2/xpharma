@@ -7,8 +7,8 @@ import {
   Modal,
   Platform,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -16,6 +16,7 @@ import {
   useColorScheme,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, FontAwesome, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as SecureStore from 'expo-secure-store';
 import { useAuth } from '@/context/AuthContext';
@@ -42,6 +43,7 @@ interface ActivePortalState {
 }
 
 export default function HomeScreen() {
+  const insets = useSafeAreaInsets();
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
   const { user, logout } = useAuth();
@@ -60,7 +62,7 @@ export default function HomeScreen() {
   const [verifyModalVisible, setVerifyModalVisible] = useState(false);
   const [selectedWarehouseForModal, setSelectedWarehouseForModal] = useState<Warehouse | null>(null);
 
-  // Active Portal State (opened when pharmacy is verified)
+  // Active Portal State
   const [activePortal, setActivePortal] = useState<ActivePortalState | null>(null);
 
   const colors = {
@@ -101,9 +103,6 @@ export default function HomeScreen() {
     }
   };
 
-  /**
-   * Save custom order to SecureStore
-   */
   const saveCustomOrder = async (list: Warehouse[]) => {
     try {
       const idOrder = list.map((w) => w.id);
@@ -117,7 +116,6 @@ export default function HomeScreen() {
     try {
       const list = await fetchWarehouses(user?.id);
 
-      // Check local storage for existing verified tokens for each warehouse
       const updatedList: Warehouse[] = await Promise.all(
         list.map(async (wh) => {
           const session = await getPharmacySession(wh.id);
@@ -133,7 +131,6 @@ export default function HomeScreen() {
         })
       );
 
-      // Apply saved custom order
       const orderedList = await applyCustomOrder(updatedList);
       setWarehouses(orderedList);
     } catch (e) {
@@ -157,7 +154,6 @@ export default function HomeScreen() {
     const session = await getPharmacySession(wh.id);
 
     if (session && session.token) {
-      // Already verified -> Open portal directly
       setActivePortal({
         warehouse: wh,
         token: session.token,
@@ -165,7 +161,6 @@ export default function HomeScreen() {
         pharmacyName: session.pharmacy_name,
       });
     } else {
-      // First time -> Open bottom sheet modal
       setSelectedWarehouseForModal(wh);
       setVerifyModalVisible(true);
     }
@@ -195,7 +190,6 @@ export default function HomeScreen() {
     });
   };
 
-  // Reorder handlers
   const moveWarehouse = (index: number, direction: 'up' | 'down') => {
     const newIndex = direction === 'up' ? index - 1 : index + 1;
     if (newIndex < 0 || newIndex >= warehouses.length) return;
@@ -209,7 +203,7 @@ export default function HomeScreen() {
     saveCustomOrder(newList);
   };
 
-  const sortPreset = (type: 'linkedFirst' | 'alphabetical' | 'default') => {
+  const sortPreset = (type: 'linkedFirst' | 'alphabetical') => {
     let sorted = [...warehouses];
     if (type === 'linkedFirst') {
       sorted.sort((a, b) => (b.is_linked ? 1 : 0) - (a.is_linked ? 1 : 0));
@@ -221,15 +215,14 @@ export default function HomeScreen() {
     setSortModalVisible(false);
   };
 
-  // Visual branding for each warehouse card
+  // Visual branding with Pure Arabic titles
   const getWarehouseVisual = (wh: Warehouse) => {
     const name = (wh.name || '').toLowerCase();
     if (name.includes('sheikh') || name.includes('الشيخ')) {
       return {
         headerColor: '#1E3A8A',
         iconName: 'hospital-building' as const,
-        brandLetter: 'S',
-        brandTag: 'SHEIKH PHARMA',
+        brandTag: 'مستودع الشيخ',
         accentColor: '#3B82F6',
       };
     }
@@ -237,8 +230,7 @@ export default function HomeScreen() {
       return {
         headerColor: '#064E3B',
         iconName: 'pill' as const,
-        brandLetter: 'T',
-        brandTag: 'TABARAK PHARMA',
+        brandTag: 'مستودع تبارك',
         accentColor: '#10B981',
       };
     }
@@ -246,8 +238,7 @@ export default function HomeScreen() {
       return {
         headerColor: '#4C1D95',
         iconName: 'flask-round-bottom' as const,
-        brandLetter: 'A',
-        brandTag: 'ABO AMIRA',
+        brandTag: 'مستودع أبو عميرة',
         accentColor: '#8B5CF6',
       };
     }
@@ -255,21 +246,18 @@ export default function HomeScreen() {
       return {
         headerColor: '#0F172A',
         iconName: 'shield-plus' as const,
-        brandLetter: 'X',
-        brandTag: 'X-PHARMA LOGISTICS',
+        brandTag: 'إكس فارما',
         accentColor: '#0EA5E9',
       };
     }
     return {
       headerColor: '#1E293B',
       iconName: 'cube-outline' as const,
-      brandLetter: wh.name ? wh.name.charAt(0) : 'W',
-      brandTag: 'PHARMA DEPOT',
+      brandTag: 'مستودع معتمد',
       accentColor: '#2563EB',
     };
   };
 
-  // If a warehouse portal is open, render WarehousePortalScreen
   if (activePortal) {
     return (
       <WarehousePortalScreen
@@ -282,17 +270,26 @@ export default function HomeScreen() {
     );
   }
 
+  // Safe area padding for Android status bar
+  const topInset = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 0);
+
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]}>
-      {/* Top Header: Avatar on left, Brand on right */}
+    <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
+      <StatusBar
+        barStyle={isDark ? 'light-content' : 'dark-content'}
+        backgroundColor={colors.card}
+        translucent={false}
+      />
+
+      {/* Top Header: Brand on RIGHT, Avatar on LEFT (Strict RTL Layout) */}
       <View style={[styles.topBar, { borderBottomColor: colors.border, backgroundColor: colors.card }]}>
-        {/* Right side: Brand */}
+        {/* Right side: Brand in Arabic */}
         <View style={styles.brandRow}>
-          <Text style={[styles.brandText, { color: colors.text }]}>XPharma</Text>
+          <Text style={[styles.brandText, { color: colors.text }]}>إكس فارما</Text>
           <View style={styles.brandDot} />
         </View>
 
-        {/* Left side: Pharmacist Avatar (Opens Profile Modal) */}
+        {/* Left side: Avatar opens Profile Modal */}
         <TouchableOpacity
           style={styles.avatarButton}
           onPress={() => setProfileModalVisible(true)}
@@ -303,7 +300,7 @@ export default function HomeScreen() {
           ) : (
             <View style={[styles.avatarPlaceholder, { backgroundColor: colors.primary }]}>
               <Text style={styles.avatarLetter}>
-                {user?.name ? user.name.charAt(0).toUpperCase() : 'U'}
+                {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
               </Text>
             </View>
           )}
@@ -311,9 +308,17 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Sub-header Bar with Warehouse Count & Reorder Button */}
+      {/* Sub-header Bar: Title on RIGHT, Reorder button on LEFT */}
       <View style={styles.controlsBar}>
-        {/* Reorder Button */}
+        {/* Right: Section Title */}
+        <View style={styles.sectionHeaderCol}>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>مستودعات الأدوية</Text>
+          <Text style={[styles.sectionSubtitle, { color: colors.secondaryText }]}>
+            {warehouses.length} مستودع متاح
+          </Text>
+        </View>
+
+        {/* Left: Reorder Button */}
         <TouchableOpacity
           style={[styles.reorderBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
           onPress={() => setSortModalVisible(true)}
@@ -322,14 +327,6 @@ export default function HomeScreen() {
           <Ionicons name="swap-vertical" size={16} color={colors.primary} />
           <Text style={[styles.reorderBtnText, { color: colors.primary }]}>ترتيب المستودعات</Text>
         </TouchableOpacity>
-
-        {/* Section Title */}
-        <View style={styles.sectionHeaderCol}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>مستودعات الأدوية</Text>
-          <Text style={[styles.sectionSubtitle, { color: colors.secondaryText }]}>
-            {warehouses.length} مستودع نشط
-          </Text>
-        </View>
       </View>
 
       {/* Warehouses 2-Column Grid */}
@@ -355,27 +352,27 @@ export default function HomeScreen() {
             >
               {/* Image / Banner Container at Top */}
               <View style={[styles.imageBanner, { backgroundColor: visual.headerColor }]}>
-                {/* Logo & Emblem */}
+                {/* Logo / Crest */}
                 <View style={[styles.crestCircle, { borderColor: visual.accentColor }]}>
-                  <MaterialCommunityIcons name={visual.iconName} size={32} color="#FFFFFF" />
+                  <MaterialCommunityIcons name={visual.iconName} size={30} color="#FFFFFF" />
                 </View>
                 <Text style={styles.brandBadgeText}>{visual.brandTag}</Text>
 
-                {/* Status Badge in Top Corner */}
+                {/* Status Badge in Top Right Corner */}
                 {item.is_linked ? (
                   <View style={styles.cardStatusLinked}>
-                    <Ionicons name="checkmark-circle" size={13} color="#10B981" />
+                    <Ionicons name="checkmark-circle" size={12} color="#10B981" />
                     <Text style={styles.cardStatusLinkedText}>مربوط</Text>
                   </View>
                 ) : (
                   <View style={styles.cardStatusUnlinked}>
                     <Ionicons name="lock-open-outline" size={11} color="#FFFFFF" />
-                    <Text style={styles.cardStatusUnlinkedText}>ربط</Text>
+                    <Text style={styles.cardStatusUnlinkedText}>غير مربوط</Text>
                   </View>
                 )}
               </View>
 
-              {/* Warehouse Details Underneath Image */}
+              {/* Warehouse Name & Pill Underneath */}
               <View style={styles.cardBody}>
                 <Text style={[styles.warehouseName, { color: colors.text }]} numberOfLines={2}>
                   {item.name}
@@ -403,13 +400,13 @@ export default function HomeScreen() {
             <View style={styles.loadingBox}>
               <ActivityIndicator size="large" color={colors.primary} />
               <Text style={[styles.loadingText, { color: colors.secondaryText }]}>
-                جارٍ تحميل مستودعات الأدوية...
+                جارٍ فحص وتحميل المستودعات من السيرفر...
               </Text>
             </View>
           ) : (
             <View style={[styles.emptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Ionicons name="cube-outline" size={42} color={colors.secondaryText} />
-              <Text style={[styles.emptyText, { color: colors.text }]}>لا توجد مستودعات متاحة</Text>
+              <Text style={[styles.emptyText, { color: colors.text }]}>لا توجد مستودعات متاحة حالياً</Text>
             </View>
           )
         }
@@ -437,7 +434,7 @@ export default function HomeScreen() {
           <View style={styles.modalOverlay}>
             <TouchableWithoutFeedback>
               <View style={[styles.profileCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                {/* Close Button */}
+                {/* Close Button on Left */}
                 <TouchableOpacity
                   style={[styles.closeIconBtn, { borderColor: colors.border }]}
                   onPress={() => setProfileModalVisible(false)}
@@ -452,7 +449,7 @@ export default function HomeScreen() {
                   ) : (
                     <View style={[styles.profileAvatarPlaceholder, { backgroundColor: colors.primary }]}>
                       <Text style={styles.profileAvatarLetter}>
-                        {user?.name ? user.name.charAt(0).toUpperCase() : 'U'}
+                        {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
                       </Text>
                     </View>
                   )}
@@ -465,9 +462,9 @@ export default function HomeScreen() {
                   </View>
                 </View>
 
-                {/* Info */}
+                {/* Info in Pure Arabic */}
                 <Text style={[styles.profileName, { color: colors.text }]}>
-                  {user?.name || 'مستخدم XPharma'}
+                  {user?.name || 'صيدلي معتمد'}
                 </Text>
                 <Text style={[styles.profileEmail, { color: colors.secondaryText }]}>
                   {user?.email || 'حساب موثق'}
@@ -481,11 +478,11 @@ export default function HomeScreen() {
 
                 <View style={[styles.profileDivider, { backgroundColor: colors.border }]} />
 
-                {/* Security Tag */}
+                {/* Security Row */}
                 <View style={styles.profileSecurityRow}>
                   <Ionicons name="shield-checkmark" size={16} color={colors.success} />
                   <Text style={[styles.profileSecurityText, { color: colors.secondaryText }]}>
-                    جلسة اتصال مشفرة 256-bit
+                    جلسة اتصال آمنة ومشفّرة 256-bit
                   </Text>
                 </View>
 
@@ -526,9 +523,9 @@ export default function HomeScreen() {
                 </View>
 
                 <View style={styles.sortHeader}>
-                  <Text style={[styles.sortTitle, { color: colors.text }]}>ترتيب وتقسيم المستودعات</Text>
+                  <Text style={[styles.sortTitle, { color: colors.text }]}>ترتيب وتنظيم المستودعات</Text>
                   <Text style={[styles.sortSubtitle, { color: colors.secondaryText }]}>
-                    رتب المستودعات حسب رغبتك وسيتم حفظ الترتيب تلقائياً
+                    حدد الترتيب المفضل لديك وسيتم حفظه في التطبيق تلقائياً
                   </Text>
                 </View>
 
@@ -547,13 +544,13 @@ export default function HomeScreen() {
                     onPress={() => sortPreset('alphabetical')}
                   >
                     <Ionicons name="text" size={15} color={colors.primary} />
-                    <Text style={[styles.presetBtnText, { color: colors.text }]}>أبجدياً</Text>
+                    <Text style={[styles.presetBtnText, { color: colors.text }]}>أبجدياً (أ - ي)</Text>
                   </TouchableOpacity>
                 </View>
 
-                {/* Interactive Manual Reorder List */}
+                {/* Manual Reorder List */}
                 <Text style={[styles.reorderListLabel, { color: colors.secondaryText }]}>
-                  الترتيب اليدوي (استخدم الأسهم للتحريك):
+                  الترتيب اليدوي (استخدم الأسهم للتقديم أو التأخير):
                 </Text>
 
                 <ScrollView style={styles.reorderScroll} showsVerticalScrollIndicator={false}>
@@ -562,7 +559,7 @@ export default function HomeScreen() {
                       key={wh.id}
                       style={[styles.reorderItem, { backgroundColor: colors.bg, borderColor: colors.border }]}
                     >
-                      {/* Arrows */}
+                      {/* Arrow Buttons on Left */}
                       <View style={styles.arrowsCol}>
                         <TouchableOpacity
                           style={[styles.arrowBtn, idx === 0 && styles.disabledArrow]}
@@ -585,14 +582,14 @@ export default function HomeScreen() {
                         </TouchableOpacity>
                       </View>
 
-                      {/* Status */}
+                      {/* Linked Badge */}
                       {wh.is_linked && (
                         <View style={[styles.reorderLinkedBadge, { backgroundColor: colors.successSoft }]}>
                           <Text style={[styles.reorderLinkedText, { color: colors.success }]}>مربوط</Text>
                         </View>
                       )}
 
-                      {/* Warehouse Name */}
+                      {/* Warehouse Name on Right */}
                       <Text style={[styles.reorderWhName, { color: colors.text }]} numberOfLines={1}>
                         {wh.name}
                       </Text>
@@ -612,14 +609,14 @@ export default function HomeScreen() {
                   style={[styles.doneBtn, { backgroundColor: colors.primary }]}
                   onPress={() => setSortModalVisible(false)}
                 >
-                  <Text style={styles.doneBtnText}>حفظ وإغلاق</Text>
+                  <Text style={styles.doneBtnText}>حفظ الترتيب وإغلاق</Text>
                 </TouchableOpacity>
               </View>
             </TouchableWithoutFeedback>
           </View>
         </TouchableWithoutFeedback>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -628,11 +625,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   topBar: {
-    flexDirection: 'row',
+    flexDirection: 'row-reverse',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: PADDING_HORIZONTAL,
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderBottomWidth: 1,
   },
   brandRow: {
@@ -685,12 +682,12 @@ const styles = StyleSheet.create({
     borderColor: '#FFFFFF',
   },
   controlsBar: {
-    flexDirection: 'row',
+    flexDirection: 'row-reverse',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: PADDING_HORIZONTAL,
-    paddingTop: 14,
-    paddingBottom: 8,
+    paddingTop: 16,
+    paddingBottom: 10,
   },
   sectionHeaderCol: {
     alignItems: 'flex-end',
@@ -701,7 +698,7 @@ const styles = StyleSheet.create({
   },
   sectionSubtitle: {
     fontSize: 12,
-    marginTop: 1,
+    marginTop: 2,
   },
   reorderBtn: {
     flexDirection: 'row-reverse',
@@ -722,6 +719,7 @@ const styles = StyleSheet.create({
     paddingBottom: 28,
   },
   columnWrapper: {
+    flexDirection: 'row-reverse',
     justifyContent: 'space-between',
     marginBottom: CARD_GAP,
   },
@@ -737,32 +735,31 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   imageBanner: {
-    height: 112,
+    height: 110,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
   },
   crestCircle: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     backgroundColor: 'rgba(255, 255, 255, 0.15)',
     borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 6,
+    marginBottom: 5,
   },
   brandBadgeText: {
     color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.6,
-    opacity: 0.9,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
   cardStatusLinked: {
     position: 'absolute',
     top: 8,
-    left: 8,
+    right: 8,
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 3,
@@ -779,7 +776,7 @@ const styles = StyleSheet.create({
   cardStatusUnlinked: {
     position: 'absolute',
     top: 8,
-    left: 8,
+    right: 8,
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 3,
@@ -855,7 +852,7 @@ const styles = StyleSheet.create({
   closeIconBtn: {
     position: 'absolute',
     top: 14,
-    right: 14,
+    left: 14,
     width: 32,
     height: 32,
     borderRadius: 16,

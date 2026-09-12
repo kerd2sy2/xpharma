@@ -2,15 +2,17 @@ import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Platform,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   useColorScheme,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import {
   fetchPharmacyBalance,
@@ -118,8 +120,16 @@ export default function WarehousePortalScreen({
     }
   };
 
+  const insets = useSafeAreaInsets();
+  const topInset = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 0);
+
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]}>
+    <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
+      <StatusBar
+        barStyle={isDark ? 'light-content' : 'dark-content'}
+        backgroundColor={colors.card}
+        translucent={false}
+      />
       {/* Top Header */}
       <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
         <TouchableOpacity
@@ -132,7 +142,7 @@ export default function WarehousePortalScreen({
         </TouchableOpacity>
 
         <View style={styles.headerTitles}>
-          <View style={styles.warehousePill}>
+          <View style={[styles.warehousePill, { backgroundColor: colors.primarySoft }]}>
             <Ionicons name="business" size={13} color={colors.primary} />
             <Text style={[styles.warehousePillText, { color: colors.primary }]}>{warehouse.name}</Text>
           </View>
@@ -149,7 +159,7 @@ export default function WarehousePortalScreen({
           onPress={onRefresh}
           activeOpacity={0.8}
         >
-          <Ionicons name="refresh" size={16} color={colors.primary} />
+          <Ionicons name="refresh" size={18} color={colors.primary} />
         </TouchableOpacity>
       </View>
 
@@ -560,7 +570,7 @@ export default function WarehousePortalScreen({
           )}
         </ScrollView>
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
