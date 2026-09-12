@@ -366,7 +366,7 @@ export default function HomeScreen() {
 
     try {
       setSubmittingRequest(true);
-      const res = await fetch('https://xpharma.cloud/v1/warehouses/request', {
+      const res = await fetch('https://api.xpharma.cloud/v1/warehouses/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
