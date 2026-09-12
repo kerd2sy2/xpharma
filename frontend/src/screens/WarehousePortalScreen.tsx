@@ -123,9 +123,8 @@ export default function WarehousePortalScreen({
   const sections = [
     {
       key: 'purchases' as SectionKey,
-      num: '1',
       title: 'المشتريات',
-      desc: 'فواتير الصيدلي اللي أخدها من المخزن',
+      desc: 'سجل فواتير المشتريات المستلمة',
       amount: balance?.total_purchases,
       count: invoices.length,
       icon: 'cart-outline' as const,
@@ -134,9 +133,8 @@ export default function WarehousePortalScreen({
     },
     {
       key: 'returns' as SectionKey,
-      num: '2',
       title: 'المرتجعات',
-      desc: 'الفواتير أو الأصناف اللي رجعها للمخزن',
+      desc: 'سجل فواتير المرتجع للمخزن',
       amount: balance?.total_returns,
       count: returns.length,
       icon: 'arrow-undo-outline' as const,
@@ -145,9 +143,8 @@ export default function WarehousePortalScreen({
     },
     {
       key: 'receipts' as SectionKey,
-      num: '3',
       title: 'النقدية',
-      desc: 'الفلوس اللي دفعها أو ادفعتله',
+      desc: 'سجل المقبوضات والدفعات المالية',
       amount: balance?.total_paid,
       count: receipts.length,
       icon: 'cash-outline' as const,
@@ -156,7 +153,6 @@ export default function WarehousePortalScreen({
     },
     {
       key: 'statement' as SectionKey,
-      num: '4',
       title: 'كشف حساب',
       desc: 'حركات الحساب التفصيلية والرصيد',
       count: statement.length,
@@ -443,25 +439,16 @@ export default function WarehousePortalScreen({
                 {/* تفاصيل الكرت في المنتصف */}
                 <View style={styles.navInfoCol}>
                   <Text style={[styles.navTitle, { color: colors.text }]}>
-                    {sec.num}. {sec.title}
+                    {sec.title}
                   </Text>
                   <Text style={[styles.navDesc, { color: colors.secondaryText }]} numberOfLines={1}>
                     {sec.desc}
                   </Text>
                 </View>
 
-                {/* سهم الانتقال والمبلغ شمال الكرت */}
+                {/* سهم الانتقال شمال الكرت */}
                 <View style={styles.navActionCol}>
                   <Ionicons name="chevron-back" size={20} color={colors.secondaryText} />
-                  {sec.amount !== undefined ? (
-                    <Text style={[styles.navAmount, { color: sec.color }]}>
-                      {formatCurrency(sec.amount)}
-                    </Text>
-                  ) : (
-                    <Text style={[styles.navCountBadge, { color: colors.secondaryText }]}>
-                      {sec.count} حركة
-                    </Text>
-                  )}
                 </View>
               </TouchableOpacity>
             ))}
@@ -593,16 +580,8 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   navActionCol: {
-    alignItems: 'flex-start',
-    gap: 4,
-  },
-  navAmount: {
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  navCountBadge: {
-    fontSize: 11,
-    fontWeight: '600',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 
   // بار ملخص القسم في الصفحة المنفصلة
