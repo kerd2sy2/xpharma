@@ -126,37 +126,38 @@ export default function WarehousePortalScreen({
     <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
       <StatusBar
         barStyle="dark-content"
-        backgroundColor={colors.card}
+        backgroundColor={colors.bg}
         translucent={false}
       />
-      {/* Top Header */}
-      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+      {/* Top Header: Sleek, Modern, Seamless */}
+      <View style={styles.header}>
+        {/* Back Button */}
         <TouchableOpacity
-          style={[styles.headerBtn, { borderColor: colors.border }]}
+          style={[styles.backBtnCircle, { backgroundColor: colors.card, borderColor: colors.border }]}
           onPress={onBack}
-          activeOpacity={0.8}
+          activeOpacity={0.7}
         >
-          <Ionicons name="arrow-forward" size={18} color={colors.text} />
-          <Text style={[styles.headerBtnText, { color: colors.text }]}>المخازن</Text>
+          <Ionicons name="arrow-forward" size={20} color={colors.text} />
         </TouchableOpacity>
 
-        <View style={styles.headerTitles}>
-          <View style={[styles.warehousePill, { backgroundColor: colors.primarySoft }]}>
-            <Ionicons name="business" size={13} color={colors.primary} />
-            <Text style={[styles.warehousePillText, { color: colors.primary }]}>{warehouse.name}</Text>
+        {/* Center: Warehouse Title & Pharmacy Info */}
+        <View style={styles.headerCenter}>
+          <Text style={[styles.headerWarehouseName, { color: colors.text }]} numberOfLines={1}>
+            {warehouse.name}
+          </Text>
+          <View style={styles.headerSubtitleRow}>
+            <View style={styles.liveDot} />
+            <Text style={[styles.headerSubText, { color: colors.secondaryText }]} numberOfLines={1}>
+              {pharmacyName || 'الصيدلية'} • كود: {pharmacyCode}
+            </Text>
           </View>
-          <Text style={[styles.pharmacyNameText, { color: colors.text }]} numberOfLines={1}>
-            {pharmacyName || 'الصيدلية'}
-          </Text>
-          <Text style={[styles.pharmacyCodeSub, { color: colors.secondaryText }]}>
-            كود صيدليتك: {pharmacyCode}
-          </Text>
         </View>
 
+        {/* Refresh Action Button */}
         <TouchableOpacity
-          style={[styles.refreshBtn, { borderColor: colors.border }]}
+          style={[styles.refreshBtnCircle, { backgroundColor: colors.card, borderColor: colors.border }]}
           onPress={onRefresh}
-          activeOpacity={0.8}
+          activeOpacity={0.7}
         >
           <Ionicons name="refresh" size={18} color={colors.primary} />
         </TouchableOpacity>
@@ -580,53 +581,62 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
+    paddingTop: 8,
+    paddingBottom: 10,
   },
-  headerBtn: {
-    flexDirection: 'row-reverse',
+  backBtnCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
+    justifyContent: 'center',
     borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 2,
   },
-  headerBtnText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  refreshBtn: {
-    padding: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-  },
-  headerTitles: {
+  refreshBtnCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+  headerCenter: {
     flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingHorizontal: 8,
+    gap: 3,
   },
-  warehousePill: {
+  headerWarehouseName: {
+    fontSize: 17,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  headerSubtitleRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 100,
-    marginBottom: 2,
+    gap: 5,
   },
-  warehousePillText: {
+  liveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#00d780',
+  },
+  headerSubText: {
     fontSize: 12,
-    fontWeight: '700',
-  },
-  pharmacyNameText: {
-    fontSize: 14,
-    fontWeight: '800',
-    maxWidth: 200,
-  },
-  pharmacyCodeSub: {
-    fontSize: 11,
-    fontWeight: '500',
+    fontWeight: '600',
+    textAlign: 'center',
   },
   centerContainer: {
     flex: 1,
