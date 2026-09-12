@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  PanResponder,
   RefreshControl,
   ScrollView,
   StatusBar,
@@ -53,11 +55,20 @@ export default function WarehousePortalScreen({
   const [refreshing, setRefreshing] = useState(false);
 
   // Multi-pharmacy state
+  const [activePharmacyIndex, setActivePharmacyIndex] = useState(0);
   const [currentToken, setCurrentToken] = useState(token);
   const [currentPharmacyCode, setCurrentPharmacyCode] = useState(pharmacyCode);
   const [currentPharmacyName, setCurrentPharmacyName] = useState(pharmacyName);
   const [pharmacies, setPharmacies] = useState<LinkedPharmacyAccount[]>([]);
+  const [balancesMap, setBalancesMap] = useState<Record<string, number>>({});
   const [showAddModal, setShowAddModal] = useState(false);
+
+  // Animation values for the flying paper effect
+  const pan = useRef(new Animated.ValueXY()).current;
+  const pharmaciesRef = useRef(pharmacies);
+  pharmaciesRef.current = pharmacies;
+  const activeIndexRef = useRef(activePharmacyIndex);
+  activeIndexRef.current = activePharmacyIndex;
 
   const [balance, setBalance] = useState<PharmacyBalance | null>(null);
   const [invoices, setInvoices] = useState<InvoiceItem[]>([]);
@@ -68,6 +79,8 @@ export default function WarehousePortalScreen({
   const colors = {
     bg: '#F9F7FD',
     card: '#FFFFFF',
+    cardBack: '#F2EDFA',
+    cardBack2: '#E7DFFA',
     text: '#1A0A33',
     secondaryText: '#7B6F93',
     border: '#EDE7F6',
@@ -79,6 +92,22 @@ export default function WarehousePortalScreen({
     warningSoft: '#D9770614',
     indigo: '#4F46E5',
     indigoSoft: '#4F46E514',
+  };
+
+  // Fetch balances for all linked pharmacies
+  const fetchAllBalances = async (list: LinkedPharmacyAccount[]) => {
+    const map: Record<string, number> = {};
+    await Promise.all(
+      list.map(async (ph) => {
+        try {
+          const b = await fetchPharmacyBalance(ph.token);
+          if (b) map[ph.token] = b.balance;
+        } catch {
+          // ignore
+        }
+      })
+    );
+    setBalancesMap((prev) => ({ ...prev, ...map }));
   };
 
   // Initialize and load saved pharmacies for this warehouse
@@ -93,9 +122,12 @@ export default function WarehousePortalScreen({
           tenant_id: warehouse.id,
         };
         const saved = await saveWarehousePharmacy(warehouse.id, initialAccount);
-        setPharmacies(saved.length > 0 ? saved : [initialAccount]);
+        const finalList = saved.length > 0 ? saved : [initialAccount];
+        setPharmacies(finalList);
+        fetchAllBalances(finalList);
       } else {
         setPharmacies(list);
+        fetchAllBalances(list);
       }
     };
     initPharmacies();
@@ -127,6 +159,9 @@ export default function WarehousePortalScreen({
       );
 
       setBalance(bal);
+      if (bal) {
+        setBalancesMap((prev) => ({ ...prev, [targetToken]: bal.balance }));
+      }
       setInvoices(validInvoices);
       setReturns(validReturns);
       setReceipts(validReceipts);
@@ -146,25 +181,74 @@ export default function WarehousePortalScreen({
   const onRefresh = () => {
     setRefreshing(true);
     loadData(currentToken, false);
-  };
-
-  // Switch active pharmacy with smooth XLogo animation
-  const handleSelectPharmacy = async (ph: LinkedPharmacyAccount) => {
-    if (ph.token === currentToken) return;
-    setLoading(true);
-    setCurrentToken(ph.token);
-    setCurrentPharmacyCode(ph.pharmacy_code);
-    setCurrentPharmacyName(ph.pharmacy_name);
-
-    // Keep X animation playing smoothly for at least ~1.1s
-    const startTime = Date.now();
-    await loadData(ph.token, false);
-    const elapsed = Date.now() - startTime;
-    if (elapsed < 1100) {
-      await new Promise((resolve) => setTimeout(resolve, 1100 - elapsed));
+    if (pharmacies.length > 1) {
+      fetchAllBalances(pharmacies);
     }
-    setLoading(false);
   };
+
+  // Switch pharmacy when index changes
+  const flyToPharmacy = (direction: 'next' | 'prev') => {
+    const count = pharmaciesRef.current.length;
+    if (count <= 1) return;
+
+    const targetX = direction === 'next' ? -480 : 480;
+    Animated.timing(pan, {
+      toValue: { x: targetX, y: 15 },
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => {
+      pan.setValue({ x: 0, y: 0 });
+      setActivePharmacyIndex((prev) => {
+        const nextIdx =
+          direction === 'next' ? (prev + 1) % count : (prev - 1 + count) % count;
+        const targetPh = pharmaciesRef.current[nextIdx];
+        if (targetPh) {
+          setCurrentToken(targetPh.token);
+          setCurrentPharmacyCode(targetPh.pharmacy_code);
+          setCurrentPharmacyName(targetPh.pharmacy_name);
+        }
+        return nextIdx;
+      });
+    });
+  };
+
+  // Pan Responder for "Flying Paper" horizontal swipe gesture
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onMoveShouldSetPanResponder: (_, gestureState) => {
+          return (
+            pharmaciesRef.current.length > 1 &&
+            Math.abs(gestureState.dx) > 15 &&
+            Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.5
+          );
+        },
+        onPanResponderMove: (_, gestureState) => {
+          pan.setValue({ x: gestureState.dx, y: gestureState.dy * 0.15 });
+        },
+        onPanResponderRelease: (_, gestureState) => {
+          const threshold = 65;
+          const velocityThreshold = 0.3;
+          if (
+            Math.abs(gestureState.dx) > threshold ||
+            Math.abs(gestureState.vx) > velocityThreshold
+          ) {
+            const isSwipeLeft = gestureState.dx < 0;
+            // In RTL: swipe left goes to next card, swipe right goes to prev card
+            flyToPharmacy(isSwipeLeft ? 'next' : 'prev');
+          } else {
+            Animated.spring(pan, {
+              toValue: { x: 0, y: 0 },
+              friction: 5,
+              tension: 40,
+              useNativeDriver: true,
+            }).start();
+          }
+        },
+      }),
+    []
+  );
 
   // When a new pharmacy is verified and added
   const handleAddSuccess = async (result: VerifyPharmacyResult) => {
@@ -178,6 +262,8 @@ export default function WarehousePortalScreen({
     };
     const updatedList = await saveWarehousePharmacy(warehouse.id, newAccount);
     setPharmacies(updatedList);
+    fetchAllBalances(updatedList);
+    setActivePharmacyIndex(0);
     setCurrentToken(newAccount.token);
     setCurrentPharmacyCode(newAccount.pharmacy_code);
     setCurrentPharmacyName(newAccount.pharmacy_name);
@@ -186,8 +272,8 @@ export default function WarehousePortalScreen({
     const startTime = Date.now();
     await loadData(newAccount.token, false);
     const elapsed = Date.now() - startTime;
-    if (elapsed < 1100) {
-      await new Promise((resolve) => setTimeout(resolve, 1100 - elapsed));
+    if (elapsed < 900) {
+      await new Promise((resolve) => setTimeout(resolve, 900 - elapsed));
     }
     setLoading(false);
   };
@@ -463,6 +549,183 @@ export default function WarehousePortalScreen({
   }
 
   // ----------------------------------------------------
+  // STACKED CARDS DECK COMPONENT (طبقات بطاقات الصيدليات كأنك بتطير ورقة)
+  // ----------------------------------------------------
+  const renderStackedDeck = () => {
+    const count = pharmacies.length;
+    if (count === 0) return null;
+
+    const activeItem = pharmacies[activePharmacyIndex] || pharmacies[0];
+    const secondItem = count > 1 ? pharmacies[(activePharmacyIndex + 1) % count] : null;
+    const thirdItem = count > 2 ? pharmacies[(activePharmacyIndex + 2) % count] : null;
+
+    // Rotation interpolation: tilts naturally when dragging
+    const rotate = pan.x.interpolate({
+      inputRange: [-260, 0, 260],
+      outputRange: ['-16deg', '0deg', '16deg'],
+      extrapolate: 'clamp',
+    });
+
+    const activeOpacity = pan.x.interpolate({
+      inputRange: [-260, -180, 0, 180, 260],
+      outputRange: [0.35, 0.9, 1, 0.9, 0.35],
+      extrapolate: 'clamp',
+    });
+
+    const secondScale = pan.x.interpolate({
+      inputRange: [-200, 0, 200],
+      outputRange: [1, 0.94, 1],
+      extrapolate: 'clamp',
+    });
+
+    const secondTop = pan.x.interpolate({
+      inputRange: [-200, 0, 200],
+      outputRange: [0, 9, 0],
+      extrapolate: 'clamp',
+    });
+
+    return (
+      <View style={styles.deckWrapper}>
+        <View style={styles.deckContainer}>
+          {/* Card 3: الطبقة الثالثة العميقة (تظهر عند وجود 3 صيدليات أو أكثر) */}
+          {thirdItem && (
+            <View
+              style={[
+                styles.stackedCard,
+                styles.cardLayer3,
+                { backgroundColor: colors.cardBack2, borderColor: colors.border },
+              ]}
+            >
+              <View style={styles.cardHeaderRow}>
+                <View style={[styles.cardBadgePill, { backgroundColor: colors.primarySoft }]}>
+                  <Ionicons name="medkit-outline" size={13} color={colors.primary} />
+                  <Text style={[styles.cardBadgeText, { color: colors.primary }]}>صيدلية 3</Text>
+                </View>
+                <Text style={[styles.cleanPharmacyName, { color: colors.secondaryText }]} numberOfLines={1}>
+                  {thirdItem.pharmacy_name || `صيدلية #${thirdItem.pharmacy_code}`}
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {/* Card 2: الطبقة الثانية الوسطى (تظهر عند وجود صيدليتين أو أكثر) */}
+          {secondItem && (
+            <Animated.View
+              style={[
+                styles.stackedCard,
+                styles.cardLayer2,
+                {
+                  backgroundColor: colors.cardBack,
+                  borderColor: colors.border,
+                  top: secondTop,
+                  transform: [{ scale: secondScale }],
+                },
+              ]}
+            >
+              <View style={styles.cardHeaderRow}>
+                <View style={[styles.cardBadgePill, { backgroundColor: colors.primarySoft }]}>
+                  <Ionicons name="medkit-outline" size={13} color={colors.primary} />
+                  <Text style={[styles.cardBadgeText, { color: colors.primary }]}>
+                    {count > 2 ? 'صيدلية 2' : 'صيدلية'}
+                  </Text>
+                </View>
+                <Text style={[styles.cleanPharmacyName, { color: colors.text }]} numberOfLines={1}>
+                  {secondItem.pharmacy_name || `صيدلية #${secondItem.pharmacy_code}`}
+                </Text>
+              </View>
+              <View style={styles.cleanBalanceBox}>
+                <Text style={[styles.cleanBalanceLabel, { color: colors.secondaryText }]}>
+                  الرصيد الحالي
+                </Text>
+                <Text style={[styles.cleanBalanceValue, { color: colors.primary }]}>
+                  {formatCurrency(balancesMap[secondItem.token] ?? 0)}
+                </Text>
+              </View>
+            </Animated.View>
+          )}
+
+          {/* Card 1: البطاقة الأولى الأمامية التفاعلية (كأنك بتطير ورقة) */}
+          <Animated.View
+            {...(count > 1 ? panResponder.panHandlers : {})}
+            style={[
+              styles.stackedCard,
+              styles.cardLayer1,
+              {
+                backgroundColor: colors.card,
+                borderColor: colors.border,
+                opacity: activeOpacity,
+                transform: [
+                  { translateX: pan.x },
+                  { translateY: pan.y },
+                  { rotate: rotate },
+                ],
+              },
+            ]}
+          >
+            <View style={styles.cardHeaderRow}>
+              <View style={[styles.cardBadgePill, { backgroundColor: colors.primarySoft }]}>
+                <Ionicons name="medkit-outline" size={13} color={colors.primary} />
+                <Text style={[styles.cardBadgeText, { color: colors.primary }]}>
+                  {count > 1 ? `${activePharmacyIndex + 1} من ${count}` : 'صيدلية'}
+                </Text>
+              </View>
+              <Text style={[styles.cleanPharmacyName, { color: colors.text }]} numberOfLines={1}>
+                {activeItem.pharmacy_name || `صيدلية #${activeItem.pharmacy_code}`}
+              </Text>
+            </View>
+            <View style={styles.cleanBalanceBox}>
+              <Text style={[styles.cleanBalanceLabel, { color: colors.secondaryText }]}>
+                الرصيد الحالي
+              </Text>
+              <Text style={[styles.cleanBalanceValue, { color: colors.primary }]}>
+                {formatCurrency(balance?.balance ?? balancesMap[activeItem.token] ?? 0)}
+              </Text>
+            </View>
+          </Animated.View>
+        </View>
+
+        {/* مؤشر التنقل والتمرير عند وجود أكثر من صيدلية */}
+        {count > 1 && (
+          <View style={styles.deckIndicatorRow}>
+            <TouchableOpacity
+              onPress={() => flyToPharmacy('prev')}
+              style={styles.deckArrowBtn}
+              activeOpacity={0.6}
+            >
+              <Ionicons name="chevron-forward" size={18} color={colors.secondaryText} />
+            </TouchableOpacity>
+
+            <View style={styles.deckDotsRow}>
+              {pharmacies.map((_, idx) => (
+                <View
+                  key={idx}
+                  style={[
+                    styles.deckDot,
+                    idx === activePharmacyIndex
+                      ? [styles.deckDotActive, { backgroundColor: colors.primary }]
+                      : [styles.deckDotInactive, { backgroundColor: colors.border }],
+                  ]}
+                />
+              ))}
+              <Text style={[styles.deckHintText, { color: colors.secondaryText }]}>
+                اسحب للتنقل
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              onPress={() => flyToPharmacy('next')}
+              style={styles.deckArrowBtn}
+              activeOpacity={0.6}
+            >
+              <Ionicons name="chevron-back" size={18} color={colors.secondaryText} />
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  // ----------------------------------------------------
   // MAIN PORTAL SCREEN (شاشة المخزن الرئيسية البسيطة)
   // ----------------------------------------------------
   return (
@@ -488,80 +751,26 @@ export default function WarehousePortalScreen({
         </TouchableOpacity>
       </View>
 
-      {/* شريط تبديل الصيدليات (يظهر عند وجود أكثر من صيدلية مربوطة لنفس المخزن) */}
-      {pharmacies.length > 1 && (
-        <View style={styles.pharmacySwitcherWrap}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.pharmacySwitcherScroll}
-          >
-            {pharmacies.map((ph) => {
-              const isSelected = ph.token === currentToken;
-              return (
-                <TouchableOpacity
-                  key={ph.pharmacy_code || ph.token}
-                  style={[
-                    styles.pharmacyChip,
-                    isSelected
-                      ? [styles.pharmacyChipActive, { backgroundColor: colors.primary }]
-                      : [styles.pharmacyChipInactive, { backgroundColor: colors.card, borderColor: colors.border }],
-                  ]}
-                  onPress={() => handleSelectPharmacy(ph)}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons
-                    name="medkit"
-                    size={14}
-                    color={isSelected ? '#FFFFFF' : colors.primary}
-                  />
-                  <Text
-                    style={[
-                      styles.pharmacyChipText,
-                      { color: isSelected ? '#FFFFFF' : colors.text },
-                    ]}
-                  >
-                    {ph.pharmacy_name || `صيدلية #${ph.pharmacy_code}`}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-      )}
+      <ScrollView
+        style={styles.scrollArea}
+        contentContainerStyle={styles.mainScrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
+        }
+      >
+        {/* طبقات بطاقات الصيدليات المتراكمة (كانك بتطير ورقة) */}
+        {renderStackedDeck()}
 
-      {loading ? (
-        <View style={styles.centerContainer}>
-          <XLogo size={70} scale={1.8} speed={1.2} autoPlay loop />
-          <Text style={[styles.loadingText, { color: colors.secondaryText }]}>
-            جاري تحويل الحساب وتحديث البيانات...
-          </Text>
-        </View>
-      ) : (
-        <ScrollView
-          style={styles.scrollArea}
-          contentContainerStyle={styles.mainScrollContent}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
-          }
-        >
-          {/* كرت اسم الصيدلية والرصيد الحالي */}
-          <View style={[styles.cleanBalanceCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.cleanPharmacyName, { color: colors.text }]} numberOfLines={1}>
-              {currentPharmacyName || 'الصيدلية'}
+        {/* كروت الأقسام الأربعة */}
+        {loading ? (
+          <View style={styles.sectionLoadingBox}>
+            <XLogo size={60} scale={1.6} speed={1.2} autoPlay loop />
+            <Text style={[styles.loadingText, { color: colors.secondaryText }]}>
+              جاري تحديث بيانات الحساب...
             </Text>
-            <View style={styles.cleanBalanceBox}>
-              <Text style={[styles.cleanBalanceLabel, { color: colors.secondaryText }]}>
-                الرصيد الحالي
-              </Text>
-              <Text style={[styles.cleanBalanceValue, { color: colors.primary }]}>
-                {formatCurrency(balance?.balance)}
-              </Text>
-            </View>
           </View>
-
-          {/* كروت الأقسام الأربعة - نقرة تنقل لصفحة منفصلة */}
+        ) : (
           <View style={styles.cardsListContainer}>
             {sections.map((sec) => (
               <TouchableOpacity
@@ -592,8 +801,8 @@ export default function WarehousePortalScreen({
               </TouchableOpacity>
             ))}
           </View>
-        </ScrollView>
-      )}
+        )}
+      </ScrollView>
 
       {/* نافذة التحقق وإضافة صيدلية أخرى لنفس المخزن */}
       <PharmacyVerifyModal
@@ -632,44 +841,6 @@ const styles = StyleSheet.create({
   topHeaderSpacer: {
     width: 36,
   },
-  pharmacySwitcherWrap: {
-    paddingVertical: 4,
-    marginBottom: 4,
-  },
-  pharmacySwitcherScroll: {
-    flexDirection: 'row-reverse',
-    paddingHorizontal: 16,
-    gap: 8,
-  },
-  pharmacyChip: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 12,
-    borderWidth: 1,
-    gap: 6,
-  },
-  pharmacyChipActive: {
-    borderColor: 'transparent',
-  },
-  pharmacyChipInactive: {},
-  pharmacyChipText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  centerContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    paddingHorizontal: 32,
-  },
-  loadingText: {
-    fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
   scrollArea: {
     flex: 1,
   },
@@ -686,35 +857,129 @@ const styles = StyleSheet.create({
     gap: 10,
   },
 
-  // كرت الرصيد المبسط النظيف
-  cleanBalanceCard: {
-    padding: 20,
-    borderRadius: 20,
+  // حاوية بطاقات الطبقات المتراكمة (Deck)
+  deckWrapper: {
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  deckContainer: {
+    height: 146,
+    position: 'relative',
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+  },
+  stackedCard: {
+    position: 'absolute',
+    width: '100%',
+    padding: 18,
+    borderRadius: 22,
     borderWidth: 1,
+    gap: 10,
     shadowColor: '#3f0082',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.06,
     shadowRadius: 10,
-    elevation: 2,
-    gap: 12,
+    elevation: 3,
+  },
+  cardLayer1: {
+    zIndex: 10,
+    top: 0,
+  },
+  cardLayer2: {
+    zIndex: 9,
+    top: 9,
+    transform: [{ scale: 0.94 }],
+    opacity: 0.9,
+  },
+  cardLayer3: {
+    zIndex: 8,
+    top: 18,
+    transform: [{ scale: 0.88 }],
+    opacity: 0.65,
+    height: 135,
+  },
+  cardHeaderRow: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  cardBadgePill: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  cardBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   cleanPharmacyName: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '800',
     textAlign: 'right',
+    flex: 1,
+    marginLeft: 10,
   },
   cleanBalanceBox: {
     alignItems: 'flex-end',
     gap: 2,
   },
   cleanBalanceLabel: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
   },
   cleanBalanceValue: {
-    fontSize: 28,
+    fontSize: 27,
     fontWeight: '900',
     letterSpacing: -0.5,
+  },
+
+  // مؤشر البطاقات والأسهم
+  deckIndicatorRow: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    marginTop: 2,
+  },
+  deckDotsRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 6,
+  },
+  deckDot: {
+    height: 5,
+    borderRadius: 3,
+  },
+  deckDotActive: {
+    width: 18,
+  },
+  deckDotInactive: {
+    width: 6,
+  },
+  deckHintText: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginRight: 6,
+  },
+  deckArrowBtn: {
+    padding: 6,
+  },
+
+  // حالة تحميل الأقسام
+  sectionLoadingBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 36,
+    gap: 12,
+  },
+  loadingText: {
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 
   // كروت الأقسام الأربعة في الصفحة الرئيسية
