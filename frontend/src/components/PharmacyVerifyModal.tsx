@@ -52,7 +52,7 @@ export default function PharmacyVerifyModal({
   const handleVerify = async () => {
     if (!warehouse) return;
     if (!pharmacyCode.trim()) {
-      setError('يرجى إدخال رقم كود الصيدلية المسجل لدى المستودع');
+      setError('اكتب كود الصيدلية في المخزن الأول');
       return;
     }
 
@@ -73,10 +73,10 @@ export default function PharmacyVerifyModal({
         setPhone('');
         onSuccess(res);
       } else {
-        setError(res.error || 'تعذر التحقق من كود الصيدلية ورقم الهاتف');
+        setError(res.error || 'كود الصيدلية أو الموبايل مش متطابق مع بيانات المخزن');
       }
     } catch (e: any) {
-      setError(e.message || 'حدث خطأ أثناء محاولة التحقق');
+      setError(e.message || 'حصلت مشكلة في الاتصال.. اتأكد من النت وجرب تاني');
     } finally {
       setLoading(false);
     }
@@ -114,7 +114,7 @@ export default function PharmacyVerifyModal({
                       {warehouse.name}
                     </Text>
                     <Text style={[styles.headerSubtitle, { color: colors.secondaryText }]}>
-                      ربط الصيدلية واستعراض الحسابات
+                      ربط حساب الصيدلية وفتح الفواتير
                     </Text>
                   </View>
                 </View>
@@ -123,7 +123,7 @@ export default function PharmacyVerifyModal({
                 <View style={[styles.callout, { backgroundColor: isDark ? '#1E293B66' : '#F0FDF4' }]}>
                   <Ionicons name="information-circle-outline" size={20} color="#10B981" />
                   <Text style={[styles.calloutText, { color: isDark ? '#A7F3D0' : '#166534' }]}>
-                    أدخل كود الصيدلية ورقم الهاتف كما هو مسجل في سيستم المستودع لفتح الفواتير وكشف الحساب.
+                    اكتب كود صيدليتك في المخزن، ورقم الموبايل عشان نفتحلك الفواتير والمرتجعات وكشف الحساب مباشرة.
                   </Text>
                 </View>
 
@@ -140,13 +140,13 @@ export default function PharmacyVerifyModal({
                   {/* Pharmacy Code */}
                   <View style={styles.inputGroup}>
                     <Text style={[styles.inputLabel, { color: colors.text }]}>
-                      كود الصيدلية بالمستودع <Text style={styles.requiredStar}>*</Text>
+                      كود صيدليتك في المخزن <Text style={styles.requiredStar}>*</Text>
                     </Text>
                     <View style={[styles.inputWrapper, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
                       <Ionicons name="barcode-outline" size={20} color={colors.secondaryText} style={styles.inputIcon} />
                       <TextInput
                         style={[styles.input, { color: colors.text }]}
-                        placeholder="مثال: 2877"
+                        placeholder="مثلاً: 2877"
                         placeholderTextColor={colors.secondaryText}
                         keyboardType="numeric"
                         value={pharmacyCode}
@@ -162,13 +162,13 @@ export default function PharmacyVerifyModal({
                   {/* Phone Number */}
                   <View style={styles.inputGroup}>
                     <Text style={[styles.inputLabel, { color: colors.text }]}>
-                      رقم الهاتف المسجل
+                      رقم الموبايل
                     </Text>
                     <View style={[styles.inputWrapper, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
                       <Ionicons name="call-outline" size={20} color={colors.secondaryText} style={styles.inputIcon} />
                       <TextInput
                         style={[styles.input, { color: colors.text }]}
-                        placeholder="010XXXXXXXX (اختياري للتحقق)"
+                        placeholder="010XXXXXXXX (لو متسجل عند المخزن)"
                         placeholderTextColor={colors.secondaryText}
                         keyboardType="phone-pad"
                         value={phone}
@@ -194,7 +194,7 @@ export default function PharmacyVerifyModal({
                     ) : (
                       <View style={styles.btnContent}>
                         <Ionicons name="checkmark-circle-outline" size={20} color="#FFFFFF" />
-                        <Text style={styles.submitBtnText}>تحقق وفتح الحسابات</Text>
+                        <Text style={styles.submitBtnText}>افتح حساب الصيدلية</Text>
                       </View>
                     )}
                   </TouchableOpacity>
@@ -206,7 +206,7 @@ export default function PharmacyVerifyModal({
                     activeOpacity={0.7}
                   >
                     <Text style={[styles.cancelBtnText, { color: colors.secondaryText }]}>
-                      إلغاء
+                      رجوع
                     </Text>
                   </TouchableOpacity>
                 </View>

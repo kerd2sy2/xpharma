@@ -138,7 +138,7 @@ export default function WarehousePortalScreen({
           activeOpacity={0.8}
         >
           <Ionicons name="arrow-forward" size={18} color={colors.text} />
-          <Text style={[styles.headerBtnText, { color: colors.text }]}>المستودعات</Text>
+          <Text style={[styles.headerBtnText, { color: colors.text }]}>المخازن</Text>
         </TouchableOpacity>
 
         <View style={styles.headerTitles}>
@@ -150,7 +150,7 @@ export default function WarehousePortalScreen({
             {pharmacyName || 'الصيدلية'}
           </Text>
           <Text style={[styles.pharmacyCodeSub, { color: colors.secondaryText }]}>
-            كود الصيدلية: {pharmacyCode}
+            كود صيدليتك: {pharmacyCode}
           </Text>
         </View>
 
@@ -167,7 +167,7 @@ export default function WarehousePortalScreen({
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
           <Text style={[styles.loadingText, { color: colors.secondaryText }]}>
-            جارٍ تحميل البيانات المالية من سيرفر المستودع...
+            بنحمل حساب صيدليتك من سيستم المخزن...
           </Text>
         </View>
       ) : (
@@ -183,9 +183,9 @@ export default function WarehousePortalScreen({
             <View style={styles.balanceHeader}>
               <View style={[styles.balanceTag, { backgroundColor: colors.successSoft }]}>
                 <Ionicons name="shield-checkmark" size={14} color={colors.success} />
-                <Text style={[styles.balanceTagText, { color: colors.success }]}>حساب نشط ومطابق</Text>
+                <Text style={[styles.balanceTagText, { color: colors.success }]}>حسابك مضبوط</Text>
               </View>
-              <Text style={[styles.balanceLabel, { color: colors.secondaryText }]}>الرصيد الحالي المطلوب</Text>
+              <Text style={[styles.balanceLabel, { color: colors.secondaryText }]}>الرصيد المطلوب منك للمخزن</Text>
             </View>
 
             <View style={styles.balanceAmountRow}>
@@ -207,7 +207,7 @@ export default function WarehousePortalScreen({
 
               {/* Returns */}
               <View style={styles.metricItem}>
-                <Text style={[styles.metricLabel, { color: colors.secondaryText }]}>المرتجعات</Text>
+                <Text style={[styles.metricLabel, { color: colors.secondaryText }]}>المرتجع</Text>
                 <Text style={[styles.metricValue, { color: colors.warning }]}>
                   {formatCurrency(balance?.total_returns)}
                 </Text>
@@ -215,7 +215,7 @@ export default function WarehousePortalScreen({
 
               {/* Paid Cash */}
               <View style={styles.metricItem}>
-                <Text style={[styles.metricLabel, { color: colors.secondaryText }]}>المدفوع نقداً</Text>
+                <Text style={[styles.metricLabel, { color: colors.secondaryText }]}>المسدد كاش</Text>
                 <Text style={[styles.metricValue, { color: colors.success }]}>
                   {formatCurrency(balance?.total_paid)}
                 </Text>
@@ -290,7 +290,7 @@ export default function WarehousePortalScreen({
                   { color: activeTab === 'receipts' ? '#FFFFFF' : colors.secondaryText },
                 ]}
               >
-                النقدية ({receipts.length})
+                الكاش ({receipts.length})
               </Text>
             </TouchableOpacity>
 
@@ -324,9 +324,9 @@ export default function WarehousePortalScreen({
               {invoices.length === 0 ? (
                 <View style={[styles.emptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
                   <Ionicons name="receipt-outline" size={44} color={colors.secondaryText} />
-                  <Text style={[styles.emptyTitle, { color: colors.text }]}>لا توجد فواتير مشتريات مسجلة</Text>
+                  <Text style={[styles.emptyTitle, { color: colors.text }]}>مفيش فواتير مشتريات متسجلة</Text>
                   <Text style={[styles.emptySubtitle, { color: colors.secondaryText }]}>
-                    لم يتم تسجيل فواتير صادرة لصيدليتك من هذا المستودع حتى الآن
+                    لسه مفيش فواتير طلعت لصيدليتك من المخزن ده لحد دلوقتي
                   </Text>
                 </View>
               ) : (
@@ -338,7 +338,7 @@ export default function WarehousePortalScreen({
                     <View style={styles.itemCardHeader}>
                       <View style={[styles.statusBadge, { backgroundColor: colors.primarySoft }]}>
                         <Text style={[styles.statusBadgeText, { color: colors.primary }]}>
-                          {inv.status === 'synced' ? 'مسجلة' : inv.status}
+                          {inv.status === 'synced' ? 'فاتورة معتمدة' : inv.status}
                         </Text>
                       </View>
                       <View style={styles.itemHeaderLeft}>
@@ -385,9 +385,9 @@ export default function WarehousePortalScreen({
               {returns.length === 0 ? (
                 <View style={[styles.emptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
                   <Ionicons name="arrow-undo-circle-outline" size={44} color={colors.secondaryText} />
-                  <Text style={[styles.emptyTitle, { color: colors.text }]}>لا توجد مرتجعات مسجلة</Text>
+                  <Text style={[styles.emptyTitle, { color: colors.text }]}>مفيش مرتجعات متسجلة</Text>
                   <Text style={[styles.emptySubtitle, { color: colors.secondaryText }]}>
-                    سجل المرتجعات نظيف تماماً لصيدليتك لدى هذا المستودع
+                    سجل المرتجعات تمام ومفيش أي أدوية راجعة للمخزن
                   </Text>
                 </View>
               ) : (
@@ -420,7 +420,7 @@ export default function WarehousePortalScreen({
                         </Text>
                       </View>
                       <View style={styles.itemFinancialCol}>
-                        <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>صافي القيمة</Text>
+                        <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>صافي المرتجع</Text>
                         <Text style={[styles.itemFinancialValBold, { color: colors.warning }]}>
                           {formatCurrency(ret.net_amount || ret.total_amount)}
                         </Text>
@@ -438,9 +438,9 @@ export default function WarehousePortalScreen({
               {receipts.length === 0 ? (
                 <View style={[styles.emptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
                   <Ionicons name="wallet-outline" size={44} color={colors.secondaryText} />
-                  <Text style={[styles.emptyTitle, { color: colors.text }]}>لا توجد سندات قبض نقدية مسجلة</Text>
+                  <Text style={[styles.emptyTitle, { color: colors.text }]}>مفيش سندات قبض كاش متسجلة</Text>
                   <Text style={[styles.emptySubtitle, { color: colors.secondaryText }]}>
-                    تظهر هنا مدفوعاتك وسندات القبض المسددة لمندوبي المستودع
+                    بتظهر هنا أي مبالغ نقدية سددتها لمندوب التحصيل
                   </Text>
                 </View>
               ) : (
@@ -451,7 +451,7 @@ export default function WarehousePortalScreen({
                   >
                     <View style={styles.itemCardHeader}>
                       <View style={[styles.statusBadge, { backgroundColor: colors.successSoft }]}>
-                        <Text style={[styles.statusBadgeText, { color: colors.success }]}>مسددة</Text>
+                        <Text style={[styles.statusBadgeText, { color: colors.success }]}>مسددة كاش</Text>
                       </View>
                       <View style={styles.itemHeaderLeft}>
                         <Text style={[styles.itemNumber, { color: colors.text }]}>
@@ -473,7 +473,7 @@ export default function WarehousePortalScreen({
                         </Text>
                       </View>
                       <View style={styles.itemFinancialCol}>
-                        <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>المبلغ المقبوض</Text>
+                        <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>المبلغ المسدد</Text>
                         <Text style={[styles.itemFinancialValBold, { color: colors.success }]}>
                           {formatCurrency(rec.amount)}
                         </Text>
@@ -491,9 +491,9 @@ export default function WarehousePortalScreen({
               {statement.length === 0 ? (
                 <View style={[styles.emptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
                   <Ionicons name="document-text-outline" size={44} color={colors.secondaryText} />
-                  <Text style={[styles.emptyTitle, { color: colors.text }]}>لا توجد حركات في كشف الحساب</Text>
+                  <Text style={[styles.emptyTitle, { color: colors.text }]}>كشف الحساب فاضي حالياً</Text>
                   <Text style={[styles.emptySubtitle, { color: colors.secondaryText }]}>
-                    لم يتم تسجيل قيود محاسبية أو حركات فواتير حتى الآن
+                    لسه مفيش حركات مالية أو فواتير متسجلة على الحساب
                   </Text>
                 </View>
               ) : (
@@ -522,7 +522,7 @@ export default function WarehousePortalScreen({
                             { color: stm.debit > 0 ? colors.primary : colors.success },
                           ]}
                         >
-                          {stm.doc_type || 'قيد حركة'}
+                          {stm.doc_type || 'حركة حساب'}
                         </Text>
                       </View>
                       <View style={styles.itemHeaderLeft}>
@@ -545,19 +545,19 @@ export default function WarehousePortalScreen({
 
                     <View style={styles.itemFinancialRow}>
                       <View style={styles.itemFinancialCol}>
-                        <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>مدين (+)</Text>
+                        <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>عليك للمخزن (+)</Text>
                         <Text style={[styles.itemFinancialVal, { color: stm.debit > 0 ? colors.primary : colors.secondaryText }]}>
                           {stm.debit > 0 ? formatCurrency(stm.debit) : '—'}
                         </Text>
                       </View>
                       <View style={styles.itemFinancialCol}>
-                        <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>دائن (-)</Text>
+                        <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>سددت للمخزن (-)</Text>
                         <Text style={[styles.itemFinancialVal, { color: stm.credit > 0 ? colors.success : colors.secondaryText }]}>
                           {stm.credit > 0 ? formatCurrency(stm.credit) : '—'}
                         </Text>
                       </View>
                       <View style={styles.itemFinancialCol}>
-                        <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>الرصيد التراكمي</Text>
+                        <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>الرصيد بعد الحركة</Text>
                         <Text style={[styles.itemFinancialValBold, { color: colors.text }]}>
                           {formatCurrency(stm.balance)}
                         </Text>

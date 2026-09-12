@@ -312,9 +312,9 @@ export default function HomeScreen() {
       <View style={styles.controlsBar}>
         {/* Right: Section Title */}
         <View style={styles.sectionHeaderCol}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>مستودعات الأدوية</Text>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>مخازن الأدوية</Text>
           <Text style={[styles.sectionSubtitle, { color: colors.secondaryText }]}>
-            {warehouses.length} مستودع متاح
+            {warehouses.length} مخزن متاح
           </Text>
         </View>
 
@@ -325,7 +325,7 @@ export default function HomeScreen() {
           activeOpacity={0.8}
         >
           <Ionicons name="swap-vertical" size={16} color={colors.primary} />
-          <Text style={[styles.reorderBtnText, { color: colors.primary }]}>ترتيب المستودعات</Text>
+          <Text style={[styles.reorderBtnText, { color: colors.primary }]}>رتب المخازن</Text>
         </TouchableOpacity>
       </View>
 
@@ -362,12 +362,12 @@ export default function HomeScreen() {
                 {item.is_linked ? (
                   <View style={styles.cardStatusLinked}>
                     <Ionicons name="checkmark-circle" size={12} color="#10B981" />
-                    <Text style={styles.cardStatusLinkedText}>مربوط</Text>
+                    <Text style={styles.cardStatusLinkedText}>مربوطة</Text>
                   </View>
                 ) : (
                   <View style={styles.cardStatusUnlinked}>
                     <Ionicons name="lock-open-outline" size={11} color="#FFFFFF" />
-                    <Text style={styles.cardStatusUnlinkedText}>غير مربوط</Text>
+                    <Text style={styles.cardStatusUnlinkedText}>مش مربوطة</Text>
                   </View>
                 )}
               </View>
@@ -400,13 +400,13 @@ export default function HomeScreen() {
             <View style={styles.loadingBox}>
               <ActivityIndicator size="large" color={colors.primary} />
               <Text style={[styles.loadingText, { color: colors.secondaryText }]}>
-                جارٍ فحص وتحميل المستودعات من السيرفر...
+                بنحمل بيانات المخازن...
               </Text>
             </View>
           ) : (
             <View style={[styles.emptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Ionicons name="cube-outline" size={42} color={colors.secondaryText} />
-              <Text style={[styles.emptyText, { color: colors.text }]}>لا توجد مستودعات متاحة حالياً</Text>
+              <Text style={[styles.emptyText, { color: colors.text }]}>مفيش مخازن متاحة حالياً</Text>
             </View>
           )
         }
@@ -462,17 +462,17 @@ export default function HomeScreen() {
                   </View>
                 </View>
 
-                {/* Info in Pure Arabic */}
+                {/* Info in Egyptian Arabic */}
                 <Text style={[styles.profileName, { color: colors.text }]}>
-                  {user?.name || 'صيدلي معتمد'}
+                  {user?.name || 'دكتور صيدلي'}
                 </Text>
                 <Text style={[styles.profileEmail, { color: colors.secondaryText }]}>
-                  {user?.email || 'حساب موثق'}
+                  {user?.email || 'حساب مفعل'}
                 </Text>
 
                 <View style={[styles.profileRoleBadge, { backgroundColor: colors.primarySoft }]}>
                   <Text style={[styles.profileRoleText, { color: colors.primary }]}>
-                    صيدلية معتمدة بالمنظومة
+                    صيدلية معتمدة
                   </Text>
                 </View>
 
@@ -482,7 +482,7 @@ export default function HomeScreen() {
                 <View style={styles.profileSecurityRow}>
                   <Ionicons name="shield-checkmark" size={16} color={colors.success} />
                   <Text style={[styles.profileSecurityText, { color: colors.secondaryText }]}>
-                    جلسة اتصال آمنة ومشفّرة 256-bit
+                    اتصال آمن ومشفر 100%
                   </Text>
                 </View>
 
@@ -497,7 +497,7 @@ export default function HomeScreen() {
                 >
                   <Ionicons name="log-out-outline" size={18} color={colors.danger} />
                   <Text style={[styles.profileLogoutText, { color: colors.danger }]}>
-                    تسجيل الخروج من الحساب
+                    تسجيل خروج
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -523,9 +523,9 @@ export default function HomeScreen() {
                 </View>
 
                 <View style={styles.sortHeader}>
-                  <Text style={[styles.sortTitle, { color: colors.text }]}>ترتيب وتنظيم المستودعات</Text>
+                  <Text style={[styles.sortTitle, { color: colors.text }]}>ترتيب المخازن</Text>
                   <Text style={[styles.sortSubtitle, { color: colors.secondaryText }]}>
-                    حدد الترتيب المفضل لديك وسيتم حفظه في التطبيق تلقائياً
+                    رتب المخازن زي ما تحب وهيتحفظ ترتيبك تلقائي
                   </Text>
                 </View>
 
@@ -536,7 +536,7 @@ export default function HomeScreen() {
                     onPress={() => sortPreset('linkedFirst')}
                   >
                     <Ionicons name="checkmark-done" size={15} color={colors.success} />
-                    <Text style={[styles.presetBtnText, { color: colors.text }]}>المربوطة أولاً</Text>
+                    <Text style={[styles.presetBtnText, { color: colors.text }]}>المربوطة الأول</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
@@ -544,13 +544,13 @@ export default function HomeScreen() {
                     onPress={() => sortPreset('alphabetical')}
                   >
                     <Ionicons name="text" size={15} color={colors.primary} />
-                    <Text style={[styles.presetBtnText, { color: colors.text }]}>أبجدياً (أ - ي)</Text>
+                    <Text style={[styles.presetBtnText, { color: colors.text }]}>أبجدي (أ - ي)</Text>
                   </TouchableOpacity>
                 </View>
 
                 {/* Manual Reorder List */}
                 <Text style={[styles.reorderListLabel, { color: colors.secondaryText }]}>
-                  الترتيب اليدوي (استخدم الأسهم للتقديم أو التأخير):
+                  ترتيب يدوي (حرك بالأسهم فوق وتحت):
                 </Text>
 
                 <ScrollView style={styles.reorderScroll} showsVerticalScrollIndicator={false}>
@@ -585,7 +585,7 @@ export default function HomeScreen() {
                       {/* Linked Badge */}
                       {wh.is_linked && (
                         <View style={[styles.reorderLinkedBadge, { backgroundColor: colors.successSoft }]}>
-                          <Text style={[styles.reorderLinkedText, { color: colors.success }]}>مربوط</Text>
+                          <Text style={[styles.reorderLinkedText, { color: colors.success }]}>مربوطة</Text>
                         </View>
                       )}
 
@@ -609,7 +609,7 @@ export default function HomeScreen() {
                   style={[styles.doneBtn, { backgroundColor: colors.primary }]}
                   onPress={() => setSortModalVisible(false)}
                 >
-                  <Text style={styles.doneBtnText}>حفظ الترتيب وإغلاق</Text>
+                  <Text style={styles.doneBtnText}>حفظ الترتيب</Text>
                 </TouchableOpacity>
               </View>
             </TouchableWithoutFeedback>

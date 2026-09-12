@@ -63,14 +63,14 @@ export default function LoginScreen() {
           </Text>
 
           <View style={styles.badgeContainer}>
-            <Text style={styles.badgeText}>شبكة توزيع الأدوية والمستودعات</Text>
+            <Text style={styles.badgeText}>شبكة ربط الصيدليات والمخازن</Text>
           </View>
 
           <Text style={[styles.subtitle, { color: themeColors.textSecondary }]}>
-            المنصة الموحدة لإدارة وتوزيع الأدوية
+            متابعة فورية لحسابك وفواتيرك مع المخازن
           </Text>
           <Text style={[styles.microText, { color: themeColors.textSecondary }]}>
-            ربط ذكي ومباشر بين المستودعات والصيدليات
+            فواتير المشتريات • المرتجعات • النقدية • كشف الحساب
           </Text>
         </View>
 
@@ -86,7 +86,7 @@ export default function LoginScreen() {
           </TouchableOpacity>
         )}
 
-        {/* Auth Action Section (Strictly Social Buttons Only - No Email/Password) */}
+        {/* Auth Action Section */}
         <View style={styles.actionSection}>
           {/* Android: ONLY Google Sign-In */}
           {showGoogle && (
@@ -111,7 +111,7 @@ export default function LoginScreen() {
                     <FontAwesome name="google" size={22} color="#EA4335" />
                   </View>
                   <Text style={[styles.socialButtonText, { color: themeColors.googleBtnText }]}>
-                    تسجيل الدخول بواسطة Google
+                    تسجيل الدخول بحساب Google
                   </Text>
                 </>
               )}
@@ -148,7 +148,7 @@ export default function LoginScreen() {
                     />
                   </View>
                   <Text style={[styles.socialButtonText, { color: themeColors.appleBtnText }]}>
-                    تسجيل الدخول بواسطة Apple
+                    تسجيل الدخول بحساب Apple
                   </Text>
                 </>
               )}
@@ -161,11 +161,11 @@ export default function LoginScreen() {
           <View style={styles.securityRow}>
             <Ionicons name="shield-checkmark" size={16} color="#10B981" />
             <Text style={[styles.footerText, { color: themeColors.textSecondary }]}>
-              تسجيل دخول آمن ومشفّر 256-bit SSL
+              دخول آمن ومشفر 100%
             </Text>
           </View>
           <Text style={[styles.copyrightText, { color: themeColors.textSecondary }]}>
-            © {new Date().getFullYear()} XPharma Cloud. جميع الحقوق محفوظة
+            © {new Date().getFullYear()} إكس فارما • جميع الحقوق محفوظة
           </Text>
         </View>
       </View>
