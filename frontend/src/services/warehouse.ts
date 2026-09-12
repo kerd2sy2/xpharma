@@ -10,6 +10,7 @@ export interface Warehouse {
   address?: string;
   contact_phone?: string;
   logo_url?: string;
+  category?: string;
   is_linked: boolean;
   linked_pharmacy_id?: string;
   linked_pharmacy_code?: string;

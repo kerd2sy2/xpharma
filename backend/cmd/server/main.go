@@ -101,6 +101,7 @@ func main() {
 				COALESCE(t.address, '') AS address,
 				COALESCE(t.contact_phone, '') AS contact_phone,
 				COALESCE(t.logo_url, '') AS logo_url,
+				COALESCE(t.category, 'مخزن أدوية') AS category,
 				COALESCE(p.id::text, '') AS linked_pharmacy_id,
 				COALESCE(p.name, '') AS linked_pharmacy_name,
 				COALESCE(p.code, '') AS linked_pharmacy_code
@@ -118,8 +119,8 @@ func main() {
 
 		var warehouses []map[string]interface{}
 		for rows.Next() {
-			var id, name, slug, status, address, contactPhone, logoURL, linkedPharmaID, linkedPharmaName, linkedPharmaCode string
-			if err := rows.Scan(&id, &name, &slug, &status, &address, &contactPhone, &logoURL, &linkedPharmaID, &linkedPharmaName, &linkedPharmaCode); err != nil {
+			var id, name, slug, status, address, contactPhone, logoURL, category, linkedPharmaID, linkedPharmaName, linkedPharmaCode string
+			if err := rows.Scan(&id, &name, &slug, &status, &address, &contactPhone, &logoURL, &category, &linkedPharmaID, &linkedPharmaName, &linkedPharmaCode); err != nil {
 				continue
 			}
 
@@ -143,6 +144,7 @@ func main() {
 				"address":              address,
 				"contact_phone":        contactPhone,
 				"logo_url":             logoURL,
+				"category":             category,
 				"is_linked":            isLinked,
 				"linked_pharmacy_id":   linkedPharmaID,
 				"linked_pharmacy_name": linkedPharmaName,

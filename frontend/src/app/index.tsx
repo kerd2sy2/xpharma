@@ -35,9 +35,10 @@ import XLogo, { XLogoHandle } from '@/components/XLogo';
 import { LinearGradient } from 'expo-linear-gradient';
 
 const { width } = Dimensions.get('window');
-const CARD_GAP = 12;
+const isTablet = width >= 768;
+const CARD_GAP = 14;
 const PADDING_HORIZONTAL = 16;
-const CARD_WIDTH = (width - PADDING_HORIZONTAL * 2 - CARD_GAP) / 2;
+const TABLET_CARD_WIDTH = (width - PADDING_HORIZONTAL * 2 - CARD_GAP) / 2;
 const ORDER_STORAGE_KEY = 'xpharma_warehouses_custom_order';
 
 interface ActivePortalState {
@@ -55,7 +56,6 @@ export default function HomeScreen() {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [loadingWarehouses, setLoadingWarehouses] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
 
   // Profile Modal State
   const [profileModalVisible, setProfileModalVisible] = useState(false);
@@ -446,48 +446,27 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Sub-header Bar: Title on RIGHT, Controls on LEFT */}
-      <View style={styles.controlsBar}>
-        {/* Right: Section Title */}
-        <View style={styles.sectionHeaderCol}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>مخازن الأدوية</Text>
-          <Text style={[styles.sectionSubtitle, { color: colors.secondaryText }]}>
-            {warehouses.length} {warehouses.length === 1 ? 'مخزن متاح' : 'مخازن متاحة'}
-          </Text>
-        </View>
-
-        {/* Left: Actions (View Mode Toggle + Reorder) */}
-        <View style={styles.controlsActionsRow}>
-          <TouchableOpacity
-            style={[styles.controlIconBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
-            onPress={() => setViewMode((prev) => (prev === 'list' ? 'grid' : 'list'))}
-            activeOpacity={0.8}
-          >
-            <Ionicons
-              name={viewMode === 'list' ? 'grid-outline' : 'list-outline'}
-              size={17}
-              color={colors.primary}
-            />
-          </TouchableOpacity>
-
+      {/* Sub-header Bar: Reorder Button (only if multiple warehouses exist) */}
+      {warehouses.length > 1 && (
+        <View style={styles.controlsBar}>
           <TouchableOpacity
             style={[styles.reorderBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
             onPress={() => setSortModalVisible(true)}
             activeOpacity={0.8}
           >
             <Ionicons name="swap-vertical" size={15} color={colors.primary} />
-            <Text style={[styles.reorderBtnText, { color: colors.primary }]}>ترتيب</Text>
+            <Text style={[styles.reorderBtnText, { color: colors.primary }]}>ترتيب المخازن</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      )}
 
-      {/* Warehouses List / Grid */}
+      {/* Warehouses List */}
       <FlatList
-        key={viewMode}
+        key={isTablet ? 'tablet-grid' : 'phone-list'}
         data={warehouses}
         keyExtractor={(item) => item.id}
-        numColumns={viewMode === 'grid' ? 2 : 1}
-        columnWrapperStyle={viewMode === 'grid' ? styles.columnWrapper : undefined}
+        numColumns={isTablet ? 2 : 1}
+        columnWrapperStyle={isTablet ? styles.columnWrapper : undefined}
         contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
@@ -500,91 +479,15 @@ export default function HomeScreen() {
               : `https://xpharma.cloud${item.logo_url}`
             : null;
 
-          if (viewMode === 'grid') {
-            return (
-              <TouchableOpacity
-                style={styles.appStoreGridCard}
-                onPress={() => handleWarehousePress(item)}
-                activeOpacity={0.9}
-              >
-                {/* 1. Solid Dark Foundation */}
-                <View style={[StyleSheet.absoluteFill, { backgroundColor: '#13161D' }]} />
+          const categoryText = item.category || 'مخزن أدوية';
+          const isPharma = categoryText.includes('أدوية') || categoryText.includes('ادوية');
 
-                {/* 2. Automatic Ambient Logo Blur (Derives card background directly from the logo) */}
-                {logoUri ? (
-                  <Image
-                    source={{ uri: logoUri }}
-                    style={styles.ambientBlurImage}
-                    blurRadius={Platform.select({ ios: 50, android: 25, default: 40 })}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <LinearGradient
-                    colors={defaultFallbackGradient}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={StyleSheet.absoluteFill}
-                  />
-                )}
-
-                {/* 3. Subtle Contrast Tint */}
-                <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(10, 14, 22, 0.35)' }]} />
-
-                <View style={styles.gridContentContainer}>
-                  {/* Top Status & Icon Row */}
-                  <View style={styles.gridCardTopRow}>
-                    {item.is_linked ? (
-                      <View style={styles.appStorePillLinkedCompact}>
-                        <Ionicons name="checkmark-circle" size={11} color="#34D399" />
-                        <Text style={styles.appStorePillTextLinkedCompact}>مربوط</Text>
-                      </View>
-                    ) : (
-                      <View style={styles.appStorePillUnlinkedCompact}>
-                        <Ionicons name="link" size={10} color="#FFFFFF" />
-                        <Text style={styles.appStorePillTextUnlinkedCompact}>ربط</Text>
-                      </View>
-                    )}
-
-                    <View style={styles.gridAppIconSquircle}>
-                      {logoUri ? (
-                        <Image
-                          source={{ uri: logoUri }}
-                          style={styles.gridAppIconImg}
-                          resizeMode="contain"
-                        />
-                      ) : (
-                        <View style={[styles.gridAppIconFallback, { backgroundColor: visual.softBg }]}>
-                          <MaterialCommunityIcons name={visual.iconName} size={22} color={visual.accentColor} />
-                        </View>
-                      )}
-                    </View>
-                  </View>
-
-                  {/* Warehouse Name */}
-                  <Text style={styles.gridWarehouseName} numberOfLines={2}>
-                    {item.name}
-                  </Text>
-
-                  {/* Footer with Tag & Arrow */}
-                  <View style={styles.gridCardFooter}>
-                    <Text style={styles.gridBrandTag} numberOfLines={1}>
-                      {visual.brandTag || 'مستودع أدوية'}
-                    </Text>
-                    <Ionicons
-                      name="chevron-back"
-                      size={14}
-                      color="rgba(255, 255, 255, 0.7)"
-                    />
-                  </View>
-                </View>
-              </TouchableOpacity>
-            );
-          }
-
-          // Default: App Store Panoramic Banner Card (Automatic dynamic logo-matched background!)
           return (
             <TouchableOpacity
-              style={styles.appStoreBannerCard}
+              style={[
+                styles.appStoreBannerCard,
+                isTablet && { width: TABLET_CARD_WIDTH, marginBottom: CARD_GAP },
+              ]}
               onPress={() => handleWarehousePress(item)}
               activeOpacity={0.9}
             >
@@ -608,7 +511,7 @@ export default function HomeScreen() {
                 />
               )}
 
-              {/* 3. Smooth Seamless Contrast Overlay (Uniform, no seams or dividers) */}
+              {/* 3. Smooth Seamless Contrast Overlay */}
               <LinearGradient
                 colors={['rgba(10, 14, 22, 0.42)', 'rgba(10, 14, 22, 0.2)', 'rgba(10, 14, 22, 0.48)']}
                 start={{ x: 0, y: 0 }}
@@ -616,37 +519,28 @@ export default function HomeScreen() {
                 style={StyleSheet.absoluteFill}
               />
 
-              {/* 5. Card Content */}
+              {/* 4. Card Content: Name & Category, No Arrows */}
               <View style={styles.bannerContentRow}>
-                {/* Left indicator arrow (in RTL) */}
-                <View style={styles.bannerLeftArrowCol}>
-                  <Ionicons
-                    name="chevron-back"
-                    size={18}
-                    color="rgba(255, 255, 255, 0.6)"
-                  />
-                </View>
-
-                {/* Center Details Column */}
+                {/* Details Column (Right in RTL layout) */}
                 <View style={styles.bannerDetailsCol}>
                   {/* Warehouse Name */}
                   <Text style={styles.bannerTitleText} numberOfLines={1}>
                     {item.name}
                   </Text>
 
-                  {/* Category / Subtitle (Like 'Medicina' / 'Trivia' in the App Store) */}
-                  <Text style={styles.bannerCategoryText} numberOfLines={1}>
-                    {item.address ? `مستودع أدوية • ${item.address}` : 'مستودع أدوية معتمد • Medical'}
-                  </Text>
+                  {/* Warehouse Category Badge */}
+                  <View style={styles.categoryBadgeRow}>
+                    <MaterialCommunityIcons
+                      name={isPharma ? 'pill' : 'cube-outline'}
+                      size={13}
+                      color="#6EE7B7"
+                    />
+                    <Text style={styles.bannerCategoryText} numberOfLines={1}>
+                      {categoryText}
+                    </Text>
+                  </View>
 
-                  {/* Small Meta Line */}
-                  <Text style={styles.bannerMetaText} numberOfLines={1}>
-                    {item.contact_phone
-                      ? `📞 دعم الربط: ${item.contact_phone} • ربط فوري`
-                      : 'ربط مباشر عبر النظام • متوافق مع الصيدلية'}
-                  </Text>
-
-                  {/* App Store Pill Button (Like 'Compartir' / 'Share') */}
+                  {/* Status Pills */}
                   <View style={styles.bannerPillsRow}>
                     {item.is_linked ? (
                       <View style={styles.appStorePillLinked}>
@@ -664,7 +558,6 @@ export default function HomeScreen() {
                       <Text style={styles.appStoreSecondaryPillText}>
                         {item.is_linked ? 'فتح اللوحة' : 'فحص الكود'}
                       </Text>
-                      <Ionicons name="arrow-back" size={11} color="rgba(255, 255, 255, 0.75)" />
                     </View>
                   </View>
                 </View>
@@ -977,22 +870,11 @@ const styles = StyleSheet.create({
   },
   controlsBar: {
     flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     alignItems: 'center',
     paddingHorizontal: PADDING_HORIZONTAL,
-    paddingTop: 16,
-    paddingBottom: 10,
-  },
-  sectionHeaderCol: {
-    alignItems: 'flex-end',
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  sectionSubtitle: {
-    fontSize: 12,
-    marginTop: 2,
+    paddingTop: 8,
+    paddingBottom: 6,
   },
   reorderBtn: {
     flexDirection: 'row-reverse',
@@ -1016,19 +898,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row-reverse',
     justifyContent: 'space-between',
     marginBottom: CARD_GAP,
-  },
-  controlsActionsRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 8,
-  },
-  controlIconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 
   // App Store Panoramic Banner Card (Automatic dynamic logo-derived background)
@@ -1102,17 +971,20 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
   },
-  bannerCategoryText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#BAE6FD',
-    marginTop: 2,
-    textAlign: 'right',
+  categoryBadgeRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 8,
   },
-  bannerMetaText: {
-    fontSize: 11,
-    color: 'rgba(255, 255, 255, 0.72)',
-    marginTop: 2,
+  bannerCategoryText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#E0F2FE',
     textAlign: 'right',
   },
   bannerPillsRow: {
@@ -1168,121 +1040,6 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.85)',
     fontSize: 11,
     fontWeight: '600',
-  },
-  bannerLeftArrowCol: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  // Grid Mode Banner Card
-  appStoreGridCard: {
-    width: CARD_WIDTH,
-    borderRadius: 20,
-    marginBottom: CARD_GAP,
-    overflow: 'hidden',
-    position: 'relative',
-    backgroundColor: '#13161D',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 8,
-    elevation: 4,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-  },
-  gridContentContainer: {
-    padding: 12,
-    minHeight: 145,
-    justifyContent: 'space-between',
-  },
-  gridCardTopRow: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  gridAppIconSquircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: '#FFFFFF',
-    padding: 3,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.4)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 3,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  gridAppIconImg: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 11,
-  },
-  gridAppIconFallback: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  appStorePillLinkedCompact: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: 'rgba(16, 185, 129, 0.25)',
-    borderWidth: 1,
-    borderColor: 'rgba(52, 211, 153, 0.65)',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 100,
-  },
-  appStorePillTextLinkedCompact: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  appStorePillUnlinkedCompact: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: 'rgba(255, 255, 255, 0.22)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.45)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 100,
-  },
-  appStorePillTextUnlinkedCompact: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  gridWarehouseName: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    textAlign: 'right',
-    marginVertical: 6,
-    lineHeight: 18,
-    textShadowColor: 'rgba(0, 0, 0, 0.45)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
-  },
-  gridCardFooter: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.15)',
-    paddingTop: 8,
-  },
-  gridBrandTag: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#BAE6FD',
   },
   loadingBox: {
     alignItems: 'center',

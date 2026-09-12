@@ -9,7 +9,7 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = await req.json();
-    const { name, address, contact_phone, logo_url } = body;
+    const { name, address, contact_phone, logo_url, category } = body;
 
     const result = await query(
       `UPDATE public.tenants 
@@ -17,14 +17,16 @@ export async function PATCH(
            address = COALESCE($2, address),
            contact_phone = COALESCE($3, contact_phone),
            logo_url = COALESCE($4, logo_url),
+           category = COALESCE($5, category),
            updated_at = NOW() 
-       WHERE id = $5 
-       RETURNING id, name, slug, schema_name, status, address, contact_phone, logo_url, created_at`,
+       WHERE id = $6 
+       RETURNING id, name, slug, schema_name, status, address, contact_phone, logo_url, category, created_at`,
       [
         name !== undefined ? name.trim() : null,
         address !== undefined ? address.trim() : null,
         contact_phone !== undefined ? contact_phone.trim() : null,
         logo_url !== undefined ? logo_url.trim() : null,
+        category !== undefined ? category.trim() : null,
         id,
       ]
     );

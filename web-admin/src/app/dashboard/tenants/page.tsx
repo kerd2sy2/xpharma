@@ -50,6 +50,7 @@ interface Tenant {
   address?: string | null;
   contact_phone?: string | null;
   logo_url?: string | null;
+  category?: string | null;
   last_heartbeat_at: string | null;
   created_at: string;
   sync_status: string;
@@ -113,6 +114,7 @@ export default function TenantsPage() {
   const [newAddress, setNewAddress] = useState('');
   const [newContactPhone, setNewContactPhone] = useState('');
   const [newLogoUrl, setNewLogoUrl] = useState('');
+  const [newCategory, setNewCategory] = useState<'مخزن أدوية' | 'مخزن إكسسوارات ومستلزمات'>('مخزن أدوية');
   const [creating, setCreating] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
 
@@ -122,6 +124,7 @@ export default function TenantsPage() {
   const [editAddress, setEditAddress] = useState('');
   const [editContactPhone, setEditContactPhone] = useState('');
   const [editLogoUrl, setEditLogoUrl] = useState('');
+  const [editCategory, setEditCategory] = useState<'مخزن أدوية' | 'مخزن إكسسوارات ومستلزمات'>('مخزن أدوية');
   const [updating, setUpdating] = useState(false);
 
   const createFileInputRef = useRef<HTMLInputElement>(null);
@@ -205,6 +208,7 @@ export default function TenantsPage() {
           address: newAddress.trim(),
           contact_phone: newContactPhone.trim(),
           logo_url: cleanLogo,
+          category: newCategory,
         }),
       });
 
@@ -217,6 +221,7 @@ export default function TenantsPage() {
         setNewAddress('');
         setNewContactPhone('');
         setNewLogoUrl('');
+        setNewCategory('مخزن أدوية');
         setGeneratedApiKey(data.apiKey);
         setGeneratedTenantName(data.tenant.name);
         setTokenOpen(true);
@@ -237,6 +242,7 @@ export default function TenantsPage() {
     setEditAddress(t.address || '');
     setEditContactPhone(t.contact_phone || '');
     setEditLogoUrl(t.logo_url || '');
+    setEditCategory((t.category as any) || 'مخزن أدوية');
     setEditOpen(true);
   };
 
@@ -263,6 +269,7 @@ export default function TenantsPage() {
           address: editAddress.trim(),
           contact_phone: editContactPhone.trim(),
           logo_url: cleanLogo,
+          category: editCategory,
         }),
       });
 
@@ -446,7 +453,19 @@ export default function TenantsPage() {
                           <div className='flex items-center gap-3'>
                             <TenantLogo url={t.logo_url} name={t.name} />
                             <div>
-                              <div className='font-bold text-foreground'>{t.name}</div>
+                              <div className='flex items-center gap-2'>
+                                <span className='font-bold text-foreground'>{t.name}</span>
+                                <Badge
+                                  variant='outline'
+                                  className={
+                                    t.category?.includes('إكسسوار')
+                                      ? 'text-[10px] bg-purple-50 text-purple-700 border-purple-200 py-0'
+                                      : 'text-[10px] bg-blue-50 text-blue-700 border-blue-200 py-0'
+                                  }
+                                >
+                                  {t.category || 'مخزن أدوية'}
+                                </Badge>
+                              </div>
                               <code className='text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded'>
                                 {t.slug}
                               </code>
@@ -615,6 +634,39 @@ export default function TenantsPage() {
                 </div>
               </div>
 
+              {/* Category Selection */}
+              <div className='grid gap-1.5'>
+                <Label className='text-right'>
+                  تصنيف المخزن <span className='text-rose-500'>*</span>
+                </Label>
+                <div className='grid grid-cols-2 gap-3'>
+                  <button
+                    type='button'
+                    onClick={() => setNewCategory('مخزن أدوية')}
+                    className={`py-2 px-3 rounded-lg border text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                      newCategory === 'مخزن أدوية'
+                        ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                        : 'bg-card text-muted-foreground border-border hover:bg-accent'
+                    }`}
+                  >
+                    <span>💊</span>
+                    <span>مخزن أدوية</span>
+                  </button>
+                  <button
+                    type='button'
+                    onClick={() => setNewCategory('مخزن إكسسوارات ومستلزمات')}
+                    className={`py-2 px-3 rounded-lg border text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                      newCategory === 'مخزن إكسسوارات ومستلزمات'
+                        ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                        : 'bg-card text-muted-foreground border-border hover:bg-accent'
+                    }`}
+                  >
+                    <span>🩺</span>
+                    <span>إكسسوارات ومستلزمات</span>
+                  </button>
+                </div>
+              </div>
+
               {/* Contact Phone & Address */}
               <div className='grid grid-cols-1 sm:grid-cols-2 gap-3'>
                 <div className='grid gap-1.5'>
@@ -768,6 +820,39 @@ export default function TenantsPage() {
                     value={editAddress}
                     onChange={(e) => setEditAddress(e.target.value)}
                   />
+                </div>
+              </div>
+
+              {/* Category Edit */}
+              <div className='grid gap-1.5'>
+                <Label className='text-right'>
+                  تصنيف المخزن <span className='text-rose-500'>*</span>
+                </Label>
+                <div className='grid grid-cols-2 gap-3'>
+                  <button
+                    type='button'
+                    onClick={() => setEditCategory('مخزن أدوية')}
+                    className={`py-2 px-3 rounded-lg border text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                      editCategory === 'مخزن أدوية'
+                        ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                        : 'bg-card text-muted-foreground border-border hover:bg-accent'
+                    }`}
+                  >
+                    <span>💊</span>
+                    <span>مخزن أدوية</span>
+                  </button>
+                  <button
+                    type='button'
+                    onClick={() => setEditCategory('مخزن إكسسوارات ومستلزمات')}
+                    className={`py-2 px-3 rounded-lg border text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                      editCategory === 'مخزن إكسسوارات ومستلزمات'
+                        ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                        : 'bg-card text-muted-foreground border-border hover:bg-accent'
+                    }`}
+                  >
+                    <span>🩺</span>
+                    <span>إكسسوارات ومستلزمات</span>
+                  </button>
                 </div>
               </div>
 
