@@ -60,6 +60,46 @@ interface Tenant {
   agent_health: 'online' | 'offline_alert' | 'idle' | 'never';
 }
 
+function TenantLogo({ url, name, size = '10' }: { url?: string | null; name: string; size?: string }) {
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setHasError(false);
+  }, [url]);
+
+  const cleanUrl = (url || '').trim();
+  const formattedUrl = cleanUrl
+    ? cleanUrl.startsWith('http') || cleanUrl.startsWith('/')
+      ? cleanUrl
+      : `https://${cleanUrl}`
+    : '';
+
+  if (!formattedUrl || hasError) {
+    return (
+      <div
+        className={`${
+          size === '14' ? 'size-14' : 'size-10'
+        } rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary font-bold shrink-0 text-sm`}
+      >
+        {name ? name.charAt(0).toUpperCase() : 'م'}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={formattedUrl}
+      alt={name}
+      referrerPolicy='no-referrer'
+      crossOrigin='anonymous'
+      className={`${
+        size === '14' ? 'size-14' : 'size-10'
+      } rounded-xl object-contain border bg-white p-0.5 shadow-xs shrink-0`}
+      onError={() => setHasError(true)}
+    />
+  );
+}
+
 export default function TenantsPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -149,6 +189,11 @@ export default function TenantsPage() {
       return;
     }
 
+    let cleanLogo = newLogoUrl.trim();
+    if (cleanLogo && !cleanLogo.startsWith('http') && !cleanLogo.startsWith('/')) {
+      cleanLogo = `https://${cleanLogo}`;
+    }
+
     try {
       setCreating(true);
       const res = await fetch('/api/tenants', {
@@ -159,7 +204,7 @@ export default function TenantsPage() {
           slug: newSlug.trim(),
           address: newAddress.trim(),
           contact_phone: newContactPhone.trim(),
-          logo_url: newLogoUrl.trim(),
+          logo_url: cleanLogo,
         }),
       });
 
@@ -203,6 +248,11 @@ export default function TenantsPage() {
       return;
     }
 
+    let cleanLogo = editLogoUrl.trim();
+    if (cleanLogo && !cleanLogo.startsWith('http') && !cleanLogo.startsWith('/')) {
+      cleanLogo = `https://${cleanLogo}`;
+    }
+
     try {
       setUpdating(true);
       const res = await fetch(`/api/tenants/${editingTenant.id}`, {
@@ -212,7 +262,7 @@ export default function TenantsPage() {
           name: editName.trim(),
           address: editAddress.trim(),
           contact_phone: editContactPhone.trim(),
-          logo_url: editLogoUrl.trim(),
+          logo_url: cleanLogo,
         }),
       });
 
@@ -394,21 +444,7 @@ export default function TenantsPage() {
                         {/* Warehouse Name & Logo */}
                         <TableCell>
                           <div className='flex items-center gap-3'>
-                            {t.logo_url ? (
-                              <img
-                                src={t.logo_url}
-                                alt={t.name}
-                                className='size-10 rounded-xl object-contain border bg-white p-0.5 shadow-xs shrink-0'
-                                onError={(e) => {
-                                  // Fallback on broken image
-                                  (e.currentTarget as HTMLElement).style.display = 'none';
-                                }}
-                              />
-                            ) : (
-                              <div className='size-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary font-bold shrink-0'>
-                                {t.name.charAt(0)}
-                              </div>
-                            )}
+                            <TenantLogo url={t.logo_url} name={t.name} />
                             <div>
                               <div className='font-bold text-foreground'>{t.name}</div>
                               <code className='text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded'>
@@ -620,17 +656,7 @@ export default function TenantsPage() {
                 </Label>
 
                 <div className='flex items-center gap-3'>
-                  {newLogoUrl ? (
-                    <img
-                      src={newLogoUrl}
-                      alt='معاينة اللوجو'
-                      className='size-14 rounded-xl border object-contain bg-white p-1 shadow-xs shrink-0'
-                    />
-                  ) : (
-                    <div className='size-14 rounded-xl border border-dashed flex items-center justify-center text-muted-foreground bg-muted shrink-0'>
-                      <IconPhoto className='size-6' />
-                    </div>
-                  )}
+                  <TenantLogo url={newLogoUrl} name={newName || 'لوجو'} size='14' />
 
                   <div className='flex-1 space-y-2'>
                     <Input
@@ -753,17 +779,7 @@ export default function TenantsPage() {
                 </Label>
 
                 <div className='flex items-center gap-3'>
-                  {editLogoUrl ? (
-                    <img
-                      src={editLogoUrl}
-                      alt='معاينة اللوجو'
-                      className='size-14 rounded-xl border object-contain bg-white p-1 shadow-xs shrink-0'
-                    />
-                  ) : (
-                    <div className='size-14 rounded-xl border border-dashed flex items-center justify-center text-muted-foreground bg-muted shrink-0'>
-                      <IconPhoto className='size-6' />
-                    </div>
-                  )}
+                  <TenantLogo url={editLogoUrl} name={editName || 'لوجو'} size='14' />
 
                   <div className='flex-1 space-y-2'>
                     <Input
