@@ -33,7 +33,7 @@ interface WarehousePortalScreenProps {
   onBack: () => void;
 }
 
-type TabKey = 'purchases' | 'returns' | 'receipts' | 'statement';
+type SectionKey = 'purchases' | 'returns' | 'receipts' | 'statement';
 
 export default function WarehousePortalScreen({
   warehouse,
@@ -42,9 +42,7 @@ export default function WarehousePortalScreen({
   pharmacyName,
   onBack,
 }: WarehousePortalScreenProps) {
-  const isDark = false;
-
-  const [activeTab, setActiveTab] = useState<TabKey>('purchases');
+  const [selectedSection, setSelectedSection] = useState<SectionKey | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -58,14 +56,16 @@ export default function WarehousePortalScreen({
     bg: '#F9F7FD',
     card: '#FFFFFF',
     text: '#1A0A33',
-    secondaryText: '#6B5E82',
-    border: '#E9E3F3',
+    secondaryText: '#7B6F93',
+    border: '#EDE7F6',
     primary: '#3f0082',
-    primarySoft: '#3f008215',
-    success: '#00d780',
-    successSoft: '#00d78018',
-    warning: '#F59E0B',
-    danger: '#EF4444',
+    primarySoft: '#3f008212',
+    success: '#00B86B',
+    successSoft: '#00B86B14',
+    warning: '#D97706',
+    warningSoft: '#D9770614',
+    indigo: '#4F46E5',
+    indigoSoft: '#4F46E514',
   };
 
   const loadData = async (showLoader = true) => {
@@ -117,15 +117,270 @@ export default function WarehousePortalScreen({
   };
 
   const insets = useSafeAreaInsets();
-  const topInset = Math.max(insets.top, 28);
+  const topInset = Math.max(insets.top, 24);
 
+  // Sections configuration
+  const sections = [
+    {
+      key: 'purchases' as SectionKey,
+      num: '1',
+      title: 'المشتريات',
+      desc: 'فواتير الصيدلي اللي أخدها من المخزن',
+      amount: balance?.total_purchases,
+      count: invoices.length,
+      icon: 'cart-outline' as const,
+      color: colors.primary,
+      bgColor: colors.primarySoft,
+    },
+    {
+      key: 'returns' as SectionKey,
+      num: '2',
+      title: 'المرتجعات',
+      desc: 'الفواتير أو الأصناف اللي رجعها للمخزن',
+      amount: balance?.total_returns,
+      count: returns.length,
+      icon: 'arrow-undo-outline' as const,
+      color: colors.warning,
+      bgColor: colors.warningSoft,
+    },
+    {
+      key: 'receipts' as SectionKey,
+      num: '3',
+      title: 'النقدية',
+      desc: 'الفلوس اللي دفعها أو ادفعتله',
+      amount: balance?.total_paid,
+      count: receipts.length,
+      icon: 'cash-outline' as const,
+      color: colors.success,
+      bgColor: colors.successSoft,
+    },
+    {
+      key: 'statement' as SectionKey,
+      num: '4',
+      title: 'كشف حساب',
+      desc: 'حركات الحساب التفصيلية والرصيد',
+      count: statement.length,
+      icon: 'receipt-outline' as const,
+      color: colors.indigo,
+      bgColor: colors.indigoSoft,
+    },
+  ];
+
+  // ----------------------------------------------------
+  // SUB-SCREEN: DEDICATED SECTION PAGE (صفحة منفصلة للقسم)
+  // ----------------------------------------------------
+  if (selectedSection) {
+    const currentSection = sections.find((s) => s.key === selectedSection);
+
+    return (
+      <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
+        <StatusBar barStyle="dark-content" backgroundColor={colors.bg} translucent={false} />
+
+        {/* Section Page Header */}
+        <View style={styles.topHeader}>
+          <TouchableOpacity
+            style={styles.backBtnClean}
+            onPress={() => setSelectedSection(null)}
+            activeOpacity={0.6}
+          >
+            <Ionicons name="arrow-forward" size={24} color={colors.text} />
+          </TouchableOpacity>
+          <Text style={[styles.topHeaderTitle, { color: colors.text }]}>
+            {currentSection?.title}
+          </Text>
+          <View style={styles.topHeaderSpacer} />
+        </View>
+
+        {/* Section Quick Summary Bar */}
+        <View style={[styles.sectionSummaryBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.summaryBarCol}>
+            <Text style={[styles.summaryBarDesc, { color: colors.secondaryText }]}>
+              {currentSection?.desc}
+            </Text>
+            {currentSection?.amount !== undefined && (
+              <Text style={[styles.summaryBarAmount, { color: currentSection.color }]}>
+                {formatCurrency(currentSection.amount)}
+              </Text>
+            )}
+          </View>
+          <View style={[styles.summaryCountBadge, { backgroundColor: currentSection?.bgColor }]}>
+            <Text style={[styles.summaryCountText, { color: currentSection?.color }]}>
+              {currentSection?.count} سجل
+            </Text>
+          </View>
+        </View>
+
+        {/* Section List Content */}
+        <ScrollView
+          style={styles.scrollArea}
+          contentContainerStyle={styles.subPageScrollContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
+          }
+        >
+          {/* PURCHASES LIST */}
+          {selectedSection === 'purchases' && (
+            invoices.length === 0 ? (
+              <View style={[styles.simpleEmptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Ionicons name="cart-outline" size={38} color={colors.secondaryText} />
+                <Text style={[styles.simpleEmptyText, { color: colors.secondaryText }]}>لا توجد فواتير مشتريات</Text>
+              </View>
+            ) : (
+              invoices.map((inv, idx) => (
+                <View
+                  key={inv.id || idx}
+                  style={[styles.simpleRowCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                >
+                  <View style={styles.rowCardRight}>
+                    <Text style={[styles.rowTitle, { color: colors.text }]}>
+                      فاتورة #{inv.invoice_number || inv.remote_id}
+                    </Text>
+                    <Text style={[styles.rowDate, { color: colors.secondaryText }]}>
+                      {formatDate(inv.invoice_date)}
+                    </Text>
+                  </View>
+                  <View style={styles.rowCardLeft}>
+                    <Text style={[styles.rowAmount, { color: colors.primary }]}>
+                      {formatCurrency(inv.net_amount || inv.total_amount)}
+                    </Text>
+                    {inv.status ? (
+                      <Text style={[styles.rowStatusText, { color: colors.secondaryText }]}>
+                        {inv.status}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+              ))
+            )
+          )}
+
+          {/* RETURNS LIST */}
+          {selectedSection === 'returns' && (
+            returns.length === 0 ? (
+              <View style={[styles.simpleEmptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Ionicons name="arrow-undo-outline" size={38} color={colors.secondaryText} />
+                <Text style={[styles.simpleEmptyText, { color: colors.secondaryText }]}>لا توجد فواتير مرتجعات</Text>
+              </View>
+            ) : (
+              returns.map((ret, idx) => (
+                <View
+                  key={ret.id || idx}
+                  style={[styles.simpleRowCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                >
+                  <View style={styles.rowCardRight}>
+                    <Text style={[styles.rowTitle, { color: colors.text }]}>
+                      مرتجع #{ret.return_number || ret.remote_id || idx + 1}
+                    </Text>
+                    <Text style={[styles.rowDate, { color: colors.secondaryText }]}>
+                      {formatDate(ret.return_date)}
+                    </Text>
+                  </View>
+                  <View style={styles.rowCardLeft}>
+                    <Text style={[styles.rowAmount, { color: colors.warning }]}>
+                      {formatCurrency(ret.net_amount || ret.total_amount)}
+                    </Text>
+                    {ret.status ? (
+                      <Text style={[styles.rowStatusText, { color: colors.secondaryText }]}>
+                        {ret.status}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+              ))
+            )
+          )}
+
+          {/* RECEIPTS / CASH LIST */}
+          {selectedSection === 'receipts' && (
+            receipts.length === 0 ? (
+              <View style={[styles.simpleEmptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Ionicons name="cash-outline" size={38} color={colors.secondaryText} />
+                <Text style={[styles.simpleEmptyText, { color: colors.secondaryText }]}>لا توجد حركات نقدية مسددة</Text>
+              </View>
+            ) : (
+              receipts.map((rec, idx) => (
+                <View
+                  key={rec.id || idx}
+                  style={[styles.simpleRowCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                >
+                  <View style={styles.rowCardRight}>
+                    <Text style={[styles.rowTitle, { color: colors.text }]}>
+                      إيصال #{rec.receipt_number || rec.remote_id || idx + 1}
+                    </Text>
+                    <Text style={[styles.rowDate, { color: colors.secondaryText }]}>
+                      {formatDate(rec.receipt_date)}
+                    </Text>
+                  </View>
+                  <View style={styles.rowCardLeft}>
+                    <Text style={[styles.rowAmount, { color: colors.success }]}>
+                      {formatCurrency(rec.amount)}
+                    </Text>
+                    <Text style={[styles.rowStatusText, { color: colors.secondaryText }]}>
+                      {rec.payment_method || rec.notes || 'سداد نقدي'}
+                    </Text>
+                  </View>
+                </View>
+              ))
+            )
+          )}
+
+          {/* STATEMENT LIST */}
+          {selectedSection === 'statement' && (
+            statement.length === 0 ? (
+              <View style={[styles.simpleEmptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Ionicons name="receipt-outline" size={38} color={colors.secondaryText} />
+                <Text style={[styles.simpleEmptyText, { color: colors.secondaryText }]}>لا توجد حركات كشف حساب</Text>
+              </View>
+            ) : (
+              statement.map((stm, idx) => (
+                <View
+                  key={stm.id || idx}
+                  style={[styles.simpleRowCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                >
+                  <View style={styles.rowCardRight}>
+                    <Text style={[styles.rowTitle, { color: colors.text }]}>
+                      {stm.doc_type || 'حركة'} #{stm.doc_number || stm.remote_id}
+                    </Text>
+                    <Text style={[styles.rowDate, { color: colors.secondaryText }]}>
+                      {formatDate(stm.entry_date)}
+                    </Text>
+                    {stm.description ? (
+                      <Text style={[styles.rowDescText, { color: colors.secondaryText }]} numberOfLines={1}>
+                        {stm.description}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <View style={styles.rowCardLeft}>
+                    {stm.debit > 0 && (
+                      <Text style={[styles.rowAmount, { color: colors.primary }]}>
+                        +{formatCurrency(stm.debit)}
+                      </Text>
+                    )}
+                    {stm.credit > 0 && (
+                      <Text style={[styles.rowAmount, { color: colors.success }]}>
+                        -{formatCurrency(stm.credit)}
+                      </Text>
+                    )}
+                    <Text style={[styles.statementBalText, { color: colors.secondaryText }]}>
+                      الرصيد: {formatCurrency(stm.balance)}
+                    </Text>
+                  </View>
+                </View>
+              ))
+            )
+          )}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // ----------------------------------------------------
+  // MAIN PORTAL SCREEN (شاشة المخزن الرئيسية البسيطة)
+  // ----------------------------------------------------
   return (
     <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
-      <StatusBar
-        barStyle="dark-content"
-        backgroundColor={colors.bg}
-        translucent={false}
-      />
+      <StatusBar barStyle="dark-content" backgroundColor={colors.bg} translucent={false} />
 
       {/* Top Header: Simple back arrow */}
       <View style={styles.topHeader}>
@@ -136,7 +391,7 @@ export default function WarehousePortalScreen({
         >
           <Ionicons name="arrow-forward" size={24} color={colors.text} />
         </TouchableOpacity>
-        <Text style={[styles.topHeaderTitle, { color: colors.text }]}>حساب الصيدلية بالمخزن</Text>
+        <Text style={[styles.topHeaderTitle, { color: colors.text }]}>حساب الصيدلية</Text>
         <View style={styles.topHeaderSpacer} />
       </View>
 
@@ -144,470 +399,72 @@ export default function WarehousePortalScreen({
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
           <Text style={[styles.loadingText, { color: colors.secondaryText }]}>
-            بنحمل بيانات وحسابات صيدليتك من سيستم المخزن...
+            جاري تحميل الحساب...
           </Text>
         </View>
       ) : (
         <ScrollView
           style={styles.scrollArea}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={styles.mainScrollContent}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
           }
         >
-          {/* أولاً: كرت اسم المخزن */}
-          <View style={[styles.mainCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={styles.warehouseCardRow}>
-              <View style={[styles.warehouseIconCircle, { backgroundColor: colors.primarySoft }]}>
-                <Ionicons name="business" size={26} color={colors.primary} />
-              </View>
-              <View style={styles.warehouseInfoCol}>
-                <View style={styles.onlineBadgeRow}>
-                  <View style={styles.onlineDot} />
-                  <Text style={styles.onlineBadgeText}>مخزن أدوية متصل أونلاين</Text>
-                </View>
-                <Text style={[styles.warehouseNameTitle, { color: colors.text }]}>
-                  {warehouse.name}
-                </Text>
-              </View>
-            </View>
-          </View>
-
-          {/* ثانياً: كرت اسم الصيدلية والرصيد الحالي */}
-          <View style={[styles.mainCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            {/* Pharmacy Identity Row */}
-            <View style={styles.pharmacyIdentityRow}>
-              <View style={styles.pharmacyTitleCol}>
-                <Text style={[styles.pharmacySubHead, { color: colors.secondaryText }]}>الصيدلية المربوطة</Text>
-                <Text style={[styles.pharmacyNameLarge, { color: colors.text }]} numberOfLines={1}>
-                  {pharmacyName || 'الصيدلية'}
-                </Text>
-                <Text style={[styles.pharmacyCodePill, { color: colors.primary }]}>
-                  كود الصيدلية بالمخزن: #{pharmacyCode}
-                </Text>
-              </View>
-              <View style={[styles.linkedBadge, { backgroundColor: colors.successSoft }]}>
-                <Ionicons name="shield-checkmark" size={15} color={colors.success} />
-                <Text style={[styles.linkedBadgeText, { color: colors.success }]}>مربوطة</Text>
-              </View>
-            </View>
-
-            <View style={[styles.cardDivider, { backgroundColor: colors.border }]} />
-
-            {/* Current Balance Row */}
-            <View style={styles.balanceSection}>
-              <View style={styles.balanceInfoCol}>
-                <Text style={[styles.balanceSubLabel, { color: colors.secondaryText }]}>
-                  الرصيد الحالي المطلوب منك للمخزن
-                </Text>
-                <Text style={[styles.balanceAmountLarge, { color: colors.primary }]}>
-                  {formatCurrency(balance?.balance)}
-                </Text>
-              </View>
-              <View style={[styles.balanceStatusTag, { backgroundColor: colors.successSoft }]}>
-                <Ionicons name="checkmark-circle" size={15} color={colors.success} />
-                <Text style={[styles.balanceStatusText, { color: colors.success }]}>حسابك مضبوط</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* ثالثاً: كروت الأقسام الأربعة */}
-          <View style={styles.sectionHeaderRow}>
-            <Text style={[styles.sectionTitleLabel, { color: colors.text }]}>
-              أقسام الحساب والفواتير
+          {/* كرت اسم الصيدلية والرصيد الحالي (بسيط وأنيق بدون زوائد أو خطوط فاصلة) */}
+          <View style={[styles.cleanBalanceCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.cleanPharmacyName, { color: colors.text }]} numberOfLines={1}>
+              {pharmacyName || 'الصيدلية'}
             </Text>
-            <Text style={[styles.sectionSubtitleLabel, { color: colors.secondaryText }]}>
-              اضغط على أي كرت لعرض تفاصيله
-            </Text>
-          </View>
-
-          <View style={styles.gridContainer}>
-            {/* 1. كرت المشتريات */}
-            <TouchableOpacity
-              style={[
-                styles.gridCard,
-                { backgroundColor: colors.card, borderColor: activeTab === 'purchases' ? colors.primary : colors.border },
-                activeTab === 'purchases' && { backgroundColor: colors.primarySoft, borderWidth: 2 },
-              ]}
-              onPress={() => setActiveTab('purchases')}
-              activeOpacity={0.8}
-            >
-              <View style={styles.gridCardHeader}>
-                <View style={[styles.gridIconWrap, { backgroundColor: activeTab === 'purchases' ? colors.primary : colors.primarySoft }]}>
-                  <Ionicons name="cart" size={20} color={activeTab === 'purchases' ? '#FFFFFF' : colors.primary} />
-                </View>
-                <View style={[styles.countPill, { backgroundColor: activeTab === 'purchases' ? colors.primary : '#E9E3F3' }]}>
-                  <Text style={[styles.countPillText, { color: activeTab === 'purchases' ? '#FFFFFF' : colors.primary }]}>
-                    {invoices.length}
-                  </Text>
-                </View>
-              </View>
-              <Text style={[styles.gridCardTitle, { color: colors.text }]}>1. المشتريات</Text>
-              <Text style={[styles.gridCardDesc, { color: colors.secondaryText }]}>
-                فواتير الصيدلي اللي أخدها من المخزن
+            <View style={styles.cleanBalanceBox}>
+              <Text style={[styles.cleanBalanceLabel, { color: colors.secondaryText }]}>
+                الرصيد الحالي
               </Text>
-              <Text style={[styles.gridCardAmount, { color: colors.primary }]}>
-                {formatCurrency(balance?.total_purchases)}
+              <Text style={[styles.cleanBalanceValue, { color: colors.primary }]}>
+                {formatCurrency(balance?.balance)}
               </Text>
-            </TouchableOpacity>
-
-            {/* 2. كرت المرتجعات */}
-            <TouchableOpacity
-              style={[
-                styles.gridCard,
-                { backgroundColor: colors.card, borderColor: activeTab === 'returns' ? colors.warning : colors.border },
-                activeTab === 'returns' && { backgroundColor: '#FEF3C755', borderWidth: 2 },
-              ]}
-              onPress={() => setActiveTab('returns')}
-              activeOpacity={0.8}
-            >
-              <View style={styles.gridCardHeader}>
-                <View style={[styles.gridIconWrap, { backgroundColor: activeTab === 'returns' ? colors.warning : '#FEF3C7' }]}>
-                  <Ionicons name="arrow-undo" size={20} color={activeTab === 'returns' ? '#FFFFFF' : '#B45309'} />
-                </View>
-                <View style={[styles.countPill, { backgroundColor: activeTab === 'returns' ? '#B45309' : '#FEF3C7' }]}>
-                  <Text style={[styles.countPillText, { color: activeTab === 'returns' ? '#FFFFFF' : '#B45309' }]}>
-                    {returns.length}
-                  </Text>
-                </View>
-              </View>
-              <Text style={[styles.gridCardTitle, { color: colors.text }]}>2. المرتجعات</Text>
-              <Text style={[styles.gridCardDesc, { color: colors.secondaryText }]}>
-                الفواتير أو الأصناف اللي رجعها للمخزن
-              </Text>
-              <Text style={[styles.gridCardAmount, { color: '#B45309' }]}>
-                {formatCurrency(balance?.total_returns)}
-              </Text>
-            </TouchableOpacity>
-
-            {/* 3. كرت النقدية */}
-            <TouchableOpacity
-              style={[
-                styles.gridCard,
-                { backgroundColor: colors.card, borderColor: activeTab === 'receipts' ? colors.success : colors.border },
-                activeTab === 'receipts' && { backgroundColor: colors.successSoft, borderWidth: 2 },
-              ]}
-              onPress={() => setActiveTab('receipts')}
-              activeOpacity={0.8}
-            >
-              <View style={styles.gridCardHeader}>
-                <View style={[styles.gridIconWrap, { backgroundColor: activeTab === 'receipts' ? colors.success : colors.successSoft }]}>
-                  <Ionicons name="wallet" size={20} color={activeTab === 'receipts' ? '#FFFFFF' : colors.success} />
-                </View>
-                <View style={[styles.countPill, { backgroundColor: activeTab === 'receipts' ? colors.success : colors.successSoft }]}>
-                  <Text style={[styles.countPillText, { color: activeTab === 'receipts' ? '#FFFFFF' : colors.success }]}>
-                    {receipts.length}
-                  </Text>
-                </View>
-              </View>
-              <Text style={[styles.gridCardTitle, { color: colors.text }]}>3. النقدية</Text>
-              <Text style={[styles.gridCardDesc, { color: colors.secondaryText }]}>
-                الفلوس اللي دفعها أو ادفعتله كاش
-              </Text>
-              <Text style={[styles.gridCardAmount, { color: colors.success }]}>
-                {formatCurrency(balance?.total_paid)}
-              </Text>
-            </TouchableOpacity>
-
-            {/* 4. كرت كشف الحساب */}
-            <TouchableOpacity
-              style={[
-                styles.gridCard,
-                { backgroundColor: colors.card, borderColor: activeTab === 'statement' ? '#6366F1' : colors.border },
-                activeTab === 'statement' && { backgroundColor: '#EEF2FF', borderWidth: 2 },
-              ]}
-              onPress={() => setActiveTab('statement')}
-              activeOpacity={0.8}
-            >
-              <View style={styles.gridCardHeader}>
-                <View style={[styles.gridIconWrap, { backgroundColor: activeTab === 'statement' ? '#6366F1' : '#EEF2FF' }]}>
-                  <Ionicons name="document-text" size={20} color={activeTab === 'statement' ? '#FFFFFF' : '#6366F1'} />
-                </View>
-                <View style={[styles.countPill, { backgroundColor: activeTab === 'statement' ? '#6366F1' : '#EEF2FF' }]}>
-                  <Text style={[styles.countPillText, { color: activeTab === 'statement' ? '#FFFFFF' : '#6366F1' }]}>
-                    {statement.length}
-                  </Text>
-                </View>
-              </View>
-              <Text style={[styles.gridCardTitle, { color: colors.text }]}>4. كشف حساب</Text>
-              <Text style={[styles.gridCardDesc, { color: colors.secondaryText }]}>
-                حركات الحساب التفصيلية والرصيد
-              </Text>
-              <Text style={[styles.gridCardAmount, { color: '#6366F1' }]}>
-                كشف الحساب
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* تفاصيل القسم المحدد أسفل الكروت */}
-          <View style={styles.detailsContainer}>
-            {/* عنوان القسم المحدد */}
-            <View style={styles.detailHeaderRow}>
-              <View style={styles.detailTitleGroup}>
-                <Text style={[styles.detailSectionTitle, { color: colors.text }]}>
-                  {activeTab === 'purchases' && 'سجل فواتير المشتريات من المخزن'}
-                  {activeTab === 'returns' && 'سجل فواتير المرتجعات للمخزن'}
-                  {activeTab === 'receipts' && 'سجل السندات والمدفوعات النقدية'}
-                  {activeTab === 'statement' && 'كشف الحساب التفصيلي للحركات'}
-                </Text>
-                <Text style={[styles.detailSectionSubtitle, { color: colors.secondaryText }]}>
-                  {activeTab === 'purchases' && `${invoices.length} فاتورة مشتريات مسجلة`}
-                  {activeTab === 'returns' && `${returns.length} إشعار مرتجع مسجل`}
-                  {activeTab === 'receipts' && `${receipts.length} سند قبض نقدي`}
-                  {activeTab === 'statement' && `${statement.length} حركة حساب`}
-                </Text>
-              </View>
             </View>
+          </View>
 
-            {/* تفاصيل المشتريات */}
-            {activeTab === 'purchases' && (
-              <View style={styles.tabContent}>
-                {invoices.length === 0 ? (
-                  <View style={[styles.emptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                    <Ionicons name="receipt-outline" size={44} color={colors.secondaryText} />
-                    <Text style={[styles.emptyTitle, { color: colors.text }]}>مفيش فواتير مشتريات متسجلة</Text>
-                    <Text style={[styles.emptySubtitle, { color: colors.secondaryText }]}>
-                      لسه مفيش فواتير طلعت لصيدليتك من المخزن ده لحد دلوقتي
+          {/* كروت الأقسام الأربعة - نقرة تنقل لصفحة منفصلة */}
+          <View style={styles.cardsListContainer}>
+            {sections.map((sec) => (
+              <TouchableOpacity
+                key={sec.key}
+                style={[styles.sectionNavCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                onPress={() => setSelectedSection(sec.key)}
+                activeOpacity={0.7}
+              >
+                {/* الأيقونة الملونة يمين الكرت */}
+                <View style={[styles.navIconBox, { backgroundColor: sec.bgColor }]}>
+                  <Ionicons name={sec.icon} size={22} color={sec.color} />
+                </View>
+
+                {/* تفاصيل الكرت في المنتصف */}
+                <View style={styles.navInfoCol}>
+                  <Text style={[styles.navTitle, { color: colors.text }]}>
+                    {sec.num}. {sec.title}
+                  </Text>
+                  <Text style={[styles.navDesc, { color: colors.secondaryText }]} numberOfLines={1}>
+                    {sec.desc}
+                  </Text>
+                </View>
+
+                {/* سهم الانتقال والمبلغ شمال الكرت */}
+                <View style={styles.navActionCol}>
+                  <Ionicons name="chevron-back" size={20} color={colors.secondaryText} />
+                  {sec.amount !== undefined ? (
+                    <Text style={[styles.navAmount, { color: sec.color }]}>
+                      {formatCurrency(sec.amount)}
                     </Text>
-                  </View>
-                ) : (
-                  invoices.map((inv) => (
-                    <View
-                      key={inv.id}
-                      style={[styles.itemCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                    >
-                      <View style={styles.itemCardHeader}>
-                        <View style={[styles.statusBadge, { backgroundColor: colors.primarySoft }]}>
-                          <Text style={[styles.statusBadgeText, { color: colors.primary }]}>
-                            {inv.status === 'synced' ? 'فاتورة معتمدة' : inv.status}
-                          </Text>
-                        </View>
-                        <View style={styles.itemHeaderLeft}>
-                          <Text style={[styles.itemNumber, { color: colors.text }]}>
-                            {inv.invoice_number}
-                          </Text>
-                          <Text style={[styles.itemDate, { color: colors.secondaryText }]}>
-                            {formatDate(inv.invoice_date)}
-                          </Text>
-                        </View>
-                      </View>
-
-                      <View style={[styles.itemDivider, { backgroundColor: colors.border }]} />
-
-                      <View style={styles.itemFinancialRow}>
-                        <View style={styles.itemFinancialCol}>
-                          <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>الإجمالي</Text>
-                          <Text style={[styles.itemFinancialVal, { color: colors.text }]}>
-                            {formatCurrency(inv.total_amount)}
-                          </Text>
-                        </View>
-                        <View style={styles.itemFinancialCol}>
-                          <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>الخصم</Text>
-                          <Text style={[styles.itemFinancialVal, { color: colors.warning }]}>
-                            {formatCurrency(inv.discount_amount)}
-                          </Text>
-                        </View>
-                        <View style={styles.itemFinancialCol}>
-                          <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>الصافي</Text>
-                          <Text style={[styles.itemFinancialValBold, { color: colors.primary }]}>
-                            {formatCurrency(inv.net_amount)}
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
-                  ))
-                )}
-              </View>
-            )}
-
-            {/* تفاصيل المرتجعات */}
-            {activeTab === 'returns' && (
-              <View style={styles.tabContent}>
-                {returns.length === 0 ? (
-                  <View style={[styles.emptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                    <Ionicons name="arrow-undo-circle-outline" size={44} color={colors.secondaryText} />
-                    <Text style={[styles.emptyTitle, { color: colors.text }]}>مفيش مرتجعات متسجلة</Text>
-                    <Text style={[styles.emptySubtitle, { color: colors.secondaryText }]}>
-                      سجل المرتجعات تمام ومفيش أي أدوية راجعة للمخزن
+                  ) : (
+                    <Text style={[styles.navCountBadge, { color: colors.secondaryText }]}>
+                      {sec.count} حركة
                     </Text>
-                  </View>
-                ) : (
-                  returns.map((ret, idx) => (
-                    <View
-                      key={ret.id || idx}
-                      style={[styles.itemCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                    >
-                      <View style={styles.itemCardHeader}>
-                        <View style={[styles.statusBadge, { backgroundColor: '#FEF3C7' }]}>
-                          <Text style={[styles.statusBadgeText, { color: '#B45309' }]}>مرتجع معتمد</Text>
-                        </View>
-                        <View style={styles.itemHeaderLeft}>
-                          <Text style={[styles.itemNumber, { color: colors.text }]}>
-                            {ret.return_number || `إشعار مرتجع #${ret.remote_id || idx + 1}`}
-                          </Text>
-                          <Text style={[styles.itemDate, { color: colors.secondaryText }]}>
-                            {formatDate(ret.return_date)}
-                          </Text>
-                        </View>
-                      </View>
-
-                      <View style={[styles.itemDivider, { backgroundColor: colors.border }]} />
-
-                      <View style={styles.itemFinancialRow}>
-                        <View style={styles.itemFinancialCol}>
-                          <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>السبب / البيان</Text>
-                          <Text style={[styles.itemFinancialVal, { color: colors.text }]}>
-                            {ret.reason || 'مرتجع أصناف أدوية'}
-                          </Text>
-                        </View>
-                        <View style={styles.itemFinancialCol}>
-                          <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>صافي المرتجع</Text>
-                          <Text style={[styles.itemFinancialValBold, { color: colors.warning }]}>
-                            {formatCurrency(ret.net_amount || ret.total_amount)}
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
-                  ))
-                )}
-              </View>
-            )}
-
-            {/* تفاصيل النقدية */}
-            {activeTab === 'receipts' && (
-              <View style={styles.tabContent}>
-                {receipts.length === 0 ? (
-                  <View style={[styles.emptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                    <Ionicons name="wallet-outline" size={44} color={colors.secondaryText} />
-                    <Text style={[styles.emptyTitle, { color: colors.text }]}>مفيش سندات قبض كاش متسجلة</Text>
-                    <Text style={[styles.emptySubtitle, { color: colors.secondaryText }]}>
-                      بتظهر هنا أي مبالغ نقدية سددتها لمندوب التحصيل
-                    </Text>
-                  </View>
-                ) : (
-                  receipts.map((rec, idx) => (
-                    <View
-                      key={rec.id || idx}
-                      style={[styles.itemCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                    >
-                      <View style={styles.itemCardHeader}>
-                        <View style={[styles.statusBadge, { backgroundColor: colors.successSoft }]}>
-                          <Text style={[styles.statusBadgeText, { color: colors.success }]}>مسددة كاش</Text>
-                        </View>
-                        <View style={styles.itemHeaderLeft}>
-                          <Text style={[styles.itemNumber, { color: colors.text }]}>
-                            {rec.receipt_number || `سند قبض #${rec.remote_id || idx + 1}`}
-                          </Text>
-                          <Text style={[styles.itemDate, { color: colors.secondaryText }]}>
-                            {formatDate(rec.receipt_date)}
-                          </Text>
-                        </View>
-                      </View>
-
-                      <View style={[styles.itemDivider, { backgroundColor: colors.border }]} />
-
-                      <View style={styles.itemFinancialRow}>
-                        <View style={styles.itemFinancialCol}>
-                          <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>طريقة الدفع / البيان</Text>
-                          <Text style={[styles.itemFinancialVal, { color: colors.text }]}>
-                            {rec.payment_method || rec.notes || 'خزينة رئيسية'}
-                          </Text>
-                        </View>
-                        <View style={styles.itemFinancialCol}>
-                          <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>المبلغ المسدد</Text>
-                          <Text style={[styles.itemFinancialValBold, { color: colors.success }]}>
-                            {formatCurrency(rec.amount)}
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
-                  ))
-                )}
-              </View>
-            )}
-
-            {/* تفاصيل كشف الحساب */}
-            {activeTab === 'statement' && (
-              <View style={styles.tabContent}>
-                {statement.length === 0 ? (
-                  <View style={[styles.emptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                    <Ionicons name="document-text-outline" size={44} color={colors.secondaryText} />
-                    <Text style={[styles.emptyTitle, { color: colors.text }]}>مفيش حركات كشف حساب مسجلة</Text>
-                    <Text style={[styles.emptySubtitle, { color: colors.secondaryText }]}>
-                      كل الحركات المالية هتظهر هنا أول ما تترحل في سيستم المخزن
-                    </Text>
-                  </View>
-                ) : (
-                  statement.map((stm, idx) => (
-                    <View
-                      key={stm.id || idx}
-                      style={[styles.itemCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                    >
-                      <View style={styles.itemCardHeader}>
-                        <View
-                          style={[
-                            styles.statusBadge,
-                            {
-                              backgroundColor:
-                                stm.debit > 0
-                                  ? colors.primarySoft
-                                  : colors.successSoft,
-                            },
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.statusBadgeText,
-                              { color: stm.debit > 0 ? colors.primary : colors.success },
-                            ]}
-                          >
-                            {stm.doc_type || 'حركة حساب'}
-                          </Text>
-                        </View>
-                        <View style={styles.itemHeaderLeft}>
-                          <Text style={[styles.itemNumber, { color: colors.text }]}>
-                            {stm.doc_number || `#${stm.remote_id}`}
-                          </Text>
-                          <Text style={[styles.itemDate, { color: colors.secondaryText }]}>
-                            {formatDate(stm.entry_date)}
-                          </Text>
-                        </View>
-                      </View>
-
-                      {stm.description ? (
-                        <Text style={[styles.stmDescription, { color: colors.secondaryText }]}>
-                          {stm.description}
-                        </Text>
-                      ) : null}
-
-                      <View style={[styles.itemDivider, { backgroundColor: colors.border }]} />
-
-                      <View style={styles.itemFinancialRow}>
-                        <View style={styles.itemFinancialCol}>
-                          <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>مدين (+عليك)</Text>
-                          <Text style={[styles.itemFinancialVal, { color: colors.primary }]}>
-                            {stm.debit > 0 ? formatCurrency(stm.debit) : '—'}
-                          </Text>
-                        </View>
-                        <View style={styles.itemFinancialCol}>
-                          <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>دائن (-سددت)</Text>
-                          <Text style={[styles.itemFinancialVal, { color: colors.success }]}>
-                            {stm.credit > 0 ? formatCurrency(stm.credit) : '—'}
-                          </Text>
-                        </View>
-                        <View style={styles.itemFinancialCol}>
-                          <Text style={[styles.itemFinancialLabel, { color: colors.secondaryText }]}>الرصيد بعدها</Text>
-                          <Text style={[styles.itemFinancialValBold, { color: colors.text }]}>
-                            {formatCurrency(stm.balance)}
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
-                  ))
-                )}
-              </View>
-            )}
+                  )}
+                </View>
+              </TouchableOpacity>
+            ))}
           </View>
         </ScrollView>
       )}
@@ -623,334 +480,226 @@ const styles = StyleSheet.create({
     flexDirection: 'row-reverse',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingTop: 6,
-    paddingBottom: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   backBtnClean: {
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
+    padding: 6,
   },
   topHeaderTitle: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '800',
+    textAlign: 'center',
   },
   topHeaderSpacer: {
-    width: 40,
-    height: 40,
+    width: 36,
   },
   centerContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 24,
-    gap: 14,
+    gap: 12,
+    paddingHorizontal: 32,
   },
   loadingText: {
-    fontSize: 13,
-    fontWeight: '500',
+    fontSize: 14,
+    fontWeight: '600',
     textAlign: 'center',
   },
   scrollArea: {
     flex: 1,
   },
-  scrollContent: {
-    padding: 16,
-    gap: 14,
-    paddingBottom: 40,
+  mainScrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 32,
+    gap: 16,
   },
-  mainCard: {
-    padding: 16,
-    borderRadius: 20,
-    borderWidth: 1,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 1.5,
-  },
-  warehouseCardRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 12,
-  },
-  warehouseIconCircle: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  warehouseInfoCol: {
-    flex: 1,
-    alignItems: 'flex-end',
-    gap: 4,
-  },
-  onlineBadgeRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 5,
-  },
-  onlineDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: '#00d780',
-  },
-  onlineBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#00d780',
-  },
-  warehouseNameTitle: {
-    fontSize: 18,
-    fontWeight: '900',
-    textAlign: 'right',
-  },
-  pharmacyIdentityRow: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  pharmacyTitleCol: {
-    flex: 1,
-    alignItems: 'flex-end',
-    gap: 3,
-  },
-  pharmacySubHead: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  pharmacyNameLarge: {
-    fontSize: 16,
-    fontWeight: '800',
-    textAlign: 'right',
-  },
-  pharmacyCodePill: {
-    fontSize: 12,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  linkedBadge: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 100,
-  },
-  linkedBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  cardDivider: {
-    height: 1,
-    marginVertical: 12,
-  },
-  balanceSection: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  balanceInfoCol: {
-    alignItems: 'flex-end',
-    gap: 2,
-  },
-  balanceSubLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  balanceAmountLarge: {
-    fontSize: 26,
-    fontWeight: '900',
-    marginTop: 2,
-  },
-  balanceStatusTag: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 10,
-  },
-  balanceStatusText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  sectionHeaderRow: {
-    alignItems: 'flex-end',
-    marginTop: 4,
-    marginBottom: -4,
-    gap: 2,
-  },
-  sectionTitleLabel: {
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  sectionSubtitleLabel: {
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  gridContainer: {
-    flexDirection: 'row-reverse',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
+  subPageScrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 32,
     gap: 10,
   },
-  gridCard: {
-    width: '48%',
-    padding: 12,
+
+  // كرت الرصيد المبسط النظيف
+  cleanBalanceCard: {
+    padding: 20,
+    borderRadius: 20,
+    borderWidth: 1,
+    shadowColor: '#3f0082',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
+    gap: 12,
+  },
+  cleanPharmacyName: {
+    fontSize: 18,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
+  cleanBalanceBox: {
+    alignItems: 'flex-end',
+    gap: 2,
+  },
+  cleanBalanceLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  cleanBalanceValue: {
+    fontSize: 28,
+    fontWeight: '900',
+    letterSpacing: -0.5,
+  },
+
+  // كروت الأقسام الأربعة في الصفحة الرئيسية
+  cardsListContainer: {
+    gap: 12,
+  },
+  sectionNavCard: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    padding: 16,
     borderRadius: 18,
     borderWidth: 1,
-    gap: 6,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.03,
     shadowRadius: 6,
     elevation: 1,
+    gap: 14,
   },
-  gridCardHeader: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  gridIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
+  navIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  countPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
+  navInfoCol: {
+    flex: 1,
+    alignItems: 'flex-end',
+    gap: 3,
   },
-  countPillText: {
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  gridCardTitle: {
-    fontSize: 15,
+  navTitle: {
+    fontSize: 16,
     fontWeight: '800',
     textAlign: 'right',
   },
-  gridCardDesc: {
-    fontSize: 10,
-    fontWeight: '600',
+  navDesc: {
+    fontSize: 12,
+    fontWeight: '500',
     textAlign: 'right',
-    minHeight: 28,
-    lineHeight: 14,
   },
-  gridCardAmount: {
+  navActionCol: {
+    alignItems: 'flex-start',
+    gap: 4,
+  },
+  navAmount: {
     fontSize: 12,
     fontWeight: '800',
-    textAlign: 'right',
-    marginTop: 2,
   },
-  detailsContainer: {
-    gap: 12,
-    marginTop: 6,
+  navCountBadge: {
+    fontSize: 11,
+    fontWeight: '600',
   },
-  detailHeaderRow: {
+
+  // بار ملخص القسم في الصفحة المنفصلة
+  sectionSummaryBar: {
     flexDirection: 'row-reverse',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 4,
-  },
-  detailTitleGroup: {
-    alignItems: 'flex-end',
-    gap: 2,
-  },
-  detailSectionTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  detailSectionSubtitle: {
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  tabContent: {
-    gap: 10,
-  },
-  itemCard: {
-    padding: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginHorizontal: 16,
+    marginTop: 4,
     borderRadius: 16,
     borderWidth: 1,
-    gap: 10,
   },
-  itemCardHeader: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  itemHeaderLeft: {
-    alignItems: 'flex-end',
-  },
-  itemNumber: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  itemDate: {
-    fontSize: 11,
-    marginTop: 2,
-  },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  statusBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  stmDescription: {
-    fontSize: 12,
-    textAlign: 'right',
-  },
-  itemDivider: {
-    height: 1,
-  },
-  itemFinancialRow: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-  },
-  itemFinancialCol: {
+  summaryBarCol: {
+    flex: 1,
     alignItems: 'flex-end',
     gap: 2,
   },
-  itemFinancialLabel: {
-    fontSize: 10,
-    fontWeight: '500',
-  },
-  itemFinancialVal: {
+  summaryBarDesc: {
     fontSize: 12,
     fontWeight: '600',
   },
-  itemFinancialValBold: {
-    fontSize: 13,
+  summaryBarAmount: {
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  summaryCountBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    marginLeft: 8,
+  },
+  summaryCountText: {
+    fontSize: 12,
     fontWeight: '800',
   },
-  emptyBox: {
+
+  // صفوف القوائم البسيطة (بدون رغي ولا عك)
+  simpleRowCard: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  rowCardRight: {
+    flex: 1,
+    alignItems: 'flex-end',
+    gap: 3,
+  },
+  rowTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
+  rowDate: {
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  rowDescText: {
+    fontSize: 11,
+    marginTop: 2,
+    textAlign: 'right',
+  },
+  rowCardLeft: {
+    alignItems: 'flex-start',
+    gap: 3,
+    marginLeft: 10,
+  },
+  rowAmount: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  rowStatusText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  statementBalText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+
+  // حالة القائمة الفارغة
+  simpleEmptyBox: {
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 36,
-    borderRadius: 18,
+    padding: 32,
+    borderRadius: 16,
     borderWidth: 1,
-    gap: 10,
-    marginTop: 10,
+    gap: 8,
+    marginTop: 20,
   },
-  emptyTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    marginTop: 4,
-  },
-  emptySubtitle: {
-    fontSize: 12,
-    textAlign: 'center',
-    lineHeight: 18,
-    maxWidth: 240,
+  simpleEmptyText: {
+    fontSize: 13,
+    fontWeight: '600',
   },
 });
