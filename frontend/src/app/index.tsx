@@ -365,7 +365,7 @@ export default function HomeScreen() {
             loop={false}
             onAnimationFinish={handleAnimationFinish}
           />
-          <Text style={[styles.brandText, { color: colors.text }]}>فارما</Text>
+          <Text style={[styles.brandText, { color: '#00d780' }]}>فارما</Text>
         </TouchableOpacity>
 
         {/* Left side: Avatar opens Profile Modal */}
@@ -721,6 +721,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.4,
     marginRight: -10,
     transform: [{ translateY: 3.5 }],
+    color: '#00d780',
   },
   brandDot: {
     width: 8,
