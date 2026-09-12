@@ -111,11 +111,25 @@ export default function WarehousePortalScreen({
         fetchPharmacyStatement(targetToken),
       ]);
 
+      // Filter out items with value 0
+      const validInvoices = (invs || []).filter(
+        (inv) => (inv.net_amount ?? inv.total_amount ?? 0) > 0
+      );
+      const validReturns = (rets || []).filter(
+        (ret) => (ret.net_amount ?? ret.total_amount ?? 0) > 0
+      );
+      const validReceipts = (recs || []).filter(
+        (rec) => (rec.amount ?? 0) > 0
+      );
+      const validStatement = (stmts || []).filter(
+        (stm) => (stm.debit ?? 0) > 0 || (stm.credit ?? 0) > 0
+      );
+
       setBalance(bal);
-      setInvoices(invs);
-      setReturns(rets);
-      setReceipts(recs);
-      setStatement(stmts);
+      setInvoices(validInvoices);
+      setReturns(validReturns);
+      setReceipts(validReceipts);
+      setStatement(validStatement);
     } catch (e) {
       console.error('Error loading pharmacy data:', e);
     } finally {
