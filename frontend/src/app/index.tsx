@@ -431,7 +431,7 @@ export default function HomeScreen() {
                 style={StyleSheet.absoluteFill}
               />
 
-              {/* 4. Card Content: Name, then Status, then Category underneath (No boxes, No borders) */}
+              {/* 4. Card Content: Name, then Status & Category side-by-side (No boxes, No borders) */}
               <View style={styles.bannerContentRow}>
                 {/* Details Column (Right in RTL layout) */}
                 <View style={styles.bannerDetailsCol}>
@@ -440,29 +440,35 @@ export default function HomeScreen() {
                     {item.name}
                   </Text>
 
-                  {/* Status: تم الربط / ربط الآن (No box, No border) */}
-                  {item.is_linked ? (
-                    <View style={styles.statusCleanRow}>
-                      <Ionicons name="checkmark-circle" size={14} color="#34D399" />
-                      <Text style={styles.statusTextLinked}>تم الربط</Text>
-                    </View>
-                  ) : (
-                    <View style={styles.statusCleanRow}>
-                      <Ionicons name="link" size={13} color="rgba(255, 255, 255, 0.85)" />
-                      <Text style={styles.statusTextUnlinked}>ربط الآن</Text>
-                    </View>
-                  )}
+                  {/* Combined Status & Category Row (Status first, then Category next to it) */}
+                  <View style={styles.metaRow}>
+                    {/* 1. Status: تم الربط / ربط الآن */}
+                    {item.is_linked ? (
+                      <View style={styles.statusItem}>
+                        <Ionicons name="checkmark-circle" size={14} color="#34D399" />
+                        <Text style={styles.statusTextLinked}>تم الربط</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.statusItem}>
+                        <Ionicons name="link" size={13} color="rgba(255, 255, 255, 0.85)" />
+                        <Text style={styles.statusTextUnlinked}>ربط الآن</Text>
+                      </View>
+                    )}
 
-                  {/* Warehouse Category underneath status (No box, No border) */}
-                  <View style={styles.categoryCleanRow}>
-                    <MaterialCommunityIcons
-                      name={isPharma ? 'pill' : 'cube-outline'}
-                      size={13}
-                      color="rgba(255, 255, 255, 0.7)"
-                    />
-                    <Text style={styles.categoryCleanText} numberOfLines={1}>
-                      {categoryText}
-                    </Text>
+                    {/* Dot Separator */}
+                    <Text style={styles.metaDot}>•</Text>
+
+                    {/* 2. Warehouse Category */}
+                    <View style={styles.categoryItem}>
+                      <MaterialCommunityIcons
+                        name={isPharma ? 'pill' : 'cube-outline'}
+                        size={13}
+                        color="rgba(255, 255, 255, 0.75)"
+                      />
+                      <Text style={styles.categoryText} numberOfLines={1}>
+                        {categoryText}
+                      </Text>
+                    </View>
                   </View>
                 </View>
 
@@ -749,6 +755,8 @@ const styles = StyleSheet.create({
   appStoreBannerCard: {
     borderRadius: 22,
     marginBottom: 14,
+    minHeight: 104,
+    justifyContent: 'center',
     overflow: 'hidden',
     position: 'relative',
     backgroundColor: '#13161D',
@@ -768,15 +776,15 @@ const styles = StyleSheet.create({
     opacity: 0.9,
   },
   bannerContentRow: {
-    padding: 14,
+    paddingVertical: 18,
     paddingHorizontal: 16,
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 14,
   },
   appIconSquircle: {
-    width: 68,
-    height: 68,
+    width: 70,
+    height: 70,
     borderRadius: 18,
     backgroundColor: '#FFFFFF',
     padding: 4,
@@ -806,6 +814,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'flex-end',
     justifyContent: 'center',
+    gap: 6,
   },
   bannerTitleText: {
     fontSize: 18,
@@ -816,11 +825,15 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
   },
-  statusCleanRow: {
+  metaRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 5,
-    marginTop: 5,
+    gap: 7,
+  },
+  statusItem: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
   },
   statusTextLinked: {
     color: '#34D399',
@@ -838,15 +851,18 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 2,
   },
-  categoryCleanRow: {
+  metaDot: {
+    color: 'rgba(255, 255, 255, 0.4)',
+    fontSize: 13,
+  },
+  categoryItem: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 5,
-    marginTop: 3,
+    gap: 4,
   },
-  categoryCleanText: {
-    color: 'rgba(255, 255, 255, 0.72)',
-    fontSize: 12,
+  categoryText: {
+    color: 'rgba(255, 255, 255, 0.75)',
+    fontSize: 12.5,
     fontWeight: '600',
     textAlign: 'right',
     textShadowColor: 'rgba(0, 0, 0, 0.45)',
