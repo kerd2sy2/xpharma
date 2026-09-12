@@ -59,15 +59,15 @@ export default function WarehousePortalScreen({
   const [statement, setStatement] = useState<StatementItem[]>([]);
 
   const colors = {
-    bg: isDark ? '#0A0E1A' : '#F8FAFC',
-    card: isDark ? '#141B2D' : '#FFFFFF',
-    text: isDark ? '#F8FAFC' : '#0F172A',
-    secondaryText: isDark ? '#94A3B8' : '#64748B',
-    border: isDark ? '#1E293B' : '#E2E8F0',
-    primary: '#2563EB',
-    primarySoft: isDark ? '#1E293B' : '#EFF6FF',
-    success: '#10B981',
-    successSoft: isDark ? '#064E3B44' : '#ECFDF5',
+    bg: isDark ? '#0E051D' : '#F9F7FD',
+    card: isDark ? '#190C30' : '#FFFFFF',
+    text: isDark ? '#FBF9FF' : '#1A0A33',
+    secondaryText: isDark ? '#AC9DC2' : '#6B5E82',
+    border: isDark ? '#2E184F' : '#E9E3F3',
+    primary: '#3f0082',
+    primarySoft: isDark ? '#3f008244' : '#3f008215',
+    success: '#00d780',
+    successSoft: isDark ? '#00d78025' : '#00d78018',
     warning: '#F59E0B',
     danger: '#EF4444',
   };
@@ -509,9 +509,7 @@ export default function WarehousePortalScreen({
                           {
                             backgroundColor:
                               stm.debit > 0
-                                ? isDark
-                                  ? '#1E293B'
-                                  : '#EFF6FF'
+                                ? colors.primarySoft
                                 : colors.successSoft,
                           },
                         ]}

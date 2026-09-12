@@ -1,26 +1,45 @@
-/**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
- */
-
 import '@/global.css';
-
 import { Platform } from 'react-native';
+
+export const BrandColors = {
+  purple: '#3f0082',
+  green: '#00d780',
+  purpleDark: '#2a0058',
+  purpleLight: '#590ea8',
+  greenDark: '#00b368',
+  greenLight: '#26e696',
+} as const;
 
 export const Colors = {
   light: {
-    text: '#000000',
-    background: '#ffffff',
-    backgroundElement: '#F0F0F3',
-    backgroundSelected: '#E0E1E6',
-    textSecondary: '#60646C',
+    text: '#1A0A33',
+    background: '#F9F7FD',
+    card: '#FFFFFF',
+    border: '#E9E3F3',
+    textSecondary: '#6B5E82',
+    primary: '#3f0082',
+    primarySoft: '#3f008215',
+    secondary: '#00d780',
+    secondarySoft: '#00d78018',
+    success: '#00d780',
+    successSoft: '#00d78018',
+    backgroundElement: '#F2EEFB',
+    backgroundSelected: '#E3DCF5',
   },
   dark: {
-    text: '#ffffff',
-    background: '#000000',
-    backgroundElement: '#212225',
-    backgroundSelected: '#2E3135',
-    textSecondary: '#B0B4BA',
+    text: '#FBF9FF',
+    background: '#0E051D',
+    card: '#190C30',
+    border: '#2E184F',
+    textSecondary: '#AC9DC2',
+    primary: '#7E3AF2',
+    primarySoft: '#3f008244',
+    secondary: '#00d780',
+    secondarySoft: '#00d78025',
+    success: '#00d780',
+    successSoft: '#00d78025',
+    backgroundElement: '#22113F',
+    backgroundSelected: '#32195E',
   },
 } as const;
 
@@ -28,13 +47,9 @@ export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
 export const Fonts = Platform.select({
   ios: {
-    /** iOS `UIFontDescriptorSystemDesignDefault` */
     sans: 'system-ui',
-    /** iOS `UIFontDescriptorSystemDesignSerif` */
     serif: 'ui-serif',
-    /** iOS `UIFontDescriptorSystemDesignRounded` */
     rounded: 'ui-rounded',
-    /** iOS `UIFontDescriptorSystemDesignMonospaced` */
     mono: 'ui-monospace',
   },
   default: {

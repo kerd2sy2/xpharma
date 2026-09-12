@@ -39,13 +39,16 @@ export default function PharmacyVerifyModal({
   const [error, setError] = useState<string | null>(null);
 
   const colors = {
-    bg: isDark ? '#141B2D' : '#FFFFFF',
+    bg: isDark ? '#190C30' : '#FFFFFF',
     overlay: 'rgba(0, 0, 0, 0.65)',
-    text: isDark ? '#F8FAFC' : '#0F172A',
-    secondaryText: isDark ? '#94A3B8' : '#64748B',
-    border: isDark ? '#1E293B' : '#E2E8F0',
-    inputBg: isDark ? '#0A0E1A' : '#F1F5F9',
-    primary: '#2563EB',
+    text: isDark ? '#FBF9FF' : '#1A0A33',
+    secondaryText: isDark ? '#AC9DC2' : '#6B5E82',
+    border: isDark ? '#2E184F' : '#E9E3F3',
+    inputBg: isDark ? '#0E051D' : '#F7F6FC',
+    primary: '#3f0082',
+    accent: '#00d780',
+    primarySoft: isDark ? '#3f008244' : '#3f008215',
+    successSoft: isDark ? '#00d78025' : '#00d78018',
     danger: '#EF4444',
   };
 
@@ -106,7 +109,7 @@ export default function PharmacyVerifyModal({
 
                 {/* Warehouse Badge Header */}
                 <View style={styles.header}>
-                  <View style={[styles.crestIcon, { backgroundColor: isDark ? '#1E293B' : '#EFF6FF' }]}>
+                  <View style={[styles.crestIcon, { backgroundColor: colors.primarySoft }]}>
                     <Ionicons name="business" size={28} color={colors.primary} />
                   </View>
                   <View style={styles.headerInfo}>
@@ -120,9 +123,9 @@ export default function PharmacyVerifyModal({
                 </View>
 
                 {/* Info Callout */}
-                <View style={[styles.callout, { backgroundColor: isDark ? '#1E293B66' : '#F0FDF4' }]}>
-                  <Ionicons name="information-circle-outline" size={20} color="#10B981" />
-                  <Text style={[styles.calloutText, { color: isDark ? '#A7F3D0' : '#166534' }]}>
+                <View style={[styles.callout, { backgroundColor: colors.successSoft }]}>
+                  <Ionicons name="information-circle-outline" size={20} color="#00d780" />
+                  <Text style={[styles.calloutText, { color: isDark ? '#A7F3D0' : '#047857' }]}>
                     اكتب كود صيدليتك في المخزن، ورقم الموبايل عشان نفتحلك الفواتير والمرتجعات وكشف الحساب مباشرة.
                   </Text>
                 </View>

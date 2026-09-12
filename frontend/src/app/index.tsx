@@ -68,15 +68,17 @@ export default function HomeScreen() {
   const [activePortal, setActivePortal] = useState<ActivePortalState | null>(null);
 
   const colors = {
-    bg: isDark ? '#0A0E1A' : '#F8FAFC',
-    card: isDark ? '#141B2D' : '#FFFFFF',
-    text: isDark ? '#F8FAFC' : '#0F172A',
-    secondaryText: isDark ? '#94A3B8' : '#64748B',
-    border: isDark ? '#1E293B' : '#E2E8F0',
-    primary: '#2563EB',
-    primarySoft: isDark ? '#1E293B' : '#EFF6FF',
-    success: '#10B981',
-    successSoft: isDark ? '#064E3B44' : '#ECFDF5',
+    bg: isDark ? '#0E051D' : '#F9F7FD',
+    card: isDark ? '#190C30' : '#FFFFFF',
+    text: isDark ? '#FBF9FF' : '#1A0A33',
+    secondaryText: isDark ? '#AC9DC2' : '#6B5E82',
+    border: isDark ? '#2E184F' : '#E9E3F3',
+    primary: isDark ? '#8A3FFC' : '#3f0082',
+    primarySoft: isDark ? '#3f008244' : '#3f008215',
+    secondary: '#00d780',
+    secondarySoft: isDark ? '#00d78025' : '#00d78018',
+    success: '#00d780',
+    successSoft: isDark ? '#00d78025' : '#00d78018',
     warning: '#F59E0B',
     danger: '#EF4444',
   };
@@ -237,46 +239,46 @@ export default function HomeScreen() {
     setSortModalVisible(false);
   };
 
-  // Visual branding with Pure Arabic titles
+  // Visual branding with Brand Purple and Green colors
   const getWarehouseVisual = (wh: Warehouse) => {
     const name = (wh.name || '').toLowerCase();
     if (name.includes('sheikh') || name.includes('الشيخ')) {
       return {
-        headerColor: '#1E3A8A',
+        headerColor: '#3f0082',
         iconName: 'hospital-building' as const,
-        brandTag: 'مستودع الشيخ',
-        accentColor: '#3B82F6',
+        brandTag: 'مخزن الشيخ',
+        accentColor: '#00d780',
       };
     }
     if (name.includes('tabarak') || name.includes('تبارك')) {
       return {
-        headerColor: '#064E3B',
+        headerColor: '#00804d',
         iconName: 'pill' as const,
-        brandTag: 'مستودع تبارك',
-        accentColor: '#10B981',
+        brandTag: 'مخزن تبارك',
+        accentColor: '#00d780',
       };
     }
     if (name.includes('عميرة') || name.includes('abo3mara')) {
       return {
-        headerColor: '#4C1D95',
+        headerColor: '#4A1578',
         iconName: 'flask-round-bottom' as const,
-        brandTag: 'مستودع أبو عميرة',
-        accentColor: '#8B5CF6',
+        brandTag: 'مخزن أبو عميرة',
+        accentColor: '#00d780',
       };
     }
     if (name.includes('x') || name.includes('إكس')) {
       return {
-        headerColor: '#0F172A',
+        headerColor: '#250052',
         iconName: 'shield-plus' as const,
-        brandTag: 'إكس فارما',
-        accentColor: '#0EA5E9',
+        brandTag: 'مخزن إكس فارما',
+        accentColor: '#00d780',
       };
     }
     return {
-      headerColor: '#1E293B',
+      headerColor: '#34006B',
       iconName: 'cube-outline' as const,
-      brandTag: 'مستودع معتمد',
-      accentColor: '#2563EB',
+      brandTag: 'مخزن أدوية',
+      accentColor: '#00d780',
     };
   };
 
@@ -383,7 +385,7 @@ export default function HomeScreen() {
                 {/* Status Badge in Top Right Corner */}
                 {item.is_linked ? (
                   <View style={styles.cardStatusLinked}>
-                    <Ionicons name="checkmark-circle" size={12} color="#10B981" />
+                    <Ionicons name="checkmark-circle" size={12} color="#00d780" />
                     <Text style={styles.cardStatusLinkedText}>مربوطة</Text>
                   </View>
                 ) : (
@@ -668,7 +670,7 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#2563EB',
+    backgroundColor: '#00d780',
   },
   avatarButton: {
     position: 'relative',
@@ -678,7 +680,7 @@ const styles = StyleSheet.create({
     height: 42,
     borderRadius: 21,
     borderWidth: 2,
-    borderColor: '#2563EB',
+    borderColor: '#00d780',
   },
   avatarPlaceholder: {
     width: 42,
@@ -699,7 +701,7 @@ const styles = StyleSheet.create({
     width: 12,
     height: 12,
     borderRadius: 6,
-    backgroundColor: '#10B981',
+    backgroundColor: '#00d780',
     borderWidth: 2,
     borderColor: '#FFFFFF',
   },
@@ -791,7 +793,7 @@ const styles = StyleSheet.create({
     borderRadius: 100,
   },
   cardStatusLinkedText: {
-    color: '#10B981',
+    color: '#00d780',
     fontSize: 10,
     fontWeight: '800',
   },

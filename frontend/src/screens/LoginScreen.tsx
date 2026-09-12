@@ -27,15 +27,16 @@ export default function LoginScreen() {
   const showApple = Platform.OS === 'ios';
 
   const themeColors = {
-    bg: isDark ? '#0A0E1A' : '#F8FAFC',
-    cardBg: isDark ? '#141B2D' : '#FFFFFF',
-    textPrimary: isDark ? '#F8FAFC' : '#0F172A',
-    textSecondary: isDark ? '#94A3B8' : '#64748B',
-    accent: '#2563EB',
-    border: isDark ? '#1E293B' : '#E2E8F0',
-    googleBtnBg: isDark ? '#1E293B' : '#FFFFFF',
-    googleBtnText: isDark ? '#F8FAFC' : '#1E293B',
-    googleBorder: isDark ? '#334155' : '#CBD5E1',
+    bg: isDark ? '#0E051D' : '#F9F7FD',
+    cardBg: isDark ? '#190C30' : '#FFFFFF',
+    textPrimary: isDark ? '#FBF9FF' : '#1A0A33',
+    textSecondary: isDark ? '#AC9DC2' : '#6B5E82',
+    primary: '#3f0082',
+    accent: '#00d780',
+    border: isDark ? '#2E184F' : '#E9E3F3',
+    googleBtnBg: isDark ? '#190C30' : '#FFFFFF',
+    googleBtnText: isDark ? '#FBF9FF' : '#1A0A33',
+    googleBorder: isDark ? '#3F226E' : '#D5CBE6',
     appleBtnBg: isDark ? '#FFFFFF' : '#000000',
     appleBtnText: isDark ? '#000000' : '#FFFFFF',
   };
@@ -53,7 +54,7 @@ export default function LoginScreen() {
       <View style={styles.content}>
         {/* Top Decorative / Brand Glow */}
         <View style={styles.headerSection}>
-          <View style={[styles.iconContainer, { backgroundColor: isDark ? '#1E293B' : '#EFF6FF' }]}>
+          <View style={[styles.iconContainer, { backgroundColor: isDark ? '#190C30' : '#F2EEFB' }]}>
             <XLogo size={70} loop={true} />
           </View>
 
@@ -158,7 +159,7 @@ export default function LoginScreen() {
         {/* Footer Security Badge */}
         <View style={styles.footerSection}>
           <View style={styles.securityRow}>
-            <Ionicons name="shield-checkmark" size={16} color="#10B981" />
+            <Ionicons name="shield-checkmark" size={16} color="#00d780" />
             <Text style={[styles.footerText, { color: themeColors.textSecondary }]}>
               دخول آمن ومشفر 100%
             </Text>
@@ -194,10 +195,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 20,
     borderWidth: 1,
-    borderColor: '#3B82F633',
+    borderColor: '#3f008233',
   },
   innerIconGlow: {
-    shadowColor: '#2563EB',
+    shadowColor: '#3f0082',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.35,
     shadowRadius: 10,
@@ -210,16 +211,16 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   badgeContainer: {
-    backgroundColor: '#2563EB1A',
+    backgroundColor: '#3f008218',
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 100,
     marginBottom: 14,
     borderWidth: 1,
-    borderColor: '#2563EB33',
+    borderColor: '#3f008233',
   },
   badgeText: {
-    color: '#2563EB',
+    color: '#3f0082',
     fontSize: 10,
     fontWeight: '700',
     letterSpacing: 0.8,

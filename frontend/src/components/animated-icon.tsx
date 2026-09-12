@@ -44,7 +44,7 @@ export function AnimatedSplashOverlay() {
 const styles = StyleSheet.create({
   splashOverlay: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: '#0A0E1A',
+    backgroundColor: '#0E051D',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 9999,
@@ -74,7 +74,7 @@ const styles = StyleSheet.create({
   },
   brandSubtitle: {
     fontSize: 13,
-    color: '#94A3B8',
-    fontWeight: '600',
+    color: '#00d780',
+    fontWeight: '700',
   },
 });
