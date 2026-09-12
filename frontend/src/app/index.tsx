@@ -755,7 +755,7 @@ const styles = StyleSheet.create({
   appStoreBannerCard: {
     borderRadius: 22,
     marginBottom: 14,
-    minHeight: 104,
+    minHeight: 116,
     justifyContent: 'center',
     overflow: 'hidden',
     position: 'relative',
@@ -776,7 +776,7 @@ const styles = StyleSheet.create({
     opacity: 0.9,
   },
   bannerContentRow: {
-    paddingVertical: 18,
+    paddingVertical: 22,
     paddingHorizontal: 16,
     flexDirection: 'row-reverse',
     alignItems: 'center',
