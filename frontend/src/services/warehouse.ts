@@ -100,7 +100,20 @@ export async function fetchWarehouses(userId?: string): Promise<Warehouse[]> {
     const res = await fetch(url);
     const data = await res.json();
     if (res.ok && data.success && Array.isArray(data.warehouses)) {
-      return data.warehouses;
+      // Deduplicate warehouses so each warehouse appears only once
+      const warehouseMap = new Map<string, Warehouse>();
+      for (const wh of data.warehouses) {
+        const key = wh.id || wh.slug || wh.name;
+        if (!warehouseMap.has(key)) {
+          warehouseMap.set(key, wh);
+        } else {
+          const existing = warehouseMap.get(key)!;
+          if (!existing.is_linked && wh.is_linked) {
+            warehouseMap.set(key, { ...existing, ...wh, is_linked: true });
+          }
+        }
+      }
+      return Array.from(warehouseMap.values());
     }
     return [];
   } catch (error) {

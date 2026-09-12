@@ -193,7 +193,22 @@ export default function HomeScreen() {
         })
       );
 
-      const orderedList = await applyCustomOrder(updatedList);
+      // Deduplicate warehouses so each warehouse has only 1 card on the home screen
+      const warehouseMap = new Map<string, Warehouse>();
+      for (const wh of updatedList) {
+        const key = wh.id || wh.slug || wh.name;
+        if (!warehouseMap.has(key)) {
+          warehouseMap.set(key, wh);
+        } else {
+          const existing = warehouseMap.get(key)!;
+          if (!existing.is_linked && wh.is_linked) {
+            warehouseMap.set(key, { ...existing, ...wh, is_linked: true });
+          }
+        }
+      }
+      const uniqueList = Array.from(warehouseMap.values());
+
+      const orderedList = await applyCustomOrder(uniqueList);
       setWarehouses(orderedList);
     } catch (e) {
       console.error('Failed to load warehouses:', e);
@@ -358,7 +373,10 @@ export default function HomeScreen() {
         token={activePortal.token}
         pharmacyCode={activePortal.pharmacyCode}
         pharmacyName={activePortal.pharmacyName}
-        onBack={() => setActivePortal(null)}
+        onBack={() => {
+          setActivePortal(null);
+          loadWarehouses();
+        }}
       />
     );
   }
@@ -467,7 +485,7 @@ export default function HomeScreen() {
                 {item.is_linked ? (
                   <View style={styles.cardStatusLinked}>
                     <Ionicons name="checkmark-circle" size={12} color="#00d780" />
-                    <Text style={styles.cardStatusLinkedText}>مربوطة</Text>
+                    <Text style={styles.cardStatusLinkedText}>تم الربط</Text>
                   </View>
                 ) : (
                   <View style={styles.cardStatusUnlinked}>
@@ -486,7 +504,7 @@ export default function HomeScreen() {
                 {item.is_linked ? (
                   <View style={[styles.codePill, { backgroundColor: colors.successSoft }]}>
                     <Text style={[styles.codePillText, { color: colors.success }]}>
-                      كود: {item.linked_pharmacy_code}
+                      تم الربط
                     </Text>
                   </View>
                 ) : (
