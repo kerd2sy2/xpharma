@@ -23,6 +23,7 @@ import { useAuth } from '@/context/AuthContext';
 import {
   fetchWarehouses,
   getPharmacySession,
+  savePharmacySession,
   VerifyPharmacyResult,
   Warehouse,
 } from '@/services/warehouse';
@@ -118,13 +119,27 @@ export default function HomeScreen() {
 
       const updatedList: Warehouse[] = await Promise.all(
         list.map(async (wh) => {
-          const session = await getPharmacySession(wh.id);
+          let session = await getPharmacySession(wh.id);
+
+          // If backend already has this warehouse permanently linked:
+          if (wh.is_linked && wh.pharmacy_token) {
+            const pharmaSession = {
+              token: wh.pharmacy_token,
+              pharmacy_code: wh.linked_pharmacy_code || '',
+              pharmacy_name: wh.linked_pharmacy_name || '',
+              tenant_id: wh.id,
+            };
+            await savePharmacySession(wh.id, pharmaSession);
+            session = pharmaSession;
+          }
+
           if (session && session.token) {
             return {
               ...wh,
               is_linked: true,
               linked_pharmacy_code: session.pharmacy_code,
               linked_pharmacy_name: session.pharmacy_name,
+              pharmacy_token: session.token,
             };
           }
           return wh;
@@ -151,14 +166,19 @@ export default function HomeScreen() {
   };
 
   const handleWarehousePress = async (wh: Warehouse) => {
-    const session = await getPharmacySession(wh.id);
+    let session = await getPharmacySession(wh.id);
 
-    if (session && session.token) {
+    // If session exists locally OR warehouse is marked linked:
+    if ((session && session.token) || (wh.is_linked && (wh.pharmacy_token || session?.token))) {
+      const activeToken = session?.token || wh.pharmacy_token || '';
+      const activeCode = session?.pharmacy_code || wh.linked_pharmacy_code || '';
+      const activeName = session?.pharmacy_name || wh.linked_pharmacy_name || '';
+
       setActivePortal({
         warehouse: wh,
-        token: session.token,
-        pharmacyCode: session.pharmacy_code,
-        pharmacyName: session.pharmacy_name,
+        token: activeToken,
+        pharmacyCode: activeCode,
+        pharmacyName: activeName,
       });
     } else {
       setSelectedWarehouseForModal(wh);
@@ -176,6 +196,7 @@ export default function HomeScreen() {
       is_linked: true,
       linked_pharmacy_code: result.pharmacy_code,
       linked_pharmacy_name: result.pharmacy_name,
+      pharmacy_token: result.token,
     };
 
     setWarehouses((prev) =>

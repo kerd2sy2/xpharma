@@ -11,6 +11,7 @@ export interface Warehouse {
   linked_pharmacy_id?: string;
   linked_pharmacy_code?: string;
   linked_pharmacy_name?: string;
+  pharmacy_token?: string;
 }
 
 export interface PharmacyBalance {

@@ -121,6 +121,17 @@ func main() {
 			}
 
 			isLinked := linkedPharmaID != ""
+			var pharmaToken string
+			if isLinked {
+				pharmaToken, _ = tokenService.GenerateToken(auth.Claims{
+					UserID:     userID,
+					TenantID:   id,
+					PharmacyID: linkedPharmaID,
+					PharmaCode: linkedPharmaCode,
+					Role:       "pharmacist",
+				}, 30*24*time.Hour)
+			}
+
 			warehouses = append(warehouses, map[string]interface{}{
 				"id":                   id,
 				"name":                 name,
@@ -130,6 +141,7 @@ func main() {
 				"linked_pharmacy_id":   linkedPharmaID,
 				"linked_pharmacy_name": linkedPharmaName,
 				"linked_pharmacy_code": linkedPharmaCode,
+				"pharmacy_token":       pharmaToken,
 			})
 		}
 
@@ -186,9 +198,18 @@ func main() {
 				}
 			}
 
-			if req.UserID != "" {
+			linkedUID := req.UserID
+			if linkedUID == "" && req.Email != "" {
+				var foundUserID string
+				_ = router.Pool().QueryRow(c.Request.Context(), `SELECT id FROM public.users WHERE email = $1 LIMIT 1`, req.Email).Scan(&foundUserID)
+				if foundUserID != "" {
+					linkedUID = foundUserID
+				}
+			}
+
+			if linkedUID != "" {
 				updateQuery := `UPDATE public.pharmacies SET linked_user_id = $1, updated_at = NOW() WHERE id = $2`
-				_, _ = router.Pool().Exec(c.Request.Context(), updateQuery, req.UserID, pharmacyID)
+				_, _ = router.Pool().Exec(c.Request.Context(), updateQuery, linkedUID, pharmacyID)
 			}
 
 			token, err := tokenService.GenerateToken(auth.Claims{
