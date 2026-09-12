@@ -69,12 +69,39 @@ export default function HomeScreen() {
 
   // Logo animation ref
   const headerLogoRef = useRef<XLogoHandle>(null);
+  const isNavigatingRef = useRef(false);
+  const navigationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleOpenWebsite = () => {
-    headerLogoRef.current?.play();
+  const navigateWebsite = () => {
+    if (navigationTimeoutRef.current) {
+      clearTimeout(navigationTimeoutRef.current);
+      navigationTimeoutRef.current = null;
+    }
     Linking.openURL('https://xpharma.cloud/').catch((err) => {
       console.warn('Could not open URL:', err);
     });
+    // Reset state after 1 second
+    setTimeout(() => {
+      isNavigatingRef.current = false;
+    }, 1000);
+  };
+
+  const handleLogoPress = () => {
+    if (isNavigatingRef.current) return;
+    isNavigatingRef.current = true;
+    headerLogoRef.current?.play();
+
+    // Fallback timer in case onAnimationFinish doesn't fire
+    if (navigationTimeoutRef.current) clearTimeout(navigationTimeoutRef.current);
+    navigationTimeoutRef.current = setTimeout(() => {
+      navigateWebsite();
+    }, 2400);
+  };
+
+  const handleAnimationFinish = () => {
+    if (isNavigatingRef.current) {
+      navigateWebsite();
+    }
   };
 
   const colors = {
@@ -317,13 +344,21 @@ export default function HomeScreen() {
 
       {/* Top Header: Seamless with page background (no card, no border) */}
       <View style={styles.topBar}>
-        {/* Right side: Clickable Logo & Brand -> animates on press and opens website */}
+        {/* Right side: Clickable Logo & Brand -> animates on press and opens website after finishing */}
         <TouchableOpacity
           style={styles.brandRow}
-          onPress={handleOpenWebsite}
+          onPress={handleLogoPress}
           activeOpacity={0.7}
         >
-          <XLogo ref={headerLogoRef} size={36} autoPlay={false} loop={false} />
+          <XLogo
+            ref={headerLogoRef}
+            size={52}
+            scale={1.6}
+            speed={1.3}
+            autoPlay={false}
+            loop={false}
+            onAnimationFinish={handleAnimationFinish}
+          />
           <Text style={[styles.brandText, { color: colors.text }]}>إكس فارما</Text>
         </TouchableOpacity>
 

@@ -11,6 +11,8 @@ interface XLogoProps {
   size?: number;
   width?: number;
   height?: number;
+  scale?: number;
+  speed?: number;
   resizeMode?: 'contain' | 'cover' | 'center';
   autoPlay?: boolean;
   loop?: boolean;
@@ -24,6 +26,8 @@ const XLogo = forwardRef<XLogoHandle, XLogoProps>(function XLogo(
     size = 38,
     width: customWidth,
     height: customHeight,
+    scale = 1,
+    speed = 1.4,
     resizeMode = 'contain',
     autoPlay = true,
     loop = true,
@@ -57,11 +61,13 @@ const XLogo = forwardRef<XLogoHandle, XLogoProps>(function XLogo(
         source={require('@/assets/lottie/letter_x.json')}
         autoPlay={autoPlay}
         loop={loop}
+        speed={speed}
         progress={progress ?? (autoPlay ? undefined : 1)}
         onAnimationFinish={onAnimationFinish}
         style={{
           width: lottieWidth,
           height: lottieHeight,
+          transform: scale !== 1 ? [{ scale }] : undefined,
         }}
         resizeMode={resizeMode}
       />
