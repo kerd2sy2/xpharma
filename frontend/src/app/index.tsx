@@ -359,7 +359,7 @@ export default function HomeScreen() {
             loop={false}
             onAnimationFinish={handleAnimationFinish}
           />
-          <Text style={[styles.brandText, { color: colors.text }]}>إكس فارما</Text>
+          <Text style={[styles.brandText, { color: colors.text }]}>فارما</Text>
         </TouchableOpacity>
 
         {/* Left side: Avatar opens Profile Modal */}
@@ -708,12 +708,12 @@ const styles = StyleSheet.create({
   brandRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 6,
+    gap: 2,
   },
   brandText: {
-    fontSize: 22,
+    fontSize: 23,
     fontWeight: '900',
-    letterSpacing: 0.5,
+    letterSpacing: -0.3,
   },
   brandDot: {
     width: 8,
