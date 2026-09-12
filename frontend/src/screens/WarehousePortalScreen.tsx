@@ -32,7 +32,6 @@ interface WarehousePortalScreenProps {
   pharmacyCode: string;
   pharmacyName: string;
   onBack: () => void;
-  onUnlink: () => void;
 }
 
 type TabKey = 'purchases' | 'returns' | 'receipts' | 'statement';
@@ -43,7 +42,6 @@ export default function WarehousePortalScreen({
   pharmacyCode,
   pharmacyName,
   onBack,
-  onUnlink,
 }: WarehousePortalScreenProps) {
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
@@ -147,11 +145,11 @@ export default function WarehousePortalScreen({
         </View>
 
         <TouchableOpacity
-          style={[styles.unlinkBtn, { borderColor: colors.border }]}
-          onPress={onUnlink}
+          style={[styles.refreshBtn, { borderColor: colors.border }]}
+          onPress={onRefresh}
           activeOpacity={0.8}
         >
-          <Ionicons name="unlink-outline" size={16} color={colors.danger} />
+          <Ionicons name="refresh" size={16} color={colors.primary} />
         </TouchableOpacity>
       </View>
 
@@ -591,7 +589,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
-  unlinkBtn: {
+  refreshBtn: {
     padding: 8,
     borderRadius: 10,
     borderWidth: 1,

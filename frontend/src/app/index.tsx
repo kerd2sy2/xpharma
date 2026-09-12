@@ -1,28 +1,38 @@
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Dimensions,
   FlatList,
   Image,
+  Modal,
+  Platform,
   RefreshControl,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   useColorScheme,
   View,
 } from 'react-native';
-import { Ionicons, FontAwesome } from '@expo/vector-icons';
+import { Ionicons, FontAwesome, MaterialCommunityIcons } from '@expo/vector-icons';
+import * as SecureStore from 'expo-secure-store';
 import { useAuth } from '@/context/AuthContext';
 import {
-  clearPharmacySession,
   fetchWarehouses,
   getPharmacySession,
-  savePharmacySession,
   VerifyPharmacyResult,
   Warehouse,
 } from '@/services/warehouse';
 import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
 import WarehousePortalScreen from '@/screens/WarehousePortalScreen';
+
+const { width } = Dimensions.get('window');
+const CARD_GAP = 12;
+const PADDING_HORIZONTAL = 16;
+const CARD_WIDTH = (width - PADDING_HORIZONTAL * 2 - CARD_GAP) / 2;
+const ORDER_STORAGE_KEY = 'xpharma_warehouses_custom_order';
 
 interface ActivePortalState {
   warehouse: Warehouse;
@@ -40,11 +50,17 @@ export default function HomeScreen() {
   const [loadingWarehouses, setLoadingWarehouses] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Verification modal state
-  const [modalVisible, setModalVisible] = useState(false);
+  // Profile Modal State
+  const [profileModalVisible, setProfileModalVisible] = useState(false);
+
+  // Sorting / Reordering Modal State
+  const [sortModalVisible, setSortModalVisible] = useState(false);
+
+  // Verification Modal State
+  const [verifyModalVisible, setVerifyModalVisible] = useState(false);
   const [selectedWarehouseForModal, setSelectedWarehouseForModal] = useState<Warehouse | null>(null);
 
-  // Active portal state (when pharmacy is verified for a warehouse)
+  // Active Portal State (opened when pharmacy is verified)
   const [activePortal, setActivePortal] = useState<ActivePortalState | null>(null);
 
   const colors = {
@@ -59,6 +75,42 @@ export default function HomeScreen() {
     successSoft: isDark ? '#064E3B44' : '#ECFDF5',
     warning: '#F59E0B',
     danger: '#EF4444',
+  };
+
+  /**
+   * Sort warehouses according to saved custom order
+   */
+  const applyCustomOrder = async (list: Warehouse[]): Promise<Warehouse[]> => {
+    try {
+      const savedOrderStr = await SecureStore.getItemAsync(ORDER_STORAGE_KEY);
+      if (!savedOrderStr) return list;
+
+      const savedOrder: string[] = JSON.parse(savedOrderStr);
+      if (!Array.isArray(savedOrder) || savedOrder.length === 0) return list;
+
+      const orderMap = new Map<string, number>();
+      savedOrder.forEach((id, idx) => orderMap.set(id, idx));
+
+      return [...list].sort((a, b) => {
+        const orderA = orderMap.has(a.id) ? orderMap.get(a.id)! : 9999;
+        const orderB = orderMap.has(b.id) ? orderMap.get(b.id)! : 9999;
+        return orderA - orderB;
+      });
+    } catch (e) {
+      return list;
+    }
+  };
+
+  /**
+   * Save custom order to SecureStore
+   */
+  const saveCustomOrder = async (list: Warehouse[]) => {
+    try {
+      const idOrder = list.map((w) => w.id);
+      await SecureStore.setItemAsync(ORDER_STORAGE_KEY, JSON.stringify(idOrder));
+    } catch (e) {
+      console.warn('Failed to save warehouse order:', e);
+    }
   };
 
   const loadWarehouses = async () => {
@@ -81,7 +133,9 @@ export default function HomeScreen() {
         })
       );
 
-      setWarehouses(updatedList);
+      // Apply saved custom order
+      const orderedList = await applyCustomOrder(updatedList);
+      setWarehouses(orderedList);
     } catch (e) {
       console.error('Failed to load warehouses:', e);
     } finally {
@@ -100,11 +154,10 @@ export default function HomeScreen() {
   };
 
   const handleWarehousePress = async (wh: Warehouse) => {
-    // Check if we have a valid token locally
     const session = await getPharmacySession(wh.id);
 
     if (session && session.token) {
-      // Already verified -> Open portal directly!
+      // Already verified -> Open portal directly
       setActivePortal({
         warehouse: wh,
         token: session.token,
@@ -112,16 +165,16 @@ export default function HomeScreen() {
         pharmacyName: session.pharmacy_name,
       });
     } else {
-      // First time click -> Open bottom sheet modal for code & phone
+      // First time -> Open bottom sheet modal
       setSelectedWarehouseForModal(wh);
-      setModalVisible(true);
+      setVerifyModalVisible(true);
     }
   };
 
   const handleVerificationSuccess = async (result: VerifyPharmacyResult) => {
     if (!selectedWarehouseForModal || !result.token) return;
 
-    setModalVisible(false);
+    setVerifyModalVisible(false);
 
     const updatedWh: Warehouse = {
       ...selectedWarehouseForModal,
@@ -130,12 +183,10 @@ export default function HomeScreen() {
       linked_pharmacy_name: result.pharmacy_name,
     };
 
-    // Update list state
     setWarehouses((prev) =>
       prev.map((item) => (item.id === updatedWh.id ? updatedWh : item))
     );
 
-    // Open portal immediately!
     setActivePortal({
       warehouse: updatedWh,
       token: result.token,
@@ -144,24 +195,81 @@ export default function HomeScreen() {
     });
   };
 
-  const handleUnlink = async (tenantId: string) => {
-    await clearPharmacySession(tenantId);
-    setWarehouses((prev) =>
-      prev.map((item) =>
-        item.id === tenantId
-          ? {
-              ...item,
-              is_linked: false,
-              linked_pharmacy_code: '',
-              linked_pharmacy_name: '',
-            }
-          : item
-      )
-    );
-    setActivePortal(null);
+  // Reorder handlers
+  const moveWarehouse = (index: number, direction: 'up' | 'down') => {
+    const newIndex = direction === 'up' ? index - 1 : index + 1;
+    if (newIndex < 0 || newIndex >= warehouses.length) return;
+
+    const newList = [...warehouses];
+    const temp = newList[index];
+    newList[index] = newList[newIndex];
+    newList[newIndex] = temp;
+
+    setWarehouses(newList);
+    saveCustomOrder(newList);
   };
 
-  // If a warehouse portal is open, render the portal screen
+  const sortPreset = (type: 'linkedFirst' | 'alphabetical' | 'default') => {
+    let sorted = [...warehouses];
+    if (type === 'linkedFirst') {
+      sorted.sort((a, b) => (b.is_linked ? 1 : 0) - (a.is_linked ? 1 : 0));
+    } else if (type === 'alphabetical') {
+      sorted.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+    }
+    setWarehouses(sorted);
+    saveCustomOrder(sorted);
+    setSortModalVisible(false);
+  };
+
+  // Visual branding for each warehouse card
+  const getWarehouseVisual = (wh: Warehouse) => {
+    const name = (wh.name || '').toLowerCase();
+    if (name.includes('sheikh') || name.includes('الشيخ')) {
+      return {
+        headerColor: '#1E3A8A',
+        iconName: 'hospital-building' as const,
+        brandLetter: 'S',
+        brandTag: 'SHEIKH PHARMA',
+        accentColor: '#3B82F6',
+      };
+    }
+    if (name.includes('tabarak') || name.includes('تبارك')) {
+      return {
+        headerColor: '#064E3B',
+        iconName: 'pill' as const,
+        brandLetter: 'T',
+        brandTag: 'TABARAK PHARMA',
+        accentColor: '#10B981',
+      };
+    }
+    if (name.includes('عميرة') || name.includes('abo3mara')) {
+      return {
+        headerColor: '#4C1D95',
+        iconName: 'flask-round-bottom' as const,
+        brandLetter: 'A',
+        brandTag: 'ABO AMIRA',
+        accentColor: '#8B5CF6',
+      };
+    }
+    if (name.includes('x') || name.includes('إكس')) {
+      return {
+        headerColor: '#0F172A',
+        iconName: 'shield-plus' as const,
+        brandLetter: 'X',
+        brandTag: 'X-PHARMA LOGISTICS',
+        accentColor: '#0EA5E9',
+      };
+    }
+    return {
+      headerColor: '#1E293B',
+      iconName: 'cube-outline' as const,
+      brandLetter: wh.name ? wh.name.charAt(0) : 'W',
+      brandTag: 'PHARMA DEPOT',
+      accentColor: '#2563EB',
+    };
+  };
+
+  // If a warehouse portal is open, render WarehousePortalScreen
   if (activePortal) {
     return (
       <WarehousePortalScreen
@@ -170,172 +278,122 @@ export default function HomeScreen() {
         pharmacyCode={activePortal.pharmacyCode}
         pharmacyName={activePortal.pharmacyName}
         onBack={() => setActivePortal(null)}
-        onUnlink={() => handleUnlink(activePortal.warehouse.id)}
       />
     );
   }
 
-  // Get decorative theme for warehouse card
-  const getWarehouseTheme = (wh: Warehouse) => {
-    const nameLower = (wh.name || '').toLowerCase();
-    if (nameLower.includes('sheikh') || nameLower.includes('الشيخ')) {
-      return {
-        color: '#2563EB',
-        bgSoft: isDark ? '#1E293B' : '#EFF6FF',
-        iconName: 'business' as const,
-        letter: 'S',
-      };
-    }
-    if (nameLower.includes('tabarak') || nameLower.includes('تبارك')) {
-      return {
-        color: '#059669',
-        bgSoft: isDark ? '#064E3B44' : '#ECFDF5',
-        iconName: 'medical' as const,
-        letter: 'T',
-      };
-    }
-    if (nameLower.includes('عميرة')) {
-      return {
-        color: '#7C3AED',
-        bgSoft: isDark ? '#3B076444' : '#F5F3FF',
-        iconName: 'flask' as const,
-        letter: 'A',
-      };
-    }
-    return {
-      color: '#0284C7',
-      bgSoft: isDark ? '#082F4944' : '#F0F9FF',
-      iconName: 'cube' as const,
-      letter: wh.name ? wh.name.charAt(0) : 'W',
-    };
-  };
-
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]}>
-      {/* Top Header Bar */}
-      <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity
-          style={[styles.logoutBtn, { borderColor: colors.border }]}
-          onPress={logout}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="log-out-outline" size={18} color={colors.danger} />
-          <Text style={[styles.logoutText, { color: colors.danger }]}>خروج</Text>
-        </TouchableOpacity>
-
+      {/* Top Header: Avatar on left, Brand on right */}
+      <View style={[styles.topBar, { borderBottomColor: colors.border, backgroundColor: colors.card }]}>
+        {/* Right side: Brand */}
         <View style={styles.brandRow}>
           <Text style={[styles.brandText, { color: colors.text }]}>XPharma</Text>
           <View style={styles.brandDot} />
         </View>
+
+        {/* Left side: Pharmacist Avatar (Opens Profile Modal) */}
+        <TouchableOpacity
+          style={styles.avatarButton}
+          onPress={() => setProfileModalVisible(true)}
+          activeOpacity={0.8}
+        >
+          {user?.photo ? (
+            <Image source={{ uri: user.photo }} style={styles.avatarImg} />
+          ) : (
+            <View style={[styles.avatarPlaceholder, { backgroundColor: colors.primary }]}>
+              <Text style={styles.avatarLetter}>
+                {user?.name ? user.name.charAt(0).toUpperCase() : 'U'}
+              </Text>
+            </View>
+          )}
+          <View style={styles.onlineStatusDot} />
+        </TouchableOpacity>
       </View>
 
+      {/* Sub-header Bar with Warehouse Count & Reorder Button */}
+      <View style={styles.controlsBar}>
+        {/* Reorder Button */}
+        <TouchableOpacity
+          style={[styles.reorderBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+          onPress={() => setSortModalVisible(true)}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="swap-vertical" size={16} color={colors.primary} />
+          <Text style={[styles.reorderBtnText, { color: colors.primary }]}>ترتيب المستودعات</Text>
+        </TouchableOpacity>
+
+        {/* Section Title */}
+        <View style={styles.sectionHeaderCol}>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>مستودعات الأدوية</Text>
+          <Text style={[styles.sectionSubtitle, { color: colors.secondaryText }]}>
+            {warehouses.length} مستودع نشط
+          </Text>
+        </View>
+      </View>
+
+      {/* Warehouses 2-Column Grid */}
       <FlatList
         data={warehouses}
         keyExtractor={(item) => item.id}
+        numColumns={2}
+        columnWrapperStyle={styles.columnWrapper}
+        contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
         }
-        contentContainerStyle={styles.listContent}
-        ListHeaderComponent={
-          <View style={styles.headerComponent}>
-            {/* Pharmacist Welcome Profile Card */}
-            <View style={[styles.userCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <View style={styles.avatarContainer}>
-                {user?.photo ? (
-                  <Image source={{ uri: user.photo }} style={styles.avatarImg} />
-                ) : (
-                  <View style={[styles.avatarPlaceholder, { backgroundColor: colors.primary }]}>
-                    <Text style={styles.avatarLetter}>
-                      {user?.name ? user.name.charAt(0).toUpperCase() : 'U'}
-                    </Text>
-                  </View>
-                )}
-                <View style={styles.providerBadge}>
-                  {user?.provider === 'google' ? (
-                    <FontAwesome name="google" size={11} color="#EA4335" />
-                  ) : (
-                    <Ionicons name="logo-apple" size={11} color="#000000" />
-                  )}
-                </View>
-              </View>
-
-              <View style={styles.userInfo}>
-                <Text style={[styles.userName, { color: colors.text }]} numberOfLines={1}>
-                  {user?.name || 'صيدلي XPharma'}
-                </Text>
-                <Text style={[styles.userEmail, { color: colors.secondaryText }]} numberOfLines={1}>
-                  {user?.email || 'حساب موثق'}
-                </Text>
-                <View style={[styles.roleBadge, { backgroundColor: colors.primarySoft }]}>
-                  <Text style={[styles.roleBadgeText, { color: colors.primary }]}>
-                    بوابة ربط واستعلام الصيدليات
-                  </Text>
-                </View>
-              </View>
-            </View>
-
-            {/* Warehouse Section Header */}
-            <View style={styles.sectionHeaderRow}>
-              <Text style={[styles.sectionSubtitle, { color: colors.secondaryText }]}>
-                اختر المستودع لفتح الفواتير وسندات القبض وكشف الحساب
-              </Text>
-              <Text style={[styles.sectionTitle, { color: colors.text }]}>مستودعات الأدوية المتاحة</Text>
-            </View>
-          </View>
-        }
         renderItem={({ item }) => {
-          const theme = getWarehouseTheme(item);
+          const visual = getWarehouseVisual(item);
           return (
             <TouchableOpacity
               style={[
-                styles.warehouseCard,
+                styles.gridCard,
                 { backgroundColor: colors.card, borderColor: colors.border },
               ]}
               onPress={() => handleWarehousePress(item)}
-              activeOpacity={0.85}
+              activeOpacity={0.88}
             >
-              {/* Left Action / Status */}
-              <View style={styles.cardLeftCol}>
+              {/* Image / Banner Container at Top */}
+              <View style={[styles.imageBanner, { backgroundColor: visual.headerColor }]}>
+                {/* Logo & Emblem */}
+                <View style={[styles.crestCircle, { borderColor: visual.accentColor }]}>
+                  <MaterialCommunityIcons name={visual.iconName} size={32} color="#FFFFFF" />
+                </View>
+                <Text style={styles.brandBadgeText}>{visual.brandTag}</Text>
+
+                {/* Status Badge in Top Corner */}
                 {item.is_linked ? (
-                  <View style={[styles.linkBadge, { backgroundColor: colors.successSoft }]}>
-                    <Ionicons name="checkmark-circle" size={14} color={colors.success} />
-                    <Text style={[styles.linkBadgeText, { color: colors.success }]}>
-                      مربوط ({item.linked_pharmacy_code})
+                  <View style={styles.cardStatusLinked}>
+                    <Ionicons name="checkmark-circle" size={13} color="#10B981" />
+                    <Text style={styles.cardStatusLinkedText}>مربوط</Text>
+                  </View>
+                ) : (
+                  <View style={styles.cardStatusUnlinked}>
+                    <Ionicons name="lock-open-outline" size={11} color="#FFFFFF" />
+                    <Text style={styles.cardStatusUnlinkedText}>ربط</Text>
+                  </View>
+                )}
+              </View>
+
+              {/* Warehouse Details Underneath Image */}
+              <View style={styles.cardBody}>
+                <Text style={[styles.warehouseName, { color: colors.text }]} numberOfLines={2}>
+                  {item.name}
+                </Text>
+
+                {item.is_linked ? (
+                  <View style={[styles.codePill, { backgroundColor: colors.successSoft }]}>
+                    <Text style={[styles.codePillText, { color: colors.success }]}>
+                      كود: {item.linked_pharmacy_code}
                     </Text>
                   </View>
                 ) : (
-                  <View style={[styles.linkBadge, { backgroundColor: colors.primarySoft }]}>
-                    <Ionicons name="key-outline" size={13} color={colors.primary} />
-                    <Text style={[styles.linkBadgeText, { color: colors.primary }]}>
+                  <View style={[styles.codePill, { backgroundColor: colors.primarySoft }]}>
+                    <Text style={[styles.codePillText, { color: colors.primary }]}>
                       اضغط للربط
                     </Text>
                   </View>
                 )}
-                <Ionicons
-                  name="chevron-back"
-                  size={18}
-                  color={colors.secondaryText}
-                  style={styles.chevronIcon}
-                />
-              </View>
-
-              {/* Right: Info & Logo */}
-              <View style={styles.cardRightCol}>
-                <View style={styles.whInfoCol}>
-                  <Text style={[styles.whName, { color: colors.text }]} numberOfLines={1}>
-                    {item.name}
-                  </Text>
-                  <Text style={[styles.whSlug, { color: colors.secondaryText }]} numberOfLines={1}>
-                    {item.is_linked && item.linked_pharmacy_name
-                      ? item.linked_pharmacy_name
-                      : `مستودع أدوية نشط • المعرّف: ${item.slug}`}
-                  </Text>
-                </View>
-
-                {/* Warehouse Logo Avatar */}
-                <View style={[styles.whLogoAvatar, { backgroundColor: theme.bgSoft }]}>
-                  <Ionicons name={theme.iconName} size={24} color={theme.color} />
-                </View>
               </View>
             </TouchableOpacity>
           );
@@ -345,30 +403,222 @@ export default function HomeScreen() {
             <View style={styles.loadingBox}>
               <ActivityIndicator size="large" color={colors.primary} />
               <Text style={[styles.loadingText, { color: colors.secondaryText }]}>
-                جارٍ فحص مستودعات الأدوية النشطة...
+                جارٍ تحميل مستودعات الأدوية...
               </Text>
             </View>
           ) : (
             <View style={[styles.emptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Ionicons name="alert-circle-outline" size={38} color={colors.secondaryText} />
-              <Text style={[styles.emptyText, { color: colors.text }]}>
-                لا توجد مستودعات متاحة حالياً
-              </Text>
+              <Ionicons name="cube-outline" size={42} color={colors.secondaryText} />
+              <Text style={[styles.emptyText, { color: colors.text }]}>لا توجد مستودعات متاحة</Text>
             </View>
           )
         }
       />
 
-      {/* Bottom Sheet Verification Modal */}
+      {/* Verification Bottom Sheet Modal */}
       <PharmacyVerifyModal
-        visible={modalVisible}
+        visible={verifyModalVisible}
         warehouse={selectedWarehouseForModal}
         onClose={() => {
-          setModalVisible(false);
+          setVerifyModalVisible(false);
           setSelectedWarehouseForModal(null);
         }}
         onSuccess={handleVerificationSuccess}
       />
+
+      {/* Profile Modal */}
+      <Modal
+        visible={profileModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setProfileModalVisible(false)}
+      >
+        <TouchableWithoutFeedback onPress={() => setProfileModalVisible(false)}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={[styles.profileCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                {/* Close Button */}
+                <TouchableOpacity
+                  style={[styles.closeIconBtn, { borderColor: colors.border }]}
+                  onPress={() => setProfileModalVisible(false)}
+                >
+                  <Ionicons name="close" size={20} color={colors.text} />
+                </TouchableOpacity>
+
+                {/* Avatar */}
+                <View style={styles.profileAvatarContainer}>
+                  {user?.photo ? (
+                    <Image source={{ uri: user.photo }} style={styles.profileAvatarImg} />
+                  ) : (
+                    <View style={[styles.profileAvatarPlaceholder, { backgroundColor: colors.primary }]}>
+                      <Text style={styles.profileAvatarLetter}>
+                        {user?.name ? user.name.charAt(0).toUpperCase() : 'U'}
+                      </Text>
+                    </View>
+                  )}
+                  <View style={styles.profileBadgeIcon}>
+                    {user?.provider === 'google' ? (
+                      <FontAwesome name="google" size={14} color="#EA4335" />
+                    ) : (
+                      <Ionicons name="logo-apple" size={14} color="#000000" />
+                    )}
+                  </View>
+                </View>
+
+                {/* Info */}
+                <Text style={[styles.profileName, { color: colors.text }]}>
+                  {user?.name || 'مستخدم XPharma'}
+                </Text>
+                <Text style={[styles.profileEmail, { color: colors.secondaryText }]}>
+                  {user?.email || 'حساب موثق'}
+                </Text>
+
+                <View style={[styles.profileRoleBadge, { backgroundColor: colors.primarySoft }]}>
+                  <Text style={[styles.profileRoleText, { color: colors.primary }]}>
+                    صيدلية معتمدة بالمنظومة
+                  </Text>
+                </View>
+
+                <View style={[styles.profileDivider, { backgroundColor: colors.border }]} />
+
+                {/* Security Tag */}
+                <View style={styles.profileSecurityRow}>
+                  <Ionicons name="shield-checkmark" size={16} color={colors.success} />
+                  <Text style={[styles.profileSecurityText, { color: colors.secondaryText }]}>
+                    جلسة اتصال مشفرة 256-bit
+                  </Text>
+                </View>
+
+                {/* Logout Button */}
+                <TouchableOpacity
+                  style={[styles.profileLogoutBtn, { borderColor: colors.danger }]}
+                  onPress={async () => {
+                    setProfileModalVisible(false);
+                    await logout();
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="log-out-outline" size={18} color={colors.danger} />
+                  <Text style={[styles.profileLogoutText, { color: colors.danger }]}>
+                    تسجيل الخروج من الحساب
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      {/* Sorting & Reordering Modal */}
+      <Modal
+        visible={sortModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSortModalVisible(false)}
+      >
+        <TouchableWithoutFeedback onPress={() => setSortModalVisible(false)}>
+          <View style={styles.modalOverlayBottom}>
+            <TouchableWithoutFeedback>
+              <View style={[styles.sortSheet, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                {/* Drag handle */}
+                <View style={styles.sheetHandleContainer}>
+                  <View style={[styles.sheetHandle, { backgroundColor: isDark ? '#334155' : '#CBD5E1' }]} />
+                </View>
+
+                <View style={styles.sortHeader}>
+                  <Text style={[styles.sortTitle, { color: colors.text }]}>ترتيب وتقسيم المستودعات</Text>
+                  <Text style={[styles.sortSubtitle, { color: colors.secondaryText }]}>
+                    رتب المستودعات حسب رغبتك وسيتم حفظ الترتيب تلقائياً
+                  </Text>
+                </View>
+
+                {/* Quick Presets */}
+                <View style={styles.presetsRow}>
+                  <TouchableOpacity
+                    style={[styles.presetBtn, { borderColor: colors.border, backgroundColor: colors.bg }]}
+                    onPress={() => sortPreset('linkedFirst')}
+                  >
+                    <Ionicons name="checkmark-done" size={15} color={colors.success} />
+                    <Text style={[styles.presetBtnText, { color: colors.text }]}>المربوطة أولاً</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.presetBtn, { borderColor: colors.border, backgroundColor: colors.bg }]}
+                    onPress={() => sortPreset('alphabetical')}
+                  >
+                    <Ionicons name="text" size={15} color={colors.primary} />
+                    <Text style={[styles.presetBtnText, { color: colors.text }]}>أبجدياً</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Interactive Manual Reorder List */}
+                <Text style={[styles.reorderListLabel, { color: colors.secondaryText }]}>
+                  الترتيب اليدوي (استخدم الأسهم للتحريك):
+                </Text>
+
+                <ScrollView style={styles.reorderScroll} showsVerticalScrollIndicator={false}>
+                  {warehouses.map((wh, idx) => (
+                    <View
+                      key={wh.id}
+                      style={[styles.reorderItem, { backgroundColor: colors.bg, borderColor: colors.border }]}
+                    >
+                      {/* Arrows */}
+                      <View style={styles.arrowsCol}>
+                        <TouchableOpacity
+                          style={[styles.arrowBtn, idx === 0 && styles.disabledArrow]}
+                          onPress={() => moveWarehouse(idx, 'up')}
+                          disabled={idx === 0}
+                        >
+                          <Ionicons name="chevron-up" size={18} color={idx === 0 ? colors.border : colors.primary} />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[styles.arrowBtn, idx === warehouses.length - 1 && styles.disabledArrow]}
+                          onPress={() => moveWarehouse(idx, 'down')}
+                          disabled={idx === warehouses.length - 1}
+                        >
+                          <Ionicons
+                            name="chevron-down"
+                            size={18}
+                            color={idx === warehouses.length - 1 ? colors.border : colors.primary}
+                          />
+                        </TouchableOpacity>
+                      </View>
+
+                      {/* Status */}
+                      {wh.is_linked && (
+                        <View style={[styles.reorderLinkedBadge, { backgroundColor: colors.successSoft }]}>
+                          <Text style={[styles.reorderLinkedText, { color: colors.success }]}>مربوط</Text>
+                        </View>
+                      )}
+
+                      {/* Warehouse Name */}
+                      <Text style={[styles.reorderWhName, { color: colors.text }]} numberOfLines={1}>
+                        {wh.name}
+                      </Text>
+
+                      {/* Position Number */}
+                      <View style={[styles.positionBadge, { backgroundColor: colors.card }]}>
+                        <Text style={[styles.positionBadgeText, { color: colors.secondaryText }]}>
+                          #{idx + 1}
+                        </Text>
+                      </View>
+                    </View>
+                  ))}
+                </ScrollView>
+
+                {/* Done Button */}
+                <TouchableOpacity
+                  style={[styles.doneBtn, { backgroundColor: colors.primary }]}
+                  onPress={() => setSortModalVisible(false)}
+                >
+                  <Text style={styles.doneBtnText}>حفظ وإغلاق</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -378,10 +628,10 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   topBar: {
-    flexDirection: 'row-reverse',
+    flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: PADDING_HORIZONTAL,
     paddingVertical: 12,
     borderBottomWidth: 1,
   },
@@ -391,8 +641,8 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   brandText: {
-    fontSize: 20,
-    fontWeight: '800',
+    fontSize: 22,
+    fontWeight: '900',
     letterSpacing: 0.5,
   },
   brandDot: {
@@ -401,97 +651,49 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: '#2563EB',
   },
-  logoutBtn: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-    borderWidth: 1,
-  },
-  logoutText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  listContent: {
-    padding: 16,
-    gap: 12,
-    paddingBottom: 30,
-  },
-  headerComponent: {
-    gap: 16,
-    marginBottom: 6,
-  },
-  userCard: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 20,
-    borderWidth: 1,
-    gap: 14,
-  },
-  avatarContainer: {
+  avatarButton: {
     position: 'relative',
   },
   avatarImg: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 2,
+    borderColor: '#2563EB',
   },
   avatarPlaceholder: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarLetter: {
     color: '#FFFFFF',
-    fontSize: 22,
-    fontWeight: '700',
+    fontSize: 18,
+    fontWeight: '800',
   },
-  providerBadge: {
+  onlineStatusDot: {
     position: 'absolute',
-    bottom: -2,
-    left: -2,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    width: 18,
-    height: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  userInfo: {
-    flex: 1,
-    alignItems: 'flex-end',
-    gap: 2,
-  },
-  userName: {
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  userEmail: {
-    fontSize: 12,
-  },
-  roleBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    bottom: 0,
+    right: 0,
+    width: 12,
+    height: 12,
     borderRadius: 6,
-    marginTop: 4,
+    backgroundColor: '#10B981',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
-  roleBadgeText: {
-    fontSize: 10,
-    fontWeight: '600',
+  controlsBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: PADDING_HORIZONTAL,
+    paddingTop: 14,
+    paddingBottom: 8,
   },
-  sectionHeaderRow: {
+  sectionHeaderCol: {
     alignItems: 'flex-end',
-    gap: 4,
-    marginTop: 6,
   },
   sectionTitle: {
     fontSize: 18,
@@ -499,61 +701,117 @@ const styles = StyleSheet.create({
   },
   sectionSubtitle: {
     fontSize: 12,
-    fontWeight: '500',
+    marginTop: 1,
   },
-  warehouseCard: {
+  reorderBtn: {
     flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  reorderBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  listContent: {
+    paddingHorizontal: PADDING_HORIZONTAL,
+    paddingTop: 6,
+    paddingBottom: 28,
+  },
+  columnWrapper: {
+    justifyContent: 'space-between',
+    marginBottom: CARD_GAP,
+  },
+  gridCard: {
+    width: CARD_WIDTH,
     borderRadius: 18,
     borderWidth: 1,
-    gap: 12,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  cardRightCol: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 12,
-    flex: 1,
-  },
-  whLogoAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
+  imageBanner: {
+    height: 112,
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
   },
-  whInfoCol: {
-    flex: 1,
-    alignItems: 'flex-end',
-    gap: 2,
+  crestCircle: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
   },
-  whName: {
-    fontSize: 16,
+  brandBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    opacity: 0.9,
+  },
+  cardStatusLinked: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 100,
+  },
+  cardStatusLinkedText: {
+    color: '#10B981',
+    fontSize: 10,
     fontWeight: '800',
   },
-  whSlug: {
-    fontSize: 12,
-  },
-  cardLeftCol: {
+  cardStatusUnlinked: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
     flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 100,
+  },
+  cardStatusUnlinkedText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  cardBody: {
+    padding: 12,
     alignItems: 'center',
     gap: 8,
   },
-  linkBadge: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
+  warehouseName: {
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'center',
+    minHeight: 36,
+  },
+  codePill: {
+    paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 8,
   },
-  linkBadgeText: {
+  codePillText: {
     fontSize: 11,
     fontWeight: '700',
-  },
-  chevronIcon: {
-    marginRight: -4,
   },
   loadingBox: {
     alignItems: 'center',
@@ -567,13 +825,248 @@ const styles = StyleSheet.create({
   emptyBox: {
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 30,
-    borderRadius: 16,
+    padding: 40,
+    borderRadius: 18,
     borderWidth: 1,
-    gap: 8,
+    gap: 10,
+    marginTop: 20,
   },
   emptyText: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  profileCard: {
+    width: '100%',
+    maxWidth: 340,
+    borderRadius: 24,
+    borderWidth: 1,
+    padding: 24,
+    alignItems: 'center',
+    position: 'relative',
+    gap: 6,
+  },
+  closeIconBtn: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileAvatarContainer: {
+    position: 'relative',
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  profileAvatarImg: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+  },
+  profileAvatarPlaceholder: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileAvatarLetter: {
+    color: '#FFFFFF',
+    fontSize: 30,
+    fontWeight: '800',
+  },
+  profileBadgeIcon: {
+    position: 'absolute',
+    bottom: -2,
+    left: -2,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+  },
+  profileName: {
+    fontSize: 18,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  profileEmail: {
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  profileRoleBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 8,
+    marginTop: 4,
+  },
+  profileRoleText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  profileDivider: {
+    height: 1,
+    width: '100%',
+    marginVertical: 10,
+  },
+  profileSecurityRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+  },
+  profileSecurityText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  profileLogoutBtn: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    width: '100%',
+    height: 46,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginTop: 4,
+  },
+  profileLogoutText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  modalOverlayBottom: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    justifyContent: 'flex-end',
+  },
+  sortSheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 38 : 24,
+    maxHeight: '80%',
+  },
+  sheetHandleContainer: {
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  sheetHandle: {
+    width: 44,
+    height: 5,
+    borderRadius: 3,
+  },
+  sortHeader: {
+    alignItems: 'flex-end',
+    marginVertical: 8,
+    gap: 2,
+  },
+  sortTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  sortSubtitle: {
+    fontSize: 12,
+  },
+  presetsRow: {
+    flexDirection: 'row-reverse',
+    gap: 10,
+    marginVertical: 12,
+  },
+  presetBtn: {
+    flex: 1,
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  presetBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  reorderListLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'right',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  reorderScroll: {
+    maxHeight: 250,
+  },
+  reorderItem: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 8,
+    gap: 10,
+  },
+  reorderWhName: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
+  reorderLinkedBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  reorderLinkedText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  positionBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  positionBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  arrowsCol: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  arrowBtn: {
+    padding: 6,
+  },
+  disabledArrow: {
+    opacity: 0.3,
+  },
+  doneBtn: {
+    height: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 14,
+  },
+  doneBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
