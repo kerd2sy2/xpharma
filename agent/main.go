@@ -92,16 +92,29 @@ type SyncCursors struct {
 }
 
 type InvoiceSyncItem struct {
-	RemoteID        string    `json:"remote_id"`
-	InvoiceNumber   string    `json:"invoice_number"`
-	PharmacyCode    string    `json:"pharmacy_code"`
-	InvoiceDate     time.Time `json:"invoice_date"`
-	TotalAmount     float64   `json:"total_amount"`
-	DiscountAmount  float64   `json:"discount_amount"`
-	NetAmount       float64   `json:"net_amount"`
-	PaidAmount      float64   `json:"paid_amount"`
-	RemainingAmount float64   `json:"remaining_amount"`
-	Status          string    `json:"status"`
+	RemoteID        string                `json:"remote_id"`
+	InvoiceNumber   string                `json:"invoice_number"`
+	PharmacyCode    string                `json:"pharmacy_code"`
+	InvoiceDate     time.Time             `json:"invoice_date"`
+	TotalAmount     float64               `json:"total_amount"`
+	DiscountAmount  float64               `json:"discount_amount"`
+	NetAmount       float64               `json:"net_amount"`
+	PaidAmount      float64               `json:"paid_amount"`
+	RemainingAmount float64               `json:"remaining_amount"`
+	Status          string                `json:"status"`
+	Items           []InvoiceLineSyncItem `json:"items"`
+}
+
+type InvoiceLineSyncItem struct {
+	RemoteItemID    string  `json:"remote_item_id"`
+	ItemCode        string  `json:"item_code"`
+	ItemName        string  `json:"item_name"`
+	Unit            string  `json:"unit"`
+	Quantity        float64 `json:"quantity"`
+	BonusQuantity   float64 `json:"bonus_quantity"`
+	UnitPrice       float64 `json:"unit_price"`
+	DiscountPercent float64 `json:"discount_percent"`
+	TotalPrice      float64 `json:"total_price"`
 }
 
 type CashReceiptSyncItem struct {
@@ -1149,6 +1162,55 @@ func runGentleSync(cfg *Config) {
 			invNum := fmt.Sprintf("INV-%d", id)
 			pharmaCode := fmt.Sprintf("%d", accountID)
 
+			// Extract Line Items from INVOICES_D joined with PRODUCTS (per ERP_DATABASE_MAP.md)
+			var items []InvoiceLineSyncItem
+			dQuery := fmt.Sprintf(`
+				SELECT 
+					D.INVOICES_D_ID,
+					COALESCE(D.PROD_ID, 0),
+					P.PROD_NAME,
+					COALESCE(P.PROD_NAME_EN, ''),
+					COALESCE(CAST(D.TOTAL_QTY_ALL AS DOUBLE PRECISION), 0),
+					COALESCE(CAST(D.CONSUMER AS DOUBLE PRECISION), 0),
+					COALESCE(CAST(D.DISCOUNT1 AS DOUBLE PRECISION), 0),
+					COALESCE(CAST(D.TOTAL_TOTAL AS DOUBLE PRECISION), 0)
+				FROM INVOICES_D D
+				LEFT JOIN PRODUCTS P ON D.PROD_ID = P.PROD_ID
+				WHERE D.INVOICES_H_ID = %d
+				ORDER BY D.INVOICES_D_ID ASC
+			`, id)
+
+			dRows, dErr := db.Query(dQuery)
+			if dErr == nil {
+				for dRows.Next() {
+					var dID, prodID int64
+					var rawName []byte
+					var nameEn string
+					var qty, price, discPct, totalItem float64
+					if err := dRows.Scan(&dID, &prodID, &rawName, &nameEn, &qty, &price, &discPct, &totalItem); err == nil {
+						itemName := decodeText(rawName)
+						if itemName == "" && nameEn != "" {
+							itemName = cleanControlChars(nameEn)
+						}
+						if itemName == "" {
+							itemName = fmt.Sprintf("صنف كود %d", prodID)
+						}
+						items = append(items, InvoiceLineSyncItem{
+							RemoteItemID:    fmt.Sprintf("%d", dID),
+							ItemCode:        fmt.Sprintf("%d", prodID),
+							ItemName:        itemName,
+							Unit:            "علبة",
+							Quantity:        qty,
+							BonusQuantity:   0,
+							UnitPrice:       price,
+							DiscountPercent: discPct,
+							TotalPrice:      totalItem,
+						})
+					}
+				}
+				dRows.Close()
+			}
+
 			batch = append(batch, InvoiceSyncItem{
 				RemoteID:        remoteID,
 				InvoiceNumber:   invNum,
@@ -1160,6 +1222,7 @@ func runGentleSync(cfg *Config) {
 				PaidAmount:      paid,
 				RemainingAmount: rem,
 				Status:          "synced",
+				Items:           items,
 			})
 
 			ledgBatch = append(ledgBatch, LedgerSyncItem{
