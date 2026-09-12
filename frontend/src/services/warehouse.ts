@@ -39,6 +39,19 @@ export interface InvoiceItem {
   status: string;
 }
 
+export interface InvoiceLineItem {
+  id: string;
+  remote_item_id?: string;
+  item_code?: string;
+  item_name: string;
+  unit?: string;
+  quantity: number;
+  bonus_quantity?: number;
+  unit_price: number;
+  discount_percent: number;
+  total_price: number;
+}
+
 export interface ReturnItem {
   id: string;
   return_number?: string;
@@ -310,6 +323,31 @@ export async function fetchPharmacyPurchases(token: string): Promise<InvoiceItem
   } catch (e) {
     console.error('Failed to fetch purchases:', e);
     return [];
+  }
+}
+
+/**
+ * Fetch invoice details and line items (كرت الصنف)
+ */
+export async function fetchInvoiceDetails(
+  token: string,
+  invoiceId: string
+): Promise<{ invoice?: InvoiceItem; items: InvoiceLineItem[] }> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/v1/pharmacy/purchases/${encodeURIComponent(invoiceId)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      return {
+        invoice: data.invoice,
+        items: data.items || [],
+      };
+    }
+    return { items: [] };
+  } catch (e) {
+    console.error('Failed to fetch invoice details:', e);
+    return { items: [] };
   }
 }
 

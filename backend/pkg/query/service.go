@@ -127,6 +127,109 @@ func (s *QueryService) GetPurchases(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "invoices": invoices})
 }
 
+// GetInvoiceDetails returns an invoice header along with its line items
+func (s *QueryService) GetInvoiceDetails(c *gin.Context) {
+	tenantID := c.GetString("tenant_id")
+	pharmaCode := c.GetString("pharma_code")
+	invoiceID := c.Param("id")
+
+	ctx := c.Request.Context()
+	var invoice map[string]interface{}
+	var items []map[string]interface{}
+
+	err := s.router.ExecInTenant(ctx, tenantID, func(ctx context.Context, schema string, conn *pgxpool.Conn) error {
+		// 1. Fetch invoice header
+		var id, remoteID, invNum, status string
+		var invDate time.Time
+		var total, disc, net, paid, remaining float64
+
+		invQuery := fmt.Sprintf(`
+			SELECT id::text, remote_id, invoice_number, invoice_date, total_amount, discount_amount, net_amount, paid_amount, remaining_amount, status
+			FROM %s.invoices
+			WHERE (id::text = $1 OR remote_id = $1 OR invoice_number = $1)
+			  AND pharmacy_code = $2
+			LIMIT 1
+		`, schema)
+
+		err := conn.QueryRow(ctx, invQuery, invoiceID, pharmaCode).Scan(
+			&id, &remoteID, &invNum, &invDate, &total, &disc, &net, &paid, &remaining, &status,
+		)
+		if err != nil {
+			// Fallback search without pharmacy_code filter
+			invQueryFallback := fmt.Sprintf(`
+				SELECT id::text, remote_id, invoice_number, invoice_date, total_amount, discount_amount, net_amount, paid_amount, remaining_amount, status
+				FROM %s.invoices
+				WHERE (id::text = $1 OR remote_id = $1 OR invoice_number = $1)
+				LIMIT 1
+			`, schema)
+			err = conn.QueryRow(ctx, invQueryFallback, invoiceID).Scan(
+				&id, &remoteID, &invNum, &invDate, &total, &disc, &net, &paid, &remaining, &status,
+			)
+			if err != nil {
+				return err
+			}
+		}
+
+		invoice = map[string]interface{}{
+			"id":               id,
+			"remote_id":        remoteID,
+			"invoice_number":   invNum,
+			"invoice_date":     invDate.Format(time.RFC3339),
+			"total_amount":     total,
+			"discount_amount":  disc,
+			"net_amount":       net,
+			"paid_amount":      paid,
+			"remaining_amount": remaining,
+			"status":           status,
+		}
+
+		// 2. Fetch line items
+		itemsQuery := fmt.Sprintf(`
+			SELECT id::text, COALESCE(remote_item_id, ''), COALESCE(item_code, ''), item_name, COALESCE(unit, ''), quantity, bonus_quantity, unit_price, discount_percent, total_price
+			FROM %s.invoice_items
+			WHERE invoice_id::text = $1
+			ORDER BY id ASC
+		`, schema)
+
+		rows, err := conn.Query(ctx, itemsQuery, id)
+		if err != nil {
+			return nil
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var itemID, remoteItemID, itemCode, itemName, unit string
+			var qty, bonus, price, discPct, totalItem float64
+			if err := rows.Scan(&itemID, &remoteItemID, &itemCode, &itemName, &unit, &qty, &bonus, &price, &discPct, &totalItem); err == nil {
+				items = append(items, map[string]interface{}{
+					"id":               itemID,
+					"remote_item_id":   remoteItemID,
+					"item_code":        itemCode,
+					"item_name":        itemName,
+					"unit":             unit,
+					"quantity":         qty,
+					"bonus_quantity":   bonus,
+					"unit_price":       price,
+					"discount_percent": discPct,
+					"total_price":      totalItem,
+				})
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "الفاتورة غير موجودة"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"invoice": invoice,
+		"items":   items,
+	})
+}
+
 // GetStatement returns the ledger running statement with all account movements
 func (s *QueryService) GetStatement(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")

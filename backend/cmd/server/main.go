@@ -82,6 +82,7 @@ func main() {
 	{
 		pharmaGroup.GET("/balance", queryService.GetBalance)
 		pharmaGroup.GET("/purchases", queryService.GetPurchases)
+		pharmaGroup.GET("/purchases/:id", queryService.GetInvoiceDetails)
 		pharmaGroup.GET("/returns", queryService.GetReturns)
 		pharmaGroup.GET("/receipts", queryService.GetReceipts)
 		pharmaGroup.GET("/statement", queryService.GetStatement)

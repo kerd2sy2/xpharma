@@ -21,12 +21,14 @@ import XLogo from '@/components/XLogo';
 import {
   fetchPharmacyBalance,
   fetchPharmacyPurchases,
+  fetchInvoiceDetails,
   fetchPharmacyReceipts,
   fetchPharmacyReturns,
   fetchPharmacyStatement,
   getWarehousePharmacies,
   saveWarehousePharmacy,
   InvoiceItem,
+  InvoiceLineItem,
   LinkedPharmacyAccount,
   PharmacyBalance,
   ReceiptItem,
@@ -90,6 +92,9 @@ export default function WarehousePortalScreen({
 
   const [balance, setBalance] = useState<PharmacyBalance | null>(null);
   const [invoices, setInvoices] = useState<InvoiceItem[]>([]);
+  const [selectedInvoice, setSelectedInvoice] = useState<InvoiceItem | null>(null);
+  const [invoiceLines, setInvoiceLines] = useState<InvoiceLineItem[]>([]);
+  const [loadingInvoiceLines, setLoadingInvoiceLines] = useState(false);
   const [returns, setReturns] = useState<ReturnItem[]>([]);
   const [receipts, setReceipts] = useState<ReceiptItem[]>([]);
   const [statement, setStatement] = useState<StatementItem[]>([]);
@@ -127,19 +132,25 @@ export default function WarehousePortalScreen({
         setShowAddModal(false);
         return true;
       }
-      // 3. If inside a section (purchases/returns/etc.), go back to portal main view
+      // 3. If viewing invoice details inside purchases, return to purchases list
+      if (selectedInvoice) {
+        setSelectedInvoice(null);
+        setInvoiceLines([]);
+        return true;
+      }
+      // 4. If inside a section (purchases/returns/etc.), go back to portal main view
       if (selectedSection) {
         setSelectedSection(null);
         return true;
       }
-      // 4. Otherwise, go back to main warehouses screen
+      // 5. Otherwise, go back to main warehouses screen
       onBack();
       return true;
     };
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => subscription.remove();
-  }, [showSubscriptionModal, isTrialExpired, showAddModal, selectedSection, onBack]);
+  }, [showSubscriptionModal, isTrialExpired, showAddModal, selectedInvoice, selectedSection, onBack]);
 
   // Initialize and load saved pharmacies for this warehouse
   useEffect(() => {
@@ -215,9 +226,21 @@ export default function WarehousePortalScreen({
     loadData(currentToken, true);
   }, [currentToken]);
 
-  const onRefresh = () => {
+  const onRefresh = async () => {
     setRefreshing(true);
-    loadData(currentToken, false);
+    if (selectedInvoice) {
+      const targetId = selectedInvoice.id || selectedInvoice.remote_id || selectedInvoice.invoice_number;
+      try {
+        const details = await fetchInvoiceDetails(currentToken, targetId);
+        if (details.items && details.items.length > 0) {
+          setInvoiceLines(details.items);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    await loadData(currentToken, false);
+    setRefreshing(false);
   };
 
   // Fly card like paper, then show full-page logo overlay until the other pharmacy loads
@@ -353,6 +376,37 @@ export default function WarehousePortalScreen({
     }
   };
 
+  const handleInvoicePress = async (inv: InvoiceItem) => {
+    setSelectedInvoice(inv);
+    setLoadingInvoiceLines(true);
+    const targetId = inv.id || inv.remote_id || inv.invoice_number;
+    try {
+      const details = await fetchInvoiceDetails(currentToken, targetId);
+      if (details.items && details.items.length > 0) {
+        setInvoiceLines(details.items);
+      } else {
+        // Fallback: create item from invoice if no line items found in DB
+        setInvoiceLines([
+          {
+            id: 'fallback-1',
+            item_name: 'أدوية ومستلزمات عامة (فاتورة مسجلة)',
+            quantity: 1,
+            unit_price: inv.total_amount || inv.net_amount || 0,
+            discount_percent:
+              inv.total_amount && inv.discount_amount
+                ? Math.round((inv.discount_amount / inv.total_amount) * 100)
+                : 0,
+            total_price: inv.net_amount || inv.total_amount || 0,
+          },
+        ]);
+      }
+    } catch (e) {
+      console.error('Error fetching invoice lines:', e);
+    } finally {
+      setLoadingInvoiceLines(false);
+    }
+  };
+
   const insets = useSafeAreaInsets();
   const topInset = Math.max(insets.top, 24);
 
@@ -405,6 +459,160 @@ export default function WarehousePortalScreen({
   if (selectedSection) {
     const currentSection = sections.find((s) => s.key === selectedSection);
 
+    // 1. DEDICATED INVOICE DETAILS SCREEN (صفحة تفاصيل الفاتورة)
+    if (selectedSection === 'purchases' && selectedInvoice) {
+      return (
+        <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
+          <StatusBar barStyle="dark-content" backgroundColor={colors.bg} translucent={false} />
+
+          {/* Invoice Details Page Header */}
+          <View style={styles.topHeader}>
+            <TouchableOpacity
+              style={styles.backBtnClean}
+              onPress={() => {
+                setSelectedInvoice(null);
+                setInvoiceLines([]);
+              }}
+              activeOpacity={0.6}
+            >
+              <Ionicons name="arrow-forward" size={24} color={colors.text} />
+            </TouchableOpacity>
+            <Text style={[styles.topHeaderTitle, { color: colors.text }]}>
+              {`فاتورة رقم ${selectedInvoice.invoice_number || selectedInvoice.remote_id || ''}`}
+            </Text>
+            <View style={styles.topHeaderSpacer} />
+          </View>
+
+          {/* Invoice Summary Header Card */}
+          <View style={[styles.invoiceMetaCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={styles.invoiceMetaRow}>
+              <View style={styles.invoiceMetaColRight}>
+                <Text style={[styles.invoiceMetaLabel, { color: colors.secondaryText }]}>تاريخ الفاتورة</Text>
+                <Text style={[styles.invoiceMetaValue, { color: colors.text }]}>
+                  {formatDate(selectedInvoice.invoice_date)}
+                </Text>
+              </View>
+              <View style={styles.invoiceMetaColLeft}>
+                <Text style={[styles.invoiceMetaLabel, { color: colors.secondaryText }]}>إجمالي الفاتورة</Text>
+                <Text style={[styles.invoiceMetaTotalValue, { color: colors.primary }]}>
+                  {formatCurrency(selectedInvoice.net_amount || selectedInvoice.total_amount)}
+                </Text>
+              </View>
+            </View>
+            <View style={[styles.invoiceMetaDivider, { backgroundColor: colors.border }]} />
+            <View style={styles.invoiceMetaBottom}>
+              <View style={[styles.invoiceStatusBadge, { backgroundColor: colors.primarySoft }]}>
+                <Text style={[styles.invoiceStatusText, { color: colors.primary }]}>
+                  {selectedInvoice.status || 'مسجلة'}
+                </Text>
+              </View>
+              <Text style={[styles.invoiceItemsCountText, { color: colors.secondaryText }]}>
+                {loadingInvoiceLines ? 'جاري تحميل الأصناف...' : `${invoiceLines.length} صنف`}
+              </Text>
+            </View>
+          </View>
+
+          {/* Line Items List (كرت الصنف مقسوم 2) */}
+          <ScrollView
+            style={styles.scrollArea}
+            contentContainerStyle={styles.subPageScrollContent}
+            showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
+            }
+          >
+            {loadingInvoiceLines ? (
+              <View style={styles.invoiceLoadingBox}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={[styles.invoiceLoadingText, { color: colors.secondaryText }]}>
+                  جاري جلب تفاصيل الأصناف...
+                </Text>
+              </View>
+            ) : invoiceLines.length === 0 ? (
+              <View style={[styles.simpleEmptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Ionicons name="receipt-outline" size={38} color={colors.secondaryText} />
+                <Text style={[styles.simpleEmptyText, { color: colors.secondaryText }]}>
+                  لا توجد بنود مسجلة في هذه الفاتورة
+                </Text>
+              </View>
+            ) : (
+              invoiceLines.map((item, idx) => (
+                <View
+                  key={item.id || idx}
+                  style={[styles.itemCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                >
+                  {/* النصف الأول: اسم الصنف */}
+                  <View style={styles.itemCardTop}>
+                    <View style={styles.itemNameWrapper}>
+                      <Text style={[styles.itemNameText, { color: colors.text }]}>
+                        {item.item_name}
+                      </Text>
+                      {item.item_code ? (
+                        <Text style={[styles.itemCodeText, { color: colors.secondaryText }]}>
+                          كود: {item.item_code}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <View style={[styles.itemIndexBadge, { backgroundColor: colors.cardBack }]}>
+                      <Text style={[styles.itemIndexText, { color: colors.primary }]}>
+                        #{idx + 1}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* خط فاصل بين النصفين */}
+                  <View style={[styles.itemCardDivider, { backgroundColor: colors.border }]} />
+
+                  {/* النصف الثاني: الكمية - سعر الصنف - الخصم - الإجمالي بعد الخصم */}
+                  <View style={styles.itemCardBottom}>
+                    {/* 1. الكمية */}
+                    <View style={styles.itemMetricCol}>
+                      <Text style={[styles.itemMetricLabel, { color: colors.secondaryText }]}>الكمية</Text>
+                      <Text style={[styles.itemMetricValue, { color: colors.text }]}>
+                        {item.quantity}
+                        {item.bonus_quantity && item.bonus_quantity > 0 ? (
+                          <Text style={{ color: colors.success, fontSize: 10 }}> +{item.bonus_quantity}</Text>
+                        ) : null}
+                      </Text>
+                    </View>
+
+                    {/* 2. سعر الصنف */}
+                    <View style={styles.itemMetricCol}>
+                      <Text style={[styles.itemMetricLabel, { color: colors.secondaryText }]}>سعر الصنف</Text>
+                      <Text style={[styles.itemMetricValue, { color: colors.text }]}>
+                        {formatCurrency(item.unit_price)}
+                      </Text>
+                    </View>
+
+                    {/* 3. الخصم */}
+                    <View style={styles.itemMetricCol}>
+                      <Text style={[styles.itemMetricLabel, { color: colors.secondaryText }]}>الخصم</Text>
+                      <Text
+                        style={[
+                          styles.itemMetricValue,
+                          { color: item.discount_percent > 0 ? colors.warning : colors.secondaryText },
+                        ]}
+                      >
+                        {item.discount_percent > 0 ? `${item.discount_percent}%` : '0%'}
+                      </Text>
+                    </View>
+
+                    {/* 4. الإجمالي بعد الخصم */}
+                    <View style={[styles.itemMetricCol, styles.itemMetricColTotal]}>
+                      <Text style={[styles.itemMetricLabel, { color: colors.secondaryText }]}>الإجمالي بعد الخصم</Text>
+                      <Text style={[styles.itemMetricValueTotal, { color: colors.primary }]}>
+                        {formatCurrency(item.total_price)}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              ))
+            )}
+          </ScrollView>
+        </View>
+      );
+    }
+
     return (
       <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
         <StatusBar barStyle="dark-content" backgroundColor={colors.bg} translucent={false} />
@@ -413,7 +621,10 @@ export default function WarehousePortalScreen({
         <View style={styles.topHeader}>
           <TouchableOpacity
             style={styles.backBtnClean}
-            onPress={() => setSelectedSection(null)}
+            onPress={() => {
+              setSelectedInvoice(null);
+              setSelectedSection(null);
+            }}
             activeOpacity={0.6}
           >
             <Ionicons name="arrow-forward" size={24} color={colors.text} />
@@ -424,24 +635,26 @@ export default function WarehousePortalScreen({
           <View style={styles.topHeaderSpacer} />
         </View>
 
-        {/* Section Quick Summary Bar */}
-        <View style={[styles.sectionSummaryBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.summaryBarCol}>
-            <Text style={[styles.summaryBarDesc, { color: colors.secondaryText }]}>
-              {currentSection?.desc}
-            </Text>
-            {currentSection?.amount !== undefined && (
-              <Text style={[styles.summaryBarAmount, { color: currentSection.color }]}>
-                {formatCurrency(currentSection.amount)}
+        {/* Section Quick Summary Bar (شيل اجمالى الفواتير فى صفحة المشتريات) */}
+        {selectedSection !== 'purchases' && (
+          <View style={[styles.sectionSummaryBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={styles.summaryBarCol}>
+              <Text style={[styles.summaryBarDesc, { color: colors.secondaryText }]}>
+                {currentSection?.desc}
               </Text>
-            )}
+              {currentSection?.amount !== undefined && (
+                <Text style={[styles.summaryBarAmount, { color: currentSection.color }]}>
+                  {formatCurrency(currentSection.amount)}
+                </Text>
+              )}
+            </View>
+            <View style={[styles.summaryCountBadge, { backgroundColor: currentSection?.bgColor }]}>
+              <Text style={[styles.summaryCountText, { color: currentSection?.color }]}>
+                {currentSection?.count} سجل
+              </Text>
+            </View>
           </View>
-          <View style={[styles.summaryCountBadge, { backgroundColor: currentSection?.bgColor }]}>
-            <Text style={[styles.summaryCountText, { color: currentSection?.color }]}>
-              {currentSection?.count} سجل
-            </Text>
-          </View>
-        </View>
+        )}
 
         {/* Section List Content */}
         <ScrollView
@@ -461,14 +674,19 @@ export default function WarehousePortalScreen({
               </View>
             ) : (
               invoices.map((inv, idx) => (
-                <View
+                <TouchableOpacity
                   key={inv.id || idx}
+                  activeOpacity={0.7}
+                  onPress={() => handleInvoicePress(inv)}
                   style={[styles.simpleRowCard, { backgroundColor: colors.card, borderColor: colors.border }]}
                 >
                   <View style={styles.rowCardRight}>
-                    <Text style={[styles.rowTitle, { color: colors.text }]}>
-                      فاتورة #{inv.invoice_number || inv.remote_id}
-                    </Text>
+                    <View style={{ flexDirection: 'row-reverse', alignItems: 'center', gap: 6 }}>
+                      <Text style={[styles.rowTitle, { color: colors.text }]}>
+                        فاتورة #{inv.invoice_number || inv.remote_id}
+                      </Text>
+                      <Ionicons name="chevron-back" size={14} color={colors.secondaryText} />
+                    </View>
                     <Text style={[styles.rowDate, { color: colors.secondaryText }]}>
                       {formatDate(inv.invoice_date)}
                     </Text>
@@ -483,7 +701,7 @@ export default function WarehousePortalScreen({
                       </Text>
                     ) : null}
                   </View>
-                </View>
+                </TouchableOpacity>
               ))
             )
           )}
@@ -1173,5 +1391,147 @@ const styles = StyleSheet.create({
   simpleEmptyText: {
     fontSize: 13,
     fontWeight: '600',
+  },
+
+  // تفاصيل الفاتورة وبنود الأصناف
+  invoiceMetaCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 8,
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  invoiceMetaRow: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  invoiceMetaColRight: {
+    alignItems: 'flex-end',
+    gap: 3,
+  },
+  invoiceMetaColLeft: {
+    alignItems: 'flex-start',
+    gap: 3,
+  },
+  invoiceMetaLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  invoiceMetaValue: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  invoiceMetaTotalValue: {
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  invoiceMetaDivider: {
+    height: 1,
+    marginVertical: 10,
+  },
+  invoiceMetaBottom: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  invoiceStatusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  invoiceStatusText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  invoiceItemsCountText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  invoiceLoadingBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 40,
+    gap: 10,
+  },
+  invoiceLoadingText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+
+  // كرت الصنف (مقسوم 2: الاسم بالأعلى والمواصفات بالأسفل)
+  itemCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  itemCardTop: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  itemNameWrapper: {
+    flex: 1,
+    alignItems: 'flex-end',
+    gap: 2,
+  },
+  itemNameText: {
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
+  itemCodeText: {
+    fontSize: 11,
+    fontWeight: '500',
+    textAlign: 'right',
+  },
+  itemIndexBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    marginRight: 10,
+  },
+  itemIndexText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  itemCardDivider: {
+    height: 1,
+    width: '100%',
+  },
+  itemCardBottom: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    backgroundColor: '#FAF8FC',
+  },
+  itemMetricCol: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 2,
+  },
+  itemMetricColTotal: {
+    flex: 1.3,
+  },
+  itemMetricLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  itemMetricValue: {
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  itemMetricValueTotal: {
+    fontSize: 12,
+    fontWeight: '900',
+    textAlign: 'center',
   },
 });
