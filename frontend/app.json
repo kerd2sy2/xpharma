@@ -42,6 +42,13 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "b6ffba91-f6da-42fc-9e30-7c1710382f1e"
+      }
+    },
+    "owner": "xpharmas-team"
   }
 }
