@@ -9,6 +9,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -50,6 +51,7 @@ export default function WarehousePortalScreen({
   pharmacyName,
   onBack,
 }: WarehousePortalScreenProps) {
+  const { width, height } = useWindowDimensions();
   const [selectedSection, setSelectedSection] = useState<SectionKey | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -761,22 +763,20 @@ export default function WarehousePortalScreen({
         onSuccess={handleAddSuccess}
       />
 
-      {/* شاشة اللودر الكاملة بحجم الصفحة بالكامل من بداية الأنيميشن */}
+      {/* شاشة اللودر بحجم الصفحة بالكامل زي صفحة البداية بالظبط */}
       {(isSwitchingPharmacy || loading) && (
         <View style={[styles.fullScreenLogoOverlay, { top: -topInset, bottom: -insets.bottom }]}>
-          <View style={styles.fullScreenLogoCenterBox}>
+          <View style={styles.fullScreenLogoSection}>
             <XLogo
               key={loaderAnimKey}
-              size={110}
-              scale={2.2}
-              speed={1.3}
-              autoPlay={true}
+              width={width}
+              height={Math.min(height * 0.72, 580)}
+              resizeMode="contain"
               loop={true}
-              progress={0}
+              speed={1.2}
             />
-            <Text style={styles.fullScreenLogoBrand}>فارما</Text>
           </View>
-          <Text style={[styles.fullScreenBottomText, { paddingBottom: Math.max(insets.bottom, 24) }]}>
+          <Text style={[styles.fullScreenBottomText, { paddingBottom: Math.max(insets.bottom, 28) }]}>
             جاري تحميل بيانات الصيدلية
           </Text>
         </View>
@@ -927,26 +927,20 @@ const styles = StyleSheet.create({
     padding: 6,
   },
 
-  // شاشة اللوجو الكاملة لتغطية الصفحة بالكامل
+  // شاشة اللوجو الكاملة لتغطية الصفحة بالكامل زي صفحة البداية
   fullScreenLogoOverlay: {
     ...StyleSheet.absoluteFill,
     backgroundColor: '#F9F7FD',
-    zIndex: 99999,
+    zIndex: 999999,
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 160,
+    paddingTop: 10,
   },
-  fullScreenLogoCenterBox: {
+  fullScreenLogoSection: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-  },
-  fullScreenLogoBrand: {
-    fontSize: 28,
-    fontWeight: '900',
-    color: '#3f0082',
-    marginTop: 4,
-    letterSpacing: -0.5,
+    width: '100%',
   },
   fullScreenBottomText: {
     fontSize: 13,

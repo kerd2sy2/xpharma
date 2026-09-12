@@ -1,4 +1,4 @@
-import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { StyleSheet, View, ViewStyle, StyleProp } from 'react-native';
 import LottieView from 'lottie-react-native';
 
@@ -40,6 +40,13 @@ const XLogo = forwardRef<XLogoHandle, XLogoProps>(function XLogo(
   const lottieRef = useRef<LottieView>(null);
   const [isPlaying, setIsPlaying] = useState(autoPlay);
   const [animKey, setAnimKey] = useState(0);
+
+  useEffect(() => {
+    if (isPlaying) {
+      lottieRef.current?.reset();
+      lottieRef.current?.play(0, 42);
+    }
+  }, [isPlaying, animKey]);
 
   useImperativeHandle(ref, () => ({
     play: () => {
