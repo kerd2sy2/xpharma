@@ -54,6 +54,7 @@ export default function WarehousePortalScreen({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isSwitchingPharmacy, setIsSwitchingPharmacy] = useState(false);
+  const [loaderAnimKey, setLoaderAnimKey] = useState(0);
 
   // Multi-pharmacy state
   const [activePharmacyIndex, setActivePharmacyIndex] = useState(0);
@@ -61,7 +62,6 @@ export default function WarehousePortalScreen({
   const [currentPharmacyCode, setCurrentPharmacyCode] = useState(pharmacyCode);
   const [currentPharmacyName, setCurrentPharmacyName] = useState(pharmacyName);
   const [pharmacies, setPharmacies] = useState<LinkedPharmacyAccount[]>([]);
-  const [balancesMap, setBalancesMap] = useState<Record<string, number>>({});
   const [showAddModal, setShowAddModal] = useState(false);
 
   // Animation values for the flying paper effect
@@ -97,22 +97,6 @@ export default function WarehousePortalScreen({
     indigoSoft: '#4F46E514',
   };
 
-  // Fetch balances for all linked pharmacies
-  const fetchAllBalances = async (list: LinkedPharmacyAccount[]) => {
-    const map: Record<string, number> = {};
-    await Promise.all(
-      list.map(async (ph) => {
-        try {
-          const b = await fetchPharmacyBalance(ph.token);
-          if (b) map[ph.token] = b.balance;
-        } catch {
-          // ignore
-        }
-      })
-    );
-    setBalancesMap((prev) => ({ ...prev, ...map }));
-  };
-
   // Initialize and load saved pharmacies for this warehouse
   useEffect(() => {
     const initPharmacies = async () => {
@@ -127,10 +111,8 @@ export default function WarehousePortalScreen({
         const saved = await saveWarehousePharmacy(warehouse.id, initialAccount);
         const finalList = saved.length > 0 ? saved : [initialAccount];
         setPharmacies(finalList);
-        fetchAllBalances(finalList);
       } else {
         setPharmacies(list);
-        fetchAllBalances(list);
       }
     };
     initPharmacies();
@@ -162,9 +144,6 @@ export default function WarehousePortalScreen({
       );
 
       setBalance(bal);
-      if (bal) {
-        setBalancesMap((prev) => ({ ...prev, [targetToken]: bal.balance }));
-      }
       setInvoices(validInvoices);
       setReturns(validReturns);
       setReceipts(validReceipts);
@@ -184,9 +163,6 @@ export default function WarehousePortalScreen({
   const onRefresh = () => {
     setRefreshing(true);
     loadData(currentToken, false);
-    if (pharmacies.length > 1) {
-      fetchAllBalances(pharmacies);
-    }
   };
 
   // Fly card like paper, then show full-page logo overlay until the other pharmacy loads
@@ -196,8 +172,8 @@ export default function WarehousePortalScreen({
 
     const targetX = direction === 'next' ? -500 : 500;
     Animated.timing(pan, {
-      toValue: { x: targetX, y: 18 },
-      duration: 180,
+      toValue: { x: targetX, y: 15 },
+      duration: 160,
       useNativeDriver: true,
     }).start(async () => {
       pan.setValue({ x: 0, y: 0 });
@@ -208,7 +184,8 @@ export default function WarehousePortalScreen({
 
       const targetPh = pharmaciesRef.current[nextIdx];
       if (targetPh) {
-        // Show full logo overlay covering the screen
+        // Start loader from frame 0 and cover fullscreen
+        setLoaderAnimKey((k) => k + 1);
         setIsSwitchingPharmacy(true);
         setActivePharmacyIndex(nextIdx);
         setCurrentToken(targetPh.token);
@@ -218,10 +195,9 @@ export default function WarehousePortalScreen({
         const startTime = Date.now();
         await loadData(targetPh.token, false);
         const elapsed = Date.now() - startTime;
-        if (elapsed < 1100) {
-          await new Promise((r) => setTimeout(r, 1100 - elapsed));
+        if (elapsed < 1200) {
+          await new Promise((r) => setTimeout(r, 1200 - elapsed));
         }
-        // Dismiss overlay when other pharmacy data is fully ready
         setIsSwitchingPharmacy(false);
       }
     });
@@ -243,7 +219,7 @@ export default function WarehousePortalScreen({
           pan.setValue({ x: gestureState.dx, y: gestureState.dy * 0.15 });
         },
         onPanResponderRelease: (_, gestureState) => {
-          const threshold = 65;
+          const threshold = 60;
           const velocityThreshold = 0.3;
           if (
             Math.abs(gestureState.dx) > threshold ||
@@ -268,6 +244,7 @@ export default function WarehousePortalScreen({
   const handleAddSuccess = async (result: VerifyPharmacyResult) => {
     if (!result.token) return;
     setShowAddModal(false);
+    setLoaderAnimKey((k) => k + 1);
     setIsSwitchingPharmacy(true);
 
     const newAccount: LinkedPharmacyAccount = {
@@ -278,7 +255,6 @@ export default function WarehousePortalScreen({
     };
     const updatedList = await saveWarehousePharmacy(warehouse.id, newAccount);
     setPharmacies(updatedList);
-    fetchAllBalances(updatedList);
     setActivePharmacyIndex(0);
     setCurrentToken(newAccount.token);
     setCurrentPharmacyCode(newAccount.pharmacy_code);
@@ -287,8 +263,8 @@ export default function WarehousePortalScreen({
     const startTime = Date.now();
     await loadData(newAccount.token, false);
     const elapsed = Date.now() - startTime;
-    if (elapsed < 1100) {
-      await new Promise((resolve) => setTimeout(resolve, 1100 - elapsed));
+    if (elapsed < 1200) {
+      await new Promise((resolve) => setTimeout(resolve, 1200 - elapsed));
     }
     setIsSwitchingPharmacy(false);
   };
@@ -564,7 +540,7 @@ export default function WarehousePortalScreen({
   }
 
   // ----------------------------------------------------
-  // STACKED CARDS DECK COMPONENT (طبقات واضحة جداً كأنك بتطير ورقة)
+  // STACKED CARDS DECK COMPONENT (اسم الصيدلية فقط - بدون إجمالي)
   // ----------------------------------------------------
   const renderStackedDeck = () => {
     const count = pharmacies.length;
@@ -587,16 +563,10 @@ export default function WarehousePortalScreen({
       extrapolate: 'clamp',
     });
 
-    const secondTop = pan.x.interpolate({
-      inputRange: [-200, 0, 200],
-      outputRange: [0, 15, 0],
-      extrapolate: 'clamp',
-    });
-
     return (
       <View style={styles.deckWrapper}>
-        <View style={[styles.deckContainer, { height: count > 2 ? 172 : count > 1 ? 156 : 138 }]}>
-          {/* Card 3: الطبقة الثالثة العميقة (بارزة بوضوح أسفل الكرت الثاني) */}
+        <View style={[styles.deckContainer, { height: count > 2 ? 88 : count > 1 ? 80 : 70 }]}>
+          {/* Card 3: الطبقة الثالثة العميقة */}
           {thirdItem && (
             <View
               style={[
@@ -605,63 +575,35 @@ export default function WarehousePortalScreen({
                 { backgroundColor: colors.cardBack2, borderColor: colors.borderLayer3 },
               ]}
             >
-              <View style={styles.cardHeaderRow}>
-                <View style={[styles.cardBadgePill, { backgroundColor: '#FFFFFF99' }]}>
-                  <Ionicons name="medkit" size={11} color={colors.primary} />
-                  <Text style={[styles.cardBadgeText, { color: colors.primary }]}>صيدلية 3</Text>
+              <View style={styles.cardContentSimple}>
+                <View style={[styles.pharmacyIconBadge, { backgroundColor: '#FFFFFF66' }]}>
+                  <Ionicons name="business" size={16} color={colors.primary} />
                 </View>
-                <Text style={[styles.cleanPharmacyName, { color: colors.text }]} numberOfLines={1}>
+                <Text style={[styles.cleanPharmacyName, { color: colors.secondaryText }]} numberOfLines={1}>
                   {thirdItem.pharmacy_name || `صيدلية #${thirdItem.pharmacy_code}`}
-                </Text>
-              </View>
-              {/* شريط سفلي بارز للكرت الثالث يظهر للعين بوضوح */}
-              <View style={styles.peekingStripBottom}>
-                <Text style={[styles.peekingStripText, { color: colors.primary }]}>
-                  {thirdItem.pharmacy_name || `صيدلية #${thirdItem.pharmacy_code}`} • {formatCurrency(balancesMap[thirdItem.token] ?? 0)}
                 </Text>
               </View>
             </View>
           )}
 
-          {/* Card 2: الطبقة الثانية الوسطى (بارزة بوضوح أسفل الكرت الأول) */}
+          {/* Card 2: الطبقة الثانية الوسطى */}
           {secondItem && (
-            <Animated.View
+            <View
               style={[
                 styles.stackedCard,
                 styles.cardLayer2,
-                {
-                  backgroundColor: colors.cardBack,
-                  borderColor: colors.borderLayer2,
-                  top: secondTop,
-                },
+                { backgroundColor: colors.cardBack, borderColor: colors.borderLayer2 },
               ]}
             >
-              <View style={styles.cardHeaderRow}>
-                <View style={[styles.cardBadgePill, { backgroundColor: '#FFFFFF99' }]}>
-                  <Ionicons name="medkit" size={11} color={colors.primary} />
-                  <Text style={[styles.cardBadgeText, { color: colors.primary }]}>
-                    {count > 2 ? 'صيدلية 2' : 'صيدلية'}
-                  </Text>
+              <View style={styles.cardContentSimple}>
+                <View style={[styles.pharmacyIconBadge, { backgroundColor: '#FFFFFF99' }]}>
+                  <Ionicons name="business" size={17} color={colors.primary} />
                 </View>
                 <Text style={[styles.cleanPharmacyName, { color: colors.text }]} numberOfLines={1}>
                   {secondItem.pharmacy_name || `صيدلية #${secondItem.pharmacy_code}`}
                 </Text>
               </View>
-              <View style={styles.cleanBalanceBox}>
-                <Text style={[styles.cleanBalanceLabel, { color: colors.secondaryText }]}>
-                  الرصيد الحالي
-                </Text>
-                <Text style={[styles.cleanBalanceValue, { color: colors.primary }]}>
-                  {formatCurrency(balancesMap[secondItem.token] ?? 0)}
-                </Text>
-              </View>
-              {/* شريط سفلي بارز يظهر تحت الكرت الأول */}
-              <View style={styles.peekingStripBottom}>
-                <Text style={[styles.peekingStripText, { color: colors.primary }]}>
-                  {secondItem.pharmacy_name || `صيدلية #${secondItem.pharmacy_code}`} • {formatCurrency(balancesMap[secondItem.token] ?? 0)}
-                </Text>
-              </View>
-            </Animated.View>
+            </View>
           )}
 
           {/* Card 1: البطاقة الأولى الأمامية التفاعلية (كأنك بتطير ورقة) */}
@@ -682,24 +624,20 @@ export default function WarehousePortalScreen({
               },
             ]}
           >
-            <View style={styles.cardHeaderRow}>
-              <View style={[styles.cardBadgePill, { backgroundColor: colors.primarySoft }]}>
-                <Ionicons name="medkit-outline" size={13} color={colors.primary} />
-                <Text style={[styles.cardBadgeText, { color: colors.primary }]}>
-                  {count > 1 ? `${activePharmacyIndex + 1} من ${count}` : 'صيدلية'}
-                </Text>
+            <View style={styles.cardContentSimple}>
+              <View style={[styles.pharmacyIconBadge, { backgroundColor: colors.primarySoft }]}>
+                <Ionicons name="business" size={18} color={colors.primary} />
               </View>
               <Text style={[styles.cleanPharmacyName, { color: colors.text }]} numberOfLines={1}>
                 {activeItem.pharmacy_name || `صيدلية #${activeItem.pharmacy_code}`}
               </Text>
-            </View>
-            <View style={styles.cleanBalanceBox}>
-              <Text style={[styles.cleanBalanceLabel, { color: colors.secondaryText }]}>
-                الرصيد الحالي
-              </Text>
-              <Text style={[styles.cleanBalanceValue, { color: colors.primary }]}>
-                {formatCurrency(balance?.balance ?? balancesMap[activeItem.token] ?? 0)}
-              </Text>
+              {count > 1 && (
+                <View style={[styles.cardOrderPill, { backgroundColor: colors.primarySoft }]}>
+                  <Text style={[styles.cardOrderPillText, { color: colors.primary }]}>
+                    {activePharmacyIndex + 1}/{count}
+                  </Text>
+                </View>
+              )}
             </View>
           </Animated.View>
         </View>
@@ -779,49 +717,40 @@ export default function WarehousePortalScreen({
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
         }
       >
-        {/* طبقات بطاقات الصيدليات المتراكمة (كانك بتطير ورقة) */}
+        {/* كروت الصيدليات المتراكمة - اسم الصيدلية فقط */}
         {renderStackedDeck()}
 
         {/* كروت الأقسام الأربعة */}
-        {loading ? (
-          <View style={styles.sectionLoadingBox}>
-            <XLogo size={60} scale={1.6} speed={1.2} autoPlay loop />
-            <Text style={[styles.loadingText, { color: colors.secondaryText }]}>
-              جاري تحديث بيانات الحساب...
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.cardsListContainer}>
-            {sections.map((sec) => (
-              <TouchableOpacity
-                key={sec.key}
-                style={[styles.sectionNavCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() => setSelectedSection(sec.key)}
-                activeOpacity={0.7}
-              >
-                {/* الأيقونة الملونة يمين الكرت */}
-                <View style={[styles.navIconBox, { backgroundColor: sec.bgColor }]}>
-                  <Ionicons name={sec.icon} size={22} color={sec.color} />
-                </View>
+        <View style={styles.cardsListContainer}>
+          {sections.map((sec) => (
+            <TouchableOpacity
+              key={sec.key}
+              style={[styles.sectionNavCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+              onPress={() => setSelectedSection(sec.key)}
+              activeOpacity={0.7}
+            >
+              {/* الأيقونة الملونة يمين الكرت */}
+              <View style={[styles.navIconBox, { backgroundColor: sec.bgColor }]}>
+                <Ionicons name={sec.icon} size={22} color={sec.color} />
+              </View>
 
-                {/* تفاصيل الكرت في المنتصف */}
-                <View style={styles.navInfoCol}>
-                  <Text style={[styles.navTitle, { color: colors.text }]}>
-                    {sec.title}
-                  </Text>
-                  <Text style={[styles.navDesc, { color: colors.secondaryText }]} numberOfLines={1}>
-                    {sec.desc}
-                  </Text>
-                </View>
+              {/* تفاصيل الكرت في المنتصف */}
+              <View style={styles.navInfoCol}>
+                <Text style={[styles.navTitle, { color: colors.text }]}>
+                  {sec.title}
+                </Text>
+                <Text style={[styles.navDesc, { color: colors.secondaryText }]} numberOfLines={1}>
+                  {sec.desc}
+                </Text>
+              </View>
 
-                {/* سهم الانتقال شمال الكرت */}
-                <View style={styles.navActionCol}>
-                  <Ionicons name="chevron-back" size={20} color={colors.secondaryText} />
-                </View>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
+              {/* سهم الانتقال شمال الكرت */}
+              <View style={styles.navActionCol}>
+                <Ionicons name="chevron-back" size={20} color={colors.secondaryText} />
+              </View>
+            </TouchableOpacity>
+          ))}
+        </View>
       </ScrollView>
 
       {/* نافذة التحقق وإضافة صيدلية أخرى لنفس المخزن */}
@@ -832,16 +761,24 @@ export default function WarehousePortalScreen({
         onSuccess={handleAddSuccess}
       />
 
-      {/* شاشة اللوجو الكاملة لتغطية الصفحة عند التبديل بين الصيدليات */}
-      {isSwitchingPharmacy && (
-        <View style={styles.fullScreenLogoOverlay}>
+      {/* شاشة اللودر الكاملة بحجم الصفحة بالكامل من بداية الأنيميشن */}
+      {(isSwitchingPharmacy || loading) && (
+        <View style={[styles.fullScreenLogoOverlay, { top: -topInset, bottom: -insets.bottom }]}>
           <View style={styles.fullScreenLogoCenterBox}>
-            <XLogo size={100} scale={2.2} speed={1.3} autoPlay loop />
+            <XLogo
+              key={loaderAnimKey}
+              size={110}
+              scale={2.2}
+              speed={1.3}
+              autoPlay={true}
+              loop={true}
+              progress={0}
+            />
             <Text style={styles.fullScreenLogoBrand}>فارما</Text>
-            <Text style={styles.fullScreenLogoSub}>
-              جاري تحميل بيانات الصيدلية...
-            </Text>
           </View>
+          <Text style={[styles.fullScreenBottomText, { paddingBottom: Math.max(insets.bottom, 24) }]}>
+            جاري تحميل بيانات الصيدلية
+          </Text>
         </View>
       )}
     </View>
@@ -903,16 +840,16 @@ const styles = StyleSheet.create({
   },
   stackedCard: {
     position: 'absolute',
-    height: 128,
-    padding: 18,
-    borderRadius: 22,
+    height: 68,
+    paddingHorizontal: 16,
+    borderRadius: 18,
     borderWidth: 1.5,
-    gap: 10,
+    justifyContent: 'center',
     shadowColor: '#3f0082',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.07,
+    shadowRadius: 8,
+    elevation: 3,
   },
   cardLayer1: {
     zIndex: 10,
@@ -921,62 +858,41 @@ const styles = StyleSheet.create({
   },
   cardLayer2: {
     zIndex: 9,
-    top: 15,
-    width: '93%',
+    top: 8,
+    width: '94%',
   },
   cardLayer3: {
     zIndex: 8,
-    top: 30,
-    width: '86%',
+    top: 16,
+    width: '88%',
   },
-  peekingStripBottom: {
-    position: 'absolute',
-    bottom: 4,
-    left: 14,
-    right: 14,
+  cardContentSimple: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  pharmacyIconBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  peekingStripText: {
-    fontSize: 10,
+  cleanPharmacyName: {
+    fontSize: 16,
     fontWeight: '800',
+    textAlign: 'right',
+    flex: 1,
   },
-  cardHeaderRow: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  cardBadgePill: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 4,
+  cardOrderPill: {
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 8,
   },
-  cardBadgeText: {
+  cardOrderPillText: {
     fontSize: 11,
     fontWeight: '700',
-  },
-  cleanPharmacyName: {
-    fontSize: 17,
-    fontWeight: '800',
-    textAlign: 'right',
-    flex: 1,
-    marginLeft: 10,
-  },
-  cleanBalanceBox: {
-    alignItems: 'flex-end',
-    gap: 2,
-  },
-  cleanBalanceLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  cleanBalanceValue: {
-    fontSize: 27,
-    fontWeight: '900',
-    letterSpacing: -0.5,
   },
 
   // مؤشر البطاقات والأسهم
@@ -1011,13 +927,14 @@ const styles = StyleSheet.create({
     padding: 6,
   },
 
-  // شاشة اللوجو الكاملة لتغطية الصفحة عند التبديل
+  // شاشة اللوجو الكاملة لتغطية الصفحة بالكامل
   fullScreenLogoOverlay: {
     ...StyleSheet.absoluteFill,
     backgroundColor: '#F9F7FD',
     zIndex: 99999,
+    justifyContent: 'space-between',
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingTop: 160,
   },
   fullScreenLogoCenterBox: {
     alignItems: 'center',
@@ -1028,25 +945,13 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '900',
     color: '#3f0082',
-    marginTop: 6,
+    marginTop: 4,
     letterSpacing: -0.5,
   },
-  fullScreenLogoSub: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#7B6F93',
-  },
-
-  // حالة تحميل الأقسام
-  sectionLoadingBox: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 36,
-    gap: 12,
-  },
-  loadingText: {
+  fullScreenBottomText: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '500',
+    color: '#7B6F93',
     textAlign: 'center',
   },
 
