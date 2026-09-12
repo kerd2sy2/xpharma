@@ -431,7 +431,7 @@ export default function HomeScreen() {
                 style={StyleSheet.absoluteFill}
               />
 
-              {/* 4. Card Content: Name & Category, No Arrows */}
+              {/* 4. Card Content: Name, then Status, then Category underneath (No boxes, No borders) */}
               <View style={styles.bannerContentRow}>
                 {/* Details Column (Right in RTL layout) */}
                 <View style={styles.bannerDetailsCol}>
@@ -440,37 +440,29 @@ export default function HomeScreen() {
                     {item.name}
                   </Text>
 
-                  {/* Warehouse Category Badge */}
-                  <View style={styles.categoryBadgeRow}>
+                  {/* Status: تم الربط / ربط الآن (No box, No border) */}
+                  {item.is_linked ? (
+                    <View style={styles.statusCleanRow}>
+                      <Ionicons name="checkmark-circle" size={14} color="#34D399" />
+                      <Text style={styles.statusTextLinked}>تم الربط</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.statusCleanRow}>
+                      <Ionicons name="link" size={13} color="rgba(255, 255, 255, 0.85)" />
+                      <Text style={styles.statusTextUnlinked}>ربط الآن</Text>
+                    </View>
+                  )}
+
+                  {/* Warehouse Category underneath status (No box, No border) */}
+                  <View style={styles.categoryCleanRow}>
                     <MaterialCommunityIcons
                       name={isPharma ? 'pill' : 'cube-outline'}
                       size={13}
-                      color="#6EE7B7"
+                      color="rgba(255, 255, 255, 0.7)"
                     />
-                    <Text style={styles.bannerCategoryText} numberOfLines={1}>
+                    <Text style={styles.categoryCleanText} numberOfLines={1}>
                       {categoryText}
                     </Text>
-                  </View>
-
-                  {/* Status Pills */}
-                  <View style={styles.bannerPillsRow}>
-                    {item.is_linked ? (
-                      <View style={styles.appStorePillLinked}>
-                        <Ionicons name="checkmark-circle" size={13} color="#34D399" />
-                        <Text style={styles.appStorePillTextLinked}>تم الربط</Text>
-                      </View>
-                    ) : (
-                      <View style={styles.appStorePillUnlinked}>
-                        <Ionicons name="link" size={12} color="#FFFFFF" />
-                        <Text style={styles.appStorePillTextUnlinked}>ربط الآن</Text>
-                      </View>
-                    )}
-
-                    <View style={styles.appStoreSecondaryPill}>
-                      <Text style={styles.appStoreSecondaryPillText}>
-                        {item.is_linked ? 'فتح اللوحة' : 'فحص الكود'}
-                      </Text>
-                    </View>
                   </View>
                 </View>
 
@@ -824,75 +816,42 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
   },
-  categoryBadgeRow: {
+  statusCleanRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 5,
-    marginTop: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    borderRadius: 8,
+    marginTop: 5,
   },
-  bannerCategoryText: {
-    fontSize: 12.5,
+  statusTextLinked: {
+    color: '#34D399',
+    fontSize: 13,
     fontWeight: '700',
-    color: '#E0F2FE',
-    textAlign: 'right',
+    textShadowColor: 'rgba(0, 0, 0, 0.45)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
-  bannerPillsRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 8,
+  statusTextUnlinked: {
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 13,
+    fontWeight: '700',
+    textShadowColor: 'rgba(0, 0, 0, 0.45)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
-  appStorePillLinked: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: 'rgba(16, 185, 129, 0.24)',
-    borderWidth: 1,
-    borderColor: 'rgba(52, 211, 153, 0.65)',
-    paddingHorizontal: 13,
-    paddingVertical: 4.5,
-    borderRadius: 100,
-  },
-  appStorePillTextLinked: {
-    color: '#FFFFFF',
-    fontSize: 11.5,
-    fontWeight: '800',
-  },
-  appStorePillUnlinked: {
+  categoryCleanRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 5,
-    backgroundColor: 'rgba(255, 255, 255, 0.22)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.45)',
-    paddingHorizontal: 14,
-    paddingVertical: 4.5,
-    borderRadius: 100,
+    marginTop: 3,
   },
-  appStorePillTextUnlinked: {
-    color: '#FFFFFF',
-    fontSize: 11.5,
-    fontWeight: '800',
-  },
-  appStoreSecondaryPill: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(0, 0, 0, 0.18)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.18)',
-    paddingHorizontal: 10,
-    paddingVertical: 4.5,
-    borderRadius: 100,
-  },
-  appStoreSecondaryPillText: {
-    color: 'rgba(255, 255, 255, 0.85)',
-    fontSize: 11,
+  categoryCleanText: {
+    color: 'rgba(255, 255, 255, 0.72)',
+    fontSize: 12,
     fontWeight: '600',
+    textAlign: 'right',
+    textShadowColor: 'rgba(0, 0, 0, 0.45)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   loadingBox: {
     alignItems: 'center',
