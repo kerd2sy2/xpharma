@@ -78,7 +78,15 @@ export interface VerifyPharmacyResult {
   error?: string;
 }
 
+export interface LinkedPharmacyAccount {
+  token: string;
+  pharmacy_code: string;
+  pharmacy_name: string;
+  tenant_id: string;
+}
+
 const PHARMACY_STORAGE_PREFIX = 'xpharma_pharma_';
+const PHARMACIES_LIST_PREFIX = 'xpharma_pharmacies_list_';
 
 /**
  * Fetch all active warehouses and their link status for the current user
@@ -134,7 +142,7 @@ export async function verifyPharmacy(
 
     // Save token locally
     if (data.token) {
-      await savePharmacySession(tenantId, {
+      await saveWarehousePharmacy(tenantId, {
         token: data.token,
         pharmacy_code: data.pharmacy_code,
         pharmacy_name: data.pharmacy_name,
@@ -172,6 +180,53 @@ export async function savePharmacySession(
 }
 
 /**
+ * Get all linked pharmacies for a warehouse
+ */
+export async function getWarehousePharmacies(tenantId: string): Promise<LinkedPharmacyAccount[]> {
+  try {
+    const raw = await SecureStore.getItemAsync(`${PHARMACIES_LIST_PREFIX}${tenantId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+    // Fallback: check single session
+    const single = await getPharmacySession(tenantId);
+    if (single) {
+      const list = [single];
+      await SecureStore.setItemAsync(`${PHARMACIES_LIST_PREFIX}${tenantId}`, JSON.stringify(list));
+      return list;
+    }
+    return [];
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Save or append a pharmacy account to a warehouse
+ */
+export async function saveWarehousePharmacy(
+  tenantId: string,
+  account: LinkedPharmacyAccount
+): Promise<LinkedPharmacyAccount[]> {
+  try {
+    const currentList = await getWarehousePharmacies(tenantId);
+    const filtered = currentList.filter(
+      (p) => p.pharmacy_code !== account.pharmacy_code && p.token !== account.token
+    );
+    const updated = [account, ...filtered];
+    await SecureStore.setItemAsync(`${PHARMACIES_LIST_PREFIX}${tenantId}`, JSON.stringify(updated));
+    await savePharmacySession(tenantId, account);
+    return updated;
+  } catch (e) {
+    console.warn('Failed to save warehouse pharmacy account:', e);
+    return [];
+  }
+}
+
+/**
  * Get locally saved pharmacy session
  */
 export async function getPharmacySession(
@@ -191,6 +246,7 @@ export async function getPharmacySession(
 export async function clearPharmacySession(tenantId: string): Promise<void> {
   try {
     await SecureStore.deleteItemAsync(`${PHARMACY_STORAGE_PREFIX}${tenantId}`);
+    await SecureStore.deleteItemAsync(`${PHARMACIES_LIST_PREFIX}${tenantId}`);
   } catch (e) {
     // Ignore error
   }

@@ -11,17 +11,22 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
 import {
   fetchPharmacyBalance,
   fetchPharmacyPurchases,
   fetchPharmacyReceipts,
   fetchPharmacyReturns,
   fetchPharmacyStatement,
+  getWarehousePharmacies,
+  saveWarehousePharmacy,
   InvoiceItem,
+  LinkedPharmacyAccount,
   PharmacyBalance,
   ReceiptItem,
   ReturnItem,
   StatementItem,
+  VerifyPharmacyResult,
   Warehouse,
 } from '@/services/warehouse';
 
@@ -46,6 +51,13 @@ export default function WarehousePortalScreen({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Multi-pharmacy state
+  const [currentToken, setCurrentToken] = useState(token);
+  const [currentPharmacyCode, setCurrentPharmacyCode] = useState(pharmacyCode);
+  const [currentPharmacyName, setCurrentPharmacyName] = useState(pharmacyName);
+  const [pharmacies, setPharmacies] = useState<LinkedPharmacyAccount[]>([]);
+  const [showAddModal, setShowAddModal] = useState(false);
+
   const [balance, setBalance] = useState<PharmacyBalance | null>(null);
   const [invoices, setInvoices] = useState<InvoiceItem[]>([]);
   const [returns, setReturns] = useState<ReturnItem[]>([]);
@@ -68,15 +80,35 @@ export default function WarehousePortalScreen({
     indigoSoft: '#4F46E514',
   };
 
-  const loadData = async (showLoader = true) => {
+  // Initialize and load saved pharmacies for this warehouse
+  useEffect(() => {
+    const initPharmacies = async () => {
+      const list = await getWarehousePharmacies(warehouse.id);
+      if (list.length === 0 && token) {
+        const initialAccount: LinkedPharmacyAccount = {
+          token,
+          pharmacy_code: pharmacyCode,
+          pharmacy_name: pharmacyName,
+          tenant_id: warehouse.id,
+        };
+        const saved = await saveWarehousePharmacy(warehouse.id, initialAccount);
+        setPharmacies(saved.length > 0 ? saved : [initialAccount]);
+      } else {
+        setPharmacies(list);
+      }
+    };
+    initPharmacies();
+  }, [warehouse.id, token]);
+
+  const loadData = async (targetToken = currentToken, showLoader = true) => {
     if (showLoader) setLoading(true);
     try {
       const [bal, invs, rets, recs, stmts] = await Promise.all([
-        fetchPharmacyBalance(token),
-        fetchPharmacyPurchases(token),
-        fetchPharmacyReturns(token),
-        fetchPharmacyReceipts(token),
-        fetchPharmacyStatement(token),
+        fetchPharmacyBalance(targetToken),
+        fetchPharmacyPurchases(targetToken),
+        fetchPharmacyReturns(targetToken),
+        fetchPharmacyReceipts(targetToken),
+        fetchPharmacyStatement(targetToken),
       ]);
 
       setBalance(bal);
@@ -93,12 +125,37 @@ export default function WarehousePortalScreen({
   };
 
   useEffect(() => {
-    loadData(true);
-  }, [token]);
+    loadData(currentToken, true);
+  }, [currentToken]);
 
   const onRefresh = () => {
     setRefreshing(true);
-    loadData(false);
+    loadData(currentToken, false);
+  };
+
+  // Switch active pharmacy
+  const handleSelectPharmacy = (ph: LinkedPharmacyAccount) => {
+    if (ph.token === currentToken) return;
+    setCurrentToken(ph.token);
+    setCurrentPharmacyCode(ph.pharmacy_code);
+    setCurrentPharmacyName(ph.pharmacy_name);
+  };
+
+  // When a new pharmacy is verified and added
+  const handleAddSuccess = async (result: VerifyPharmacyResult) => {
+    if (!result.token) return;
+    const newAccount: LinkedPharmacyAccount = {
+      token: result.token,
+      pharmacy_code: result.pharmacy_code || '',
+      pharmacy_name: result.pharmacy_name || 'الصيدلية',
+      tenant_id: warehouse.id,
+    };
+    const updatedList = await saveWarehousePharmacy(warehouse.id, newAccount);
+    setPharmacies(updatedList);
+    setCurrentToken(newAccount.token);
+    setCurrentPharmacyCode(newAccount.pharmacy_code);
+    setCurrentPharmacyName(newAccount.pharmacy_name);
+    setShowAddModal(false);
   };
 
   const formatCurrency = (amount?: number) => {
@@ -378,7 +435,7 @@ export default function WarehousePortalScreen({
     <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.bg} translucent={false} />
 
-      {/* Top Header: Simple back arrow */}
+      {/* Top Header: Simple back arrow on right, Title in center, Add button on left */}
       <View style={styles.topHeader}>
         <TouchableOpacity
           style={styles.backBtnClean}
@@ -388,8 +445,56 @@ export default function WarehousePortalScreen({
           <Ionicons name="arrow-forward" size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={[styles.topHeaderTitle, { color: colors.text }]}>حساب الصيدلية</Text>
-        <View style={styles.topHeaderSpacer} />
+        <TouchableOpacity
+          style={styles.headerAddBtn}
+          onPress={() => setShowAddModal(true)}
+          activeOpacity={0.6}
+        >
+          <Ionicons name="add" size={26} color={colors.primary} />
+        </TouchableOpacity>
       </View>
+
+      {/* شريط تبديل الصيدليات (يظهر عند وجود أكثر من صيدلية مربوطة لنفس المخزن) */}
+      {pharmacies.length > 1 && (
+        <View style={styles.pharmacySwitcherWrap}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.pharmacySwitcherScroll}
+          >
+            {pharmacies.map((ph) => {
+              const isSelected = ph.token === currentToken;
+              return (
+                <TouchableOpacity
+                  key={ph.pharmacy_code || ph.token}
+                  style={[
+                    styles.pharmacyChip,
+                    isSelected
+                      ? [styles.pharmacyChipActive, { backgroundColor: colors.primary }]
+                      : [styles.pharmacyChipInactive, { backgroundColor: colors.card, borderColor: colors.border }],
+                  ]}
+                  onPress={() => handleSelectPharmacy(ph)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name="medkit"
+                    size={14}
+                    color={isSelected ? '#FFFFFF' : colors.primary}
+                  />
+                  <Text
+                    style={[
+                      styles.pharmacyChipText,
+                      { color: isSelected ? '#FFFFFF' : colors.text },
+                    ]}
+                  >
+                    {ph.pharmacy_name || `صيدلية #${ph.pharmacy_code}`}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
 
       {loading ? (
         <View style={styles.centerContainer}>
@@ -407,10 +512,10 @@ export default function WarehousePortalScreen({
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
           }
         >
-          {/* كرت اسم الصيدلية والرصيد الحالي (بسيط وأنيق بدون زوائد أو خطوط فاصلة) */}
+          {/* كرت اسم الصيدلية والرصيد الحالي */}
           <View style={[styles.cleanBalanceCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Text style={[styles.cleanPharmacyName, { color: colors.text }]} numberOfLines={1}>
-              {pharmacyName || 'الصيدلية'}
+              {currentPharmacyName || 'الصيدلية'}
             </Text>
             <View style={styles.cleanBalanceBox}>
               <Text style={[styles.cleanBalanceLabel, { color: colors.secondaryText }]}>
@@ -455,6 +560,14 @@ export default function WarehousePortalScreen({
           </View>
         </ScrollView>
       )}
+
+      {/* نافذة التحقق وإضافة صيدلية أخرى لنفس المخزن */}
+      <PharmacyVerifyModal
+        visible={showAddModal}
+        warehouse={warehouse}
+        onClose={() => setShowAddModal(false)}
+        onSuccess={handleAddSuccess}
+      />
     </View>
   );
 }
@@ -478,8 +591,38 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textAlign: 'center',
   },
+  headerAddBtn: {
+    padding: 6,
+    borderRadius: 12,
+  },
   topHeaderSpacer: {
     width: 36,
+  },
+  pharmacySwitcherWrap: {
+    paddingVertical: 4,
+    marginBottom: 4,
+  },
+  pharmacySwitcherScroll: {
+    flexDirection: 'row-reverse',
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  pharmacyChip: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 6,
+  },
+  pharmacyChipActive: {
+    borderColor: 'transparent',
+  },
+  pharmacyChipInactive: {},
+  pharmacyChipText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   centerContainer: {
     flex: 1,
