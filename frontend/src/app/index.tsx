@@ -362,46 +362,7 @@ export default function HomeScreen() {
         translucent={false}
       />
 
-      {/* Top Header: Seamless with page background (no card, no border) */}
-      <View style={styles.topBar}>
-        {/* Right side: Clickable Logo & Brand -> animates on press and opens website after finishing */}
-        <TouchableOpacity
-          style={styles.brandRow}
-          onPress={handleLogoPress}
-          activeOpacity={0.7}
-        >
-          <XLogo
-            ref={headerLogoRef}
-            size={48}
-            scale={1.8}
-            speed={1.0}
-            autoPlay={false}
-            loop={false}
-            onAnimationFinish={handleAnimationFinish}
-          />
-          <Text style={[styles.brandText, { color: '#3f0082' }]}>فارما</Text>
-        </TouchableOpacity>
-
-        {/* Left side: Avatar opens Profile Modal */}
-        <TouchableOpacity
-          style={styles.avatarButton}
-          onPress={() => setProfileModalVisible(true)}
-          activeOpacity={0.8}
-        >
-          {user?.photo ? (
-            <Image source={{ uri: user.photo }} style={styles.avatarImg} />
-          ) : (
-            <View style={[styles.avatarPlaceholder, { backgroundColor: colors.primary }]}>
-              <Text style={styles.avatarLetter}>
-                {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
-              </Text>
-            </View>
-          )}
-          <View style={styles.onlineStatusDot} />
-        </TouchableOpacity>
-      </View>
-
-      {/* Warehouses List */}
+      {/* Warehouses List with Seamless Scrolling Header */}
       <FlatList
         key={isTablet ? 'tablet-grid' : 'phone-list'}
         data={warehouses}
@@ -409,6 +370,46 @@ export default function HomeScreen() {
         numColumns={isTablet ? 2 : 1}
         columnWrapperStyle={isTablet ? styles.columnWrapper : undefined}
         contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
+        ListHeaderComponent={
+          <View style={styles.topBar}>
+            {/* Right side: Clickable Logo & Brand -> animates on press and opens website after finishing */}
+            <TouchableOpacity
+              style={styles.brandRow}
+              onPress={handleLogoPress}
+              activeOpacity={0.7}
+            >
+              <XLogo
+                ref={headerLogoRef}
+                size={48}
+                scale={1.8}
+                speed={1.0}
+                autoPlay={false}
+                loop={false}
+                onAnimationFinish={handleAnimationFinish}
+              />
+              <Text style={[styles.brandText, { color: '#3f0082' }]}>فارما</Text>
+            </TouchableOpacity>
+
+            {/* Left side: Avatar opens Profile Modal */}
+            <TouchableOpacity
+              style={styles.avatarButton}
+              onPress={() => setProfileModalVisible(true)}
+              activeOpacity={0.8}
+            >
+              {user?.photo ? (
+                <Image source={{ uri: user.photo }} style={styles.avatarImg} />
+              ) : (
+                <View style={[styles.avatarPlaceholder, { backgroundColor: colors.primary }]}>
+                  <Text style={styles.avatarLetter}>
+                    {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
+                  </Text>
+                </View>
+              )}
+              <View style={styles.onlineStatusDot} />
+            </TouchableOpacity>
+          </View>
+        }
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
         }
@@ -644,9 +645,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row-reverse',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: PADDING_HORIZONTAL,
+    paddingHorizontal: 0,
     paddingTop: 8,
-    paddingBottom: 6,
+    paddingBottom: 16,
   },
   brandRow: {
     flexDirection: 'row-reverse',
@@ -701,7 +702,7 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingHorizontal: PADDING_HORIZONTAL,
-    paddingTop: 18,
+    paddingTop: 4,
     paddingBottom: 36,
   },
   columnWrapper: {
