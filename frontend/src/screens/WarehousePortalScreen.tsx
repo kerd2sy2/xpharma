@@ -129,15 +129,15 @@ export default function WarehousePortalScreen({
         backgroundColor={colors.bg}
         translucent={false}
       />
-      {/* Top Header: Sleek, Modern, Seamless */}
+      {/* Top Header: Clean, Minimalist, No Background */}
       <View style={styles.header}>
-        {/* Back Button */}
+        {/* Back Button (No background) */}
         <TouchableOpacity
-          style={[styles.backBtnCircle, { backgroundColor: colors.card, borderColor: colors.border }]}
+          style={styles.backBtnClean}
           onPress={onBack}
-          activeOpacity={0.7}
+          activeOpacity={0.6}
         >
-          <Ionicons name="arrow-forward" size={20} color={colors.text} />
+          <Ionicons name="arrow-forward" size={24} color={colors.text} />
         </TouchableOpacity>
 
         {/* Center: Warehouse Title & Pharmacy Info */}
@@ -153,14 +153,8 @@ export default function WarehousePortalScreen({
           </View>
         </View>
 
-        {/* Refresh Action Button */}
-        <TouchableOpacity
-          style={[styles.refreshBtnCircle, { backgroundColor: colors.card, borderColor: colors.border }]}
-          onPress={onRefresh}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="refresh" size={18} color={colors.primary} />
-        </TouchableOpacity>
+        {/* Empty Spacer to balance layout */}
+        <View style={styles.headerSpacer} />
       </View>
 
       {loading ? (
@@ -580,35 +574,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row-reverse',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 10,
+    paddingHorizontal: 12,
+    paddingTop: 6,
+    paddingBottom: 8,
   },
-  backBtnCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+  backBtnClean: {
+    width: 40,
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 5,
-    elevation: 2,
   },
-  refreshBtnCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 5,
-    elevation: 2,
+  headerSpacer: {
+    width: 40,
+    height: 40,
   },
   headerCenter: {
     flex: 1,
