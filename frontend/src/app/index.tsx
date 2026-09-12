@@ -358,8 +358,8 @@ export default function HomeScreen() {
         >
           <XLogo
             ref={headerLogoRef}
-            size={52}
-            scale={1.6}
+            size={48}
+            scale={1.8}
             speed={1.0}
             autoPlay={false}
             loop={false}
@@ -714,12 +714,13 @@ const styles = StyleSheet.create({
   brandRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 2,
   },
   brandText: {
-    fontSize: 23,
+    fontSize: 24,
     fontWeight: '900',
-    letterSpacing: -0.3,
+    letterSpacing: -0.4,
+    marginRight: -10,
+    transform: [{ translateY: 3.5 }],
   },
   brandDot: {
     width: 8,
