@@ -54,6 +54,7 @@ export default function HomeScreen() {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [loadingWarehouses, setLoadingWarehouses] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
 
   // Profile Modal State
   const [profileModalVisible, setProfileModalVisible] = useState(false);
@@ -298,46 +299,56 @@ export default function HomeScreen() {
     setSortModalVisible(false);
   };
 
-  // Visual branding with Brand Purple and Green colors
+  // Visual branding with soft luxury tints & distinctive icons
   const getWarehouseVisual = (wh: Warehouse) => {
     const name = (wh.name || '').toLowerCase();
     if (name.includes('sheikh') || name.includes('الشيخ')) {
       return {
-        headerColor: '#3f0082',
+        brandColor: '#4A1578',
+        accentColor: '#5B1A96',
+        softBg: '#F5EDFD',
+        softBorder: '#E6D2FB',
         iconName: 'hospital-building' as const,
         brandTag: 'مخزن الشيخ',
-        accentColor: '#00d780',
       };
     }
     if (name.includes('tabarak') || name.includes('تبارك')) {
       return {
-        headerColor: '#00804d',
+        brandColor: '#00804D',
+        accentColor: '#059669',
+        softBg: '#ECFDF5',
+        softBorder: '#A7F3D0',
         iconName: 'pill' as const,
         brandTag: 'مخزن تبارك',
-        accentColor: '#00d780',
       };
     }
     if (name.includes('عميرة') || name.includes('abo3mara')) {
       return {
-        headerColor: '#4A1578',
+        brandColor: '#312E81',
+        accentColor: '#4338CA',
+        softBg: '#EEF2FF',
+        softBorder: '#C7D2FE',
         iconName: 'flask-round-bottom' as const,
         brandTag: 'مخزن أبو عميرة',
-        accentColor: '#00d780',
       };
     }
     if (name.includes('x') || name.includes('إكس')) {
       return {
-        headerColor: '#250052',
+        brandColor: '#3F0082',
+        accentColor: '#3F0082',
+        softBg: '#F3E8FF',
+        softBorder: '#DDD6FE',
         iconName: 'shield-plus' as const,
         brandTag: 'مخزن إكس فارما',
-        accentColor: '#00d780',
       };
     }
     return {
-      headerColor: '#34006B',
+      brandColor: '#475569',
+      accentColor: '#334155',
+      softBg: '#F8FAFC',
+      softBorder: '#E2E8F0',
       iconName: 'cube-outline' as const,
       brandTag: 'مخزن أدوية',
-      accentColor: '#00d780',
     };
   };
 
@@ -431,89 +442,228 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Sub-header Bar: Title on RIGHT, Reorder button on LEFT */}
+      {/* Sub-header Bar: Title on RIGHT, Controls on LEFT */}
       <View style={styles.controlsBar}>
         {/* Right: Section Title */}
         <View style={styles.sectionHeaderCol}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>مخازن الأدوية</Text>
           <Text style={[styles.sectionSubtitle, { color: colors.secondaryText }]}>
-            {warehouses.length} مخزن متاح
+            {warehouses.length} {warehouses.length === 1 ? 'مخزن متاح' : 'مخازن متاحة'}
           </Text>
         </View>
 
-        {/* Left: Reorder Button */}
-        <TouchableOpacity
-          style={[styles.reorderBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
-          onPress={() => setSortModalVisible(true)}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="swap-vertical" size={16} color={colors.primary} />
-          <Text style={[styles.reorderBtnText, { color: colors.primary }]}>رتب المخازن</Text>
-        </TouchableOpacity>
+        {/* Left: Actions (View Mode Toggle + Reorder) */}
+        <View style={styles.controlsActionsRow}>
+          <TouchableOpacity
+            style={[styles.controlIconBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+            onPress={() => setViewMode((prev) => (prev === 'list' ? 'grid' : 'list'))}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={viewMode === 'list' ? 'grid-outline' : 'list-outline'}
+              size={17}
+              color={colors.primary}
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.reorderBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+            onPress={() => setSortModalVisible(true)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="swap-vertical" size={15} color={colors.primary} />
+            <Text style={[styles.reorderBtnText, { color: colors.primary }]}>ترتيب</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
-      {/* Warehouses 2-Column Grid */}
+      {/* Warehouses List / Grid */}
       <FlatList
+        key={viewMode}
         data={warehouses}
         keyExtractor={(item) => item.id}
-        numColumns={2}
-        columnWrapperStyle={styles.columnWrapper}
+        numColumns={viewMode === 'grid' ? 2 : 1}
+        columnWrapperStyle={viewMode === 'grid' ? styles.columnWrapper : undefined}
         contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
         }
         renderItem={({ item }) => {
           const visual = getWarehouseVisual(item);
+
+          if (viewMode === 'grid') {
+            return (
+              <TouchableOpacity
+                style={[
+                  styles.modernGridCard,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                ]}
+                onPress={() => handleWarehousePress(item)}
+                activeOpacity={0.88}
+              >
+                {/* Top Status & Icon Row */}
+                <View style={styles.gridCardTopRow}>
+                  {item.is_linked ? (
+                    <View style={styles.gridLinkedBadge}>
+                      <Ionicons name="checkmark-circle" size={12} color="#059669" />
+                      <Text style={styles.gridLinkedBadgeText}>تم الربط</Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.gridUnlinkedBadge, { backgroundColor: colors.primarySoft }]}>
+                      <Text style={[styles.gridUnlinkedBadgeText, { color: colors.primary }]}>ربط</Text>
+                    </View>
+                  )}
+
+                  <View
+                    style={[
+                      styles.gridIconCircle,
+                      { backgroundColor: visual.softBg, borderColor: visual.softBorder },
+                    ]}
+                  >
+                    <MaterialCommunityIcons name={visual.iconName} size={24} color={visual.accentColor} />
+                  </View>
+                </View>
+
+                {/* Warehouse Name */}
+                <Text style={[styles.gridWarehouseName, { color: colors.text }]} numberOfLines={2}>
+                  {item.name}
+                </Text>
+
+                {/* Footer with Tag & Indicator */}
+                <View style={[styles.gridCardFooter, { borderTopColor: colors.border }]}>
+                  <Text style={[styles.gridBrandTag, { color: colors.secondaryText }]}>
+                    {visual.brandTag}
+                  </Text>
+                  <Ionicons
+                    name="chevron-back"
+                    size={15}
+                    color={item.is_linked ? '#059669' : colors.secondaryText}
+                  />
+                </View>
+              </TouchableOpacity>
+            );
+          }
+
+          // Default: Full-Width Luxury Card
           return (
             <TouchableOpacity
               style={[
-                styles.gridCard,
+                styles.luxuryCard,
                 { backgroundColor: colors.card, borderColor: colors.border },
               ]}
               onPress={() => handleWarehousePress(item)}
               activeOpacity={0.88}
             >
-              {/* Image / Banner Container at Top */}
-              <View style={[styles.imageBanner, { backgroundColor: visual.headerColor }]}>
-                {/* Logo / Crest */}
-                <View style={[styles.crestCircle, { borderColor: visual.accentColor }]}>
-                  <MaterialCommunityIcons name={visual.iconName} size={30} color="#FFFFFF" />
+              {/* Subtle Decorative Right Accent Bar */}
+              <View
+                style={[
+                  styles.luxuryCardAccentBar,
+                  { backgroundColor: item.is_linked ? '#00d780' : visual.accentColor },
+                ]}
+              />
+
+              <View style={styles.luxuryCardContent}>
+                {/* Main Row */}
+                <View style={styles.luxuryHeaderRow}>
+                  {/* Right Side (RTL): Elegant Brand Icon */}
+                  <View
+                    style={[
+                      styles.luxuryIconBox,
+                      { backgroundColor: visual.softBg, borderColor: visual.softBorder },
+                    ]}
+                  >
+                    <MaterialCommunityIcons name={visual.iconName} size={28} color={visual.accentColor} />
+                  </View>
+
+                  {/* Center: Details */}
+                  <View style={styles.luxuryTitleCol}>
+                    <Text style={[styles.luxuryWarehouseName, { color: colors.text }]} numberOfLines={1}>
+                      {item.name}
+                    </Text>
+
+                    <View style={styles.luxuryMetaRow}>
+                      <View style={[styles.brandTagPill, { backgroundColor: colors.bg }]}>
+                        <Text style={[styles.brandTagPillText, { color: colors.secondaryText }]}>
+                          {visual.brandTag}
+                        </Text>
+                      </View>
+                      {item.is_linked ? (
+                        <View style={styles.liveStatusRow}>
+                          <View style={styles.liveGreenDot} />
+                          <Text style={styles.liveGreenText}>حساب متصل ومحدث</Text>
+                        </View>
+                      ) : (
+                        <Text style={[styles.inactiveMetaText, { color: colors.secondaryText }]}>
+                          جاهز للربط الفوري
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+
+                  {/* Left Side: Action Pill & Arrow */}
+                  <View style={styles.luxuryActionCol}>
+                    {item.is_linked ? (
+                      <View style={styles.linkedActionPill}>
+                        <Text style={styles.linkedActionPillText}>تم الربط</Text>
+                        <Ionicons name="checkmark-circle" size={13} color="#059669" />
+                      </View>
+                    ) : (
+                      <View style={[styles.connectActionPill, { backgroundColor: colors.primarySoft }]}>
+                        <Text style={[styles.connectActionPillText, { color: colors.primary }]}>
+                          اضغط للربط
+                        </Text>
+                        <Ionicons name="link-outline" size={13} color={colors.primary} />
+                      </View>
+                    )}
+                    <Ionicons
+                      name="chevron-back"
+                      size={16}
+                      color={colors.secondaryText}
+                      style={{ marginTop: 4 }}
+                    />
+                  </View>
                 </View>
-                <Text style={styles.brandBadgeText}>{visual.brandTag}</Text>
 
-                {/* Status Badge in Top Right Corner */}
-                {item.is_linked ? (
-                  <View style={styles.cardStatusLinked}>
-                    <Ionicons name="checkmark-circle" size={12} color="#00d780" />
-                    <Text style={styles.cardStatusLinkedText}>تم الربط</Text>
+                {/* Bottom Footer: Feature Badges Strip */}
+                <View style={[styles.luxuryCardFooter, { borderTopColor: '#F1F5F9' }]}>
+                  <View style={styles.footerFeaturesList}>
+                    <View style={styles.featureItem}>
+                      <Ionicons name="receipt-outline" size={12} color={colors.secondaryText} />
+                      <Text style={[styles.featureItemText, { color: colors.secondaryText }]}>فواتير</Text>
+                    </View>
+                    <Text style={styles.featureDot}>•</Text>
+                    <View style={styles.featureItem}>
+                      <Ionicons name="refresh-outline" size={12} color={colors.secondaryText} />
+                      <Text style={[styles.featureItemText, { color: colors.secondaryText }]}>مرتجعات</Text>
+                    </View>
+                    <Text style={styles.featureDot}>•</Text>
+                    <View style={styles.featureItem}>
+                      <Ionicons name="cash-outline" size={12} color={colors.secondaryText} />
+                      <Text style={[styles.featureItemText, { color: colors.secondaryText }]}>نقدية</Text>
+                    </View>
+                    <Text style={styles.featureDot}>•</Text>
+                    <View style={styles.featureItem}>
+                      <Ionicons name="document-text-outline" size={12} color={colors.secondaryText} />
+                      <Text style={[styles.featureItemText, { color: colors.secondaryText }]}>كشف حساب</Text>
+                    </View>
                   </View>
-                ) : (
-                  <View style={styles.cardStatusUnlinked}>
-                    <Ionicons name="lock-open-outline" size={11} color="#FFFFFF" />
-                    <Text style={styles.cardStatusUnlinkedText}>مش مربوطة</Text>
-                  </View>
-                )}
-              </View>
 
-              {/* Warehouse Name & Pill Underneath */}
-              <View style={styles.cardBody}>
-                <Text style={[styles.warehouseName, { color: colors.text }]} numberOfLines={2}>
-                  {item.name}
-                </Text>
-
-                {item.is_linked ? (
-                  <View style={[styles.codePill, { backgroundColor: colors.successSoft }]}>
-                    <Text style={[styles.codePillText, { color: colors.success }]}>
-                      تم الربط
+                  <View style={styles.portalEnterHintRow}>
+                    <Text
+                      style={[
+                        styles.portalEnterHintText,
+                        { color: item.is_linked ? colors.primary : colors.secondaryText },
+                      ]}
+                    >
+                      {item.is_linked ? 'فتح اللوحة' : 'ربط الحساب'}
                     </Text>
+                    <Ionicons
+                      name="arrow-back"
+                      size={12}
+                      color={item.is_linked ? colors.primary : colors.secondaryText}
+                    />
                   </View>
-                ) : (
-                  <View style={[styles.codePill, { backgroundColor: colors.primarySoft }]}>
-                    <Text style={[styles.codePillText, { color: colors.primary }]}>
-                      اضغط للربط
-                    </Text>
-                  </View>
-                )}
+                </View>
               </View>
             </TouchableOpacity>
           );
@@ -848,92 +998,240 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: CARD_GAP,
   },
-  gridCard: {
-    width: CARD_WIDTH,
-    borderRadius: 18,
-    borderWidth: 1,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  imageBanner: {
-    height: 110,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  crestCircle: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 5,
-  },
-  brandBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.3,
-  },
-  cardStatusLinked: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
+  controlsActionsRow: {
     flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 100,
-  },
-  cardStatusLinkedText: {
-    color: '#00d780',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  cardStatusUnlinked: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 100,
-  },
-  cardStatusUnlinkedText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  cardBody: {
-    padding: 12,
     alignItems: 'center',
     gap: 8,
   },
-  warehouseName: {
-    fontSize: 14,
+  controlIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Luxury Card (Full-width)
+  luxuryCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    marginBottom: 12,
+    position: 'relative',
+    overflow: 'hidden',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  luxuryCardAccentBar: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: 4,
+    borderTopRightRadius: 20,
+    borderBottomRightRadius: 20,
+  },
+  luxuryCardContent: {
+    padding: 14,
+    paddingRight: 16,
+  },
+  luxuryHeaderRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 12,
+  },
+  luxuryIconBox: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  luxuryTitleCol: {
+    flex: 1,
+    alignItems: 'flex-end',
+  },
+  luxuryWarehouseName: {
+    fontSize: 15,
     fontWeight: '800',
-    textAlign: 'center',
-    minHeight: 36,
+    textAlign: 'right',
   },
-  codePill: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
+  luxuryMetaRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
   },
-  codePillText: {
+  brandTagPill: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  brandTagPillText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  liveStatusRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+  },
+  liveGreenDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#00d780',
+  },
+  liveGreenText: {
+    color: '#059669',
     fontSize: 11,
     fontWeight: '700',
+  },
+  inactiveMetaText: {
+    fontSize: 11,
+  },
+  luxuryActionCol: {
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+  },
+  linkedActionPill: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0',
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 100,
+  },
+  linkedActionPillText: {
+    color: '#059669',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  connectActionPill: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 100,
+  },
+  connectActionPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  luxuryCardFooter: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+  },
+  footerFeaturesList: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 6,
+  },
+  featureItem: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 3,
+  },
+  featureItemText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  featureDot: {
+    fontSize: 10,
+    color: '#94A3B8',
+  },
+  portalEnterHintRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+  },
+  portalEnterHintText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+
+  // Modern Grid Card
+  modernGridCard: {
+    width: CARD_WIDTH,
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 12,
+    marginBottom: CARD_GAP,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+    justifyContent: 'space-between',
+    minHeight: 140,
+  },
+  gridCardTopRow: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  gridIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gridLinkedBadge: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0',
+    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 100,
+  },
+  gridLinkedBadgeText: {
+    color: '#059669',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  gridUnlinkedBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 100,
+  },
+  gridUnlinkedBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  gridWarehouseName: {
+    fontSize: 13,
+    fontWeight: '800',
+    textAlign: 'right',
+    marginVertical: 8,
+    lineHeight: 18,
+  },
+  gridCardFooter: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderTopWidth: 1,
+    paddingTop: 8,
+  },
+  gridBrandTag: {
+    fontSize: 10,
+    fontWeight: '600',
   },
   loadingBox: {
     alignItems: 'center',
