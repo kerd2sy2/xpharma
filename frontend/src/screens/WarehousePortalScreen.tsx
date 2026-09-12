@@ -53,6 +53,7 @@ export default function WarehousePortalScreen({
   const [selectedSection, setSelectedSection] = useState<SectionKey | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [isSwitchingPharmacy, setIsSwitchingPharmacy] = useState(false);
 
   // Multi-pharmacy state
   const [activePharmacyIndex, setActivePharmacyIndex] = useState(0);
@@ -79,11 +80,13 @@ export default function WarehousePortalScreen({
   const colors = {
     bg: '#F9F7FD',
     card: '#FFFFFF',
-    cardBack: '#F2EDFA',
-    cardBack2: '#E7DFFA',
+    cardBack: '#F4EFFC',
+    cardBack2: '#E7DCF8',
     text: '#1A0A33',
     secondaryText: '#7B6F93',
     border: '#EDE7F6',
+    borderLayer2: '#CBB5EB',
+    borderLayer3: '#B69CE3',
     primary: '#3f0082',
     primarySoft: '#3f008212',
     success: '#00B86B',
@@ -186,29 +189,41 @@ export default function WarehousePortalScreen({
     }
   };
 
-  // Switch pharmacy when index changes
+  // Fly card like paper, then show full-page logo overlay until the other pharmacy loads
   const flyToPharmacy = (direction: 'next' | 'prev') => {
     const count = pharmaciesRef.current.length;
     if (count <= 1) return;
 
-    const targetX = direction === 'next' ? -480 : 480;
+    const targetX = direction === 'next' ? -500 : 500;
     Animated.timing(pan, {
-      toValue: { x: targetX, y: 15 },
-      duration: 200,
+      toValue: { x: targetX, y: 18 },
+      duration: 180,
       useNativeDriver: true,
-    }).start(() => {
+    }).start(async () => {
       pan.setValue({ x: 0, y: 0 });
-      setActivePharmacyIndex((prev) => {
-        const nextIdx =
-          direction === 'next' ? (prev + 1) % count : (prev - 1 + count) % count;
-        const targetPh = pharmaciesRef.current[nextIdx];
-        if (targetPh) {
-          setCurrentToken(targetPh.token);
-          setCurrentPharmacyCode(targetPh.pharmacy_code);
-          setCurrentPharmacyName(targetPh.pharmacy_name);
+      const nextIdx =
+        direction === 'next'
+          ? (activeIndexRef.current + 1) % count
+          : (activeIndexRef.current - 1 + count) % count;
+
+      const targetPh = pharmaciesRef.current[nextIdx];
+      if (targetPh) {
+        // Show full logo overlay covering the screen
+        setIsSwitchingPharmacy(true);
+        setActivePharmacyIndex(nextIdx);
+        setCurrentToken(targetPh.token);
+        setCurrentPharmacyCode(targetPh.pharmacy_code);
+        setCurrentPharmacyName(targetPh.pharmacy_name);
+
+        const startTime = Date.now();
+        await loadData(targetPh.token, false);
+        const elapsed = Date.now() - startTime;
+        if (elapsed < 1100) {
+          await new Promise((r) => setTimeout(r, 1100 - elapsed));
         }
-        return nextIdx;
-      });
+        // Dismiss overlay when other pharmacy data is fully ready
+        setIsSwitchingPharmacy(false);
+      }
     });
   };
 
@@ -235,7 +250,6 @@ export default function WarehousePortalScreen({
             Math.abs(gestureState.vx) > velocityThreshold
           ) {
             const isSwipeLeft = gestureState.dx < 0;
-            // In RTL: swipe left goes to next card, swipe right goes to prev card
             flyToPharmacy(isSwipeLeft ? 'next' : 'prev');
           } else {
             Animated.spring(pan, {
@@ -253,7 +267,9 @@ export default function WarehousePortalScreen({
   // When a new pharmacy is verified and added
   const handleAddSuccess = async (result: VerifyPharmacyResult) => {
     if (!result.token) return;
-    setLoading(true);
+    setShowAddModal(false);
+    setIsSwitchingPharmacy(true);
+
     const newAccount: LinkedPharmacyAccount = {
       token: result.token,
       pharmacy_code: result.pharmacy_code || '',
@@ -267,15 +283,14 @@ export default function WarehousePortalScreen({
     setCurrentToken(newAccount.token);
     setCurrentPharmacyCode(newAccount.pharmacy_code);
     setCurrentPharmacyName(newAccount.pharmacy_name);
-    setShowAddModal(false);
 
     const startTime = Date.now();
     await loadData(newAccount.token, false);
     const elapsed = Date.now() - startTime;
-    if (elapsed < 900) {
-      await new Promise((resolve) => setTimeout(resolve, 900 - elapsed));
+    if (elapsed < 1100) {
+      await new Promise((resolve) => setTimeout(resolve, 1100 - elapsed));
     }
-    setLoading(false);
+    setIsSwitchingPharmacy(false);
   };
 
   const formatCurrency = (amount?: number) => {
@@ -549,7 +564,7 @@ export default function WarehousePortalScreen({
   }
 
   // ----------------------------------------------------
-  // STACKED CARDS DECK COMPONENT (طبقات بطاقات الصيدليات كأنك بتطير ورقة)
+  // STACKED CARDS DECK COMPONENT (طبقات واضحة جداً كأنك بتطير ورقة)
   // ----------------------------------------------------
   const renderStackedDeck = () => {
     const count = pharmacies.length;
@@ -572,43 +587,43 @@ export default function WarehousePortalScreen({
       extrapolate: 'clamp',
     });
 
-    const secondScale = pan.x.interpolate({
-      inputRange: [-200, 0, 200],
-      outputRange: [1, 0.94, 1],
-      extrapolate: 'clamp',
-    });
-
     const secondTop = pan.x.interpolate({
       inputRange: [-200, 0, 200],
-      outputRange: [0, 9, 0],
+      outputRange: [0, 15, 0],
       extrapolate: 'clamp',
     });
 
     return (
       <View style={styles.deckWrapper}>
-        <View style={styles.deckContainer}>
-          {/* Card 3: الطبقة الثالثة العميقة (تظهر عند وجود 3 صيدليات أو أكثر) */}
+        <View style={[styles.deckContainer, { height: count > 2 ? 172 : count > 1 ? 156 : 138 }]}>
+          {/* Card 3: الطبقة الثالثة العميقة (بارزة بوضوح أسفل الكرت الثاني) */}
           {thirdItem && (
             <View
               style={[
                 styles.stackedCard,
                 styles.cardLayer3,
-                { backgroundColor: colors.cardBack2, borderColor: colors.border },
+                { backgroundColor: colors.cardBack2, borderColor: colors.borderLayer3 },
               ]}
             >
               <View style={styles.cardHeaderRow}>
-                <View style={[styles.cardBadgePill, { backgroundColor: colors.primarySoft }]}>
-                  <Ionicons name="medkit-outline" size={13} color={colors.primary} />
+                <View style={[styles.cardBadgePill, { backgroundColor: '#FFFFFF99' }]}>
+                  <Ionicons name="medkit" size={11} color={colors.primary} />
                   <Text style={[styles.cardBadgeText, { color: colors.primary }]}>صيدلية 3</Text>
                 </View>
-                <Text style={[styles.cleanPharmacyName, { color: colors.secondaryText }]} numberOfLines={1}>
+                <Text style={[styles.cleanPharmacyName, { color: colors.text }]} numberOfLines={1}>
                   {thirdItem.pharmacy_name || `صيدلية #${thirdItem.pharmacy_code}`}
+                </Text>
+              </View>
+              {/* شريط سفلي بارز للكرت الثالث يظهر للعين بوضوح */}
+              <View style={styles.peekingStripBottom}>
+                <Text style={[styles.peekingStripText, { color: colors.primary }]}>
+                  {thirdItem.pharmacy_name || `صيدلية #${thirdItem.pharmacy_code}`} • {formatCurrency(balancesMap[thirdItem.token] ?? 0)}
                 </Text>
               </View>
             </View>
           )}
 
-          {/* Card 2: الطبقة الثانية الوسطى (تظهر عند وجود صيدليتين أو أكثر) */}
+          {/* Card 2: الطبقة الثانية الوسطى (بارزة بوضوح أسفل الكرت الأول) */}
           {secondItem && (
             <Animated.View
               style={[
@@ -616,15 +631,14 @@ export default function WarehousePortalScreen({
                 styles.cardLayer2,
                 {
                   backgroundColor: colors.cardBack,
-                  borderColor: colors.border,
+                  borderColor: colors.borderLayer2,
                   top: secondTop,
-                  transform: [{ scale: secondScale }],
                 },
               ]}
             >
               <View style={styles.cardHeaderRow}>
-                <View style={[styles.cardBadgePill, { backgroundColor: colors.primarySoft }]}>
-                  <Ionicons name="medkit-outline" size={13} color={colors.primary} />
+                <View style={[styles.cardBadgePill, { backgroundColor: '#FFFFFF99' }]}>
+                  <Ionicons name="medkit" size={11} color={colors.primary} />
                   <Text style={[styles.cardBadgeText, { color: colors.primary }]}>
                     {count > 2 ? 'صيدلية 2' : 'صيدلية'}
                   </Text>
@@ -639,6 +653,12 @@ export default function WarehousePortalScreen({
                 </Text>
                 <Text style={[styles.cleanBalanceValue, { color: colors.primary }]}>
                   {formatCurrency(balancesMap[secondItem.token] ?? 0)}
+                </Text>
+              </View>
+              {/* شريط سفلي بارز يظهر تحت الكرت الأول */}
+              <View style={styles.peekingStripBottom}>
+                <Text style={[styles.peekingStripText, { color: colors.primary }]}>
+                  {secondItem.pharmacy_name || `صيدلية #${secondItem.pharmacy_code}`} • {formatCurrency(balancesMap[secondItem.token] ?? 0)}
                 </Text>
               </View>
             </Animated.View>
@@ -708,7 +728,7 @@ export default function WarehousePortalScreen({
                 />
               ))}
               <Text style={[styles.deckHintText, { color: colors.secondaryText }]}>
-                اسحب للتنقل
+                اسحب للتنقل بين الصيدليات
               </Text>
             </View>
 
@@ -811,6 +831,19 @@ export default function WarehousePortalScreen({
         onClose={() => setShowAddModal(false)}
         onSuccess={handleAddSuccess}
       />
+
+      {/* شاشة اللوجو الكاملة لتغطية الصفحة عند التبديل بين الصيدليات */}
+      {isSwitchingPharmacy && (
+        <View style={styles.fullScreenLogoOverlay}>
+          <View style={styles.fullScreenLogoCenterBox}>
+            <XLogo size={100} scale={2.2} speed={1.3} autoPlay loop />
+            <Text style={styles.fullScreenLogoBrand}>فارما</Text>
+            <Text style={styles.fullScreenLogoSub}>
+              جاري تحميل بيانات الصيدلية...
+            </Text>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -864,40 +897,49 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   deckContainer: {
-    height: 146,
     position: 'relative',
     justifyContent: 'flex-start',
     alignItems: 'center',
   },
   stackedCard: {
     position: 'absolute',
-    width: '100%',
+    height: 128,
     padding: 18,
     borderRadius: 22,
-    borderWidth: 1,
+    borderWidth: 1.5,
     gap: 10,
     shadowColor: '#3f0082',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.06,
+    shadowOpacity: 0.08,
     shadowRadius: 10,
-    elevation: 3,
+    elevation: 4,
   },
   cardLayer1: {
     zIndex: 10,
     top: 0,
+    width: '100%',
   },
   cardLayer2: {
     zIndex: 9,
-    top: 9,
-    transform: [{ scale: 0.94 }],
-    opacity: 0.9,
+    top: 15,
+    width: '93%',
   },
   cardLayer3: {
     zIndex: 8,
-    top: 18,
-    transform: [{ scale: 0.88 }],
-    opacity: 0.65,
-    height: 135,
+    top: 30,
+    width: '86%',
+  },
+  peekingStripBottom: {
+    position: 'absolute',
+    bottom: 4,
+    left: 14,
+    right: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  peekingStripText: {
+    fontSize: 10,
+    fontWeight: '800',
   },
   cardHeaderRow: {
     flexDirection: 'row-reverse',
@@ -967,6 +1009,32 @@ const styles = StyleSheet.create({
   },
   deckArrowBtn: {
     padding: 6,
+  },
+
+  // شاشة اللوجو الكاملة لتغطية الصفحة عند التبديل
+  fullScreenLogoOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: '#F9F7FD',
+    zIndex: 99999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fullScreenLogoCenterBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  fullScreenLogoBrand: {
+    fontSize: 28,
+    fontWeight: '900',
+    color: '#3f0082',
+    marginTop: 6,
+    letterSpacing: -0.5,
+  },
+  fullScreenLogoSub: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#7B6F93',
   },
 
   // حالة تحميل الأقسام
