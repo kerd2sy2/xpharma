@@ -13,6 +13,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, FontAwesome } from '@expo/vector-icons';
 import { useAuth } from '@/context/AuthContext';
+import XLogo from '@/components/XLogo';
 
 const { width } = Dimensions.get('window');
 
@@ -53,9 +54,7 @@ export default function LoginScreen() {
         {/* Top Decorative / Brand Glow */}
         <View style={styles.headerSection}>
           <View style={[styles.iconContainer, { backgroundColor: isDark ? '#1E293B' : '#EFF6FF' }]}>
-            <View style={styles.innerIconGlow}>
-              <Ionicons name="medical" size={42} color={themeColors.accent} />
-            </View>
+            <XLogo size={70} loop={true} />
           </View>
 
           <Text style={[styles.brandTitle, { color: themeColors.textPrimary }]}>

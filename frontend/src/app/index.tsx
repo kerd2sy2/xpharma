@@ -29,6 +29,7 @@ import {
 } from '@/services/warehouse';
 import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
 import WarehousePortalScreen from '@/screens/WarehousePortalScreen';
+import XLogo from '@/components/XLogo';
 
 const { width } = Dimensions.get('window');
 const CARD_GAP = 12;
@@ -304,10 +305,10 @@ export default function HomeScreen() {
 
       {/* Top Header: Brand on RIGHT, Avatar on LEFT (Strict RTL Layout) */}
       <View style={[styles.topBar, { borderBottomColor: colors.border, backgroundColor: colors.card }]}>
-        {/* Right side: Brand in Arabic */}
+        {/* Right side: Brand in Arabic with Animated Letter X Logo */}
         <View style={styles.brandRow}>
+          <XLogo size={36} loop={true} />
           <Text style={[styles.brandText, { color: colors.text }]}>إكس فارما</Text>
-          <View style={styles.brandDot} />
         </View>
 
         {/* Left side: Avatar opens Profile Modal */}
