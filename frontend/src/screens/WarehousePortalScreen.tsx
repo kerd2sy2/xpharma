@@ -12,6 +12,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
+import XLogo from '@/components/XLogo';
 import {
   fetchPharmacyBalance,
   fetchPharmacyPurchases,
@@ -147,17 +148,28 @@ export default function WarehousePortalScreen({
     loadData(currentToken, false);
   };
 
-  // Switch active pharmacy
-  const handleSelectPharmacy = (ph: LinkedPharmacyAccount) => {
+  // Switch active pharmacy with smooth XLogo animation
+  const handleSelectPharmacy = async (ph: LinkedPharmacyAccount) => {
     if (ph.token === currentToken) return;
+    setLoading(true);
     setCurrentToken(ph.token);
     setCurrentPharmacyCode(ph.pharmacy_code);
     setCurrentPharmacyName(ph.pharmacy_name);
+
+    // Keep X animation playing smoothly for at least ~1.1s
+    const startTime = Date.now();
+    await loadData(ph.token, false);
+    const elapsed = Date.now() - startTime;
+    if (elapsed < 1100) {
+      await new Promise((resolve) => setTimeout(resolve, 1100 - elapsed));
+    }
+    setLoading(false);
   };
 
   // When a new pharmacy is verified and added
   const handleAddSuccess = async (result: VerifyPharmacyResult) => {
     if (!result.token) return;
+    setLoading(true);
     const newAccount: LinkedPharmacyAccount = {
       token: result.token,
       pharmacy_code: result.pharmacy_code || '',
@@ -170,6 +182,14 @@ export default function WarehousePortalScreen({
     setCurrentPharmacyCode(newAccount.pharmacy_code);
     setCurrentPharmacyName(newAccount.pharmacy_name);
     setShowAddModal(false);
+
+    const startTime = Date.now();
+    await loadData(newAccount.token, false);
+    const elapsed = Date.now() - startTime;
+    if (elapsed < 1100) {
+      await new Promise((resolve) => setTimeout(resolve, 1100 - elapsed));
+    }
+    setLoading(false);
   };
 
   const formatCurrency = (amount?: number) => {
@@ -512,9 +532,9 @@ export default function WarehousePortalScreen({
 
       {loading ? (
         <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
+          <XLogo size={70} scale={1.8} speed={1.2} autoPlay loop />
           <Text style={[styles.loadingText, { color: colors.secondaryText }]}>
-            جاري تحميل الحساب...
+            جاري تحويل الحساب وتحديث البيانات...
           </Text>
         </View>
       ) : (
