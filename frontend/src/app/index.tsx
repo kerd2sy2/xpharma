@@ -608,22 +608,13 @@ export default function HomeScreen() {
                 />
               )}
 
-              {/* 3. Contrast & Vignette Overlay (Gives exact App Store atmospheric depth & crystal-clear text contrast) */}
+              {/* 3. Smooth Seamless Contrast Overlay (Uniform, no seams or dividers) */}
               <LinearGradient
-                colors={['rgba(10, 14, 22, 0.46)', 'rgba(10, 14, 22, 0.16)', 'rgba(10, 14, 22, 0.56)']}
+                colors={['rgba(10, 14, 22, 0.42)', 'rgba(10, 14, 22, 0.2)', 'rgba(10, 14, 22, 0.48)']}
                 start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
+                end={{ x: 1, y: 1 }}
                 style={StyleSheet.absoluteFill}
               />
-              <LinearGradient
-                colors={['rgba(0, 0, 0, 0.05)', 'rgba(0, 0, 0, 0.35)']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 0, y: 1 }}
-                style={StyleSheet.absoluteFill}
-              />
-
-              {/* 4. Subtle Top Ambient Sheen */}
-              <View style={styles.bannerSheen} />
 
               {/* 5. Card Content */}
               <View style={styles.bannerContentRow}>
@@ -1059,18 +1050,8 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFill,
     width: '100%',
     height: '100%',
-    transform: [{ scale: 1.8 }],
-    opacity: 0.88,
-  },
-  bannerSheen: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: '42%',
-    backgroundColor: 'rgba(255, 255, 255, 0.07)',
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
+    transform: [{ scale: 2.0 }],
+    opacity: 0.9,
   },
   bannerContentRow: {
     padding: 14,
