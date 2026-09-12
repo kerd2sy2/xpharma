@@ -401,18 +401,6 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Soft gradient fade below header for harmonious scrolling without harsh cutoffs */}
-      <LinearGradient
-        colors={[
-          colors.bg,
-          'rgba(249, 247, 253, 0.9)',
-          'rgba(249, 247, 253, 0.4)',
-          'rgba(249, 247, 253, 0)',
-        ]}
-        style={[styles.topFadeGradient, { top: topInset + 62 }]}
-        pointerEvents="none"
-      />
-
       {/* Warehouses List */}
       <FlatList
         key={isTablet ? 'tablet-grid' : 'phone-list'}
@@ -658,7 +646,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: PADDING_HORIZONTAL,
     paddingTop: 8,
-    paddingBottom: 4,
+    paddingBottom: 12,
+    backgroundColor: '#F9F7FD',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(63, 0, 130, 0.05)',
+    zIndex: 100,
+    elevation: 3,
   },
   brandRow: {
     flexDirection: 'row-reverse',
@@ -711,17 +704,10 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#FFFFFF',
   },
-  topFadeGradient: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    height: 36,
-    zIndex: 15,
-  },
   listContent: {
     paddingHorizontal: PADDING_HORIZONTAL,
-    paddingTop: 10,
-    paddingBottom: 32,
+    paddingTop: 18,
+    paddingBottom: 36,
   },
   columnWrapper: {
     flexDirection: 'row-reverse',
