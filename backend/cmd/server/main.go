@@ -83,13 +83,135 @@ func main() {
 		pharmaGroup.GET("/balance", queryService.GetBalance)
 		pharmaGroup.GET("/purchases", queryService.GetPurchases)
 		pharmaGroup.GET("/returns", queryService.GetReturns)
+		pharmaGroup.GET("/receipts", queryService.GetReceipts)
 		pharmaGroup.GET("/statement", queryService.GetStatement)
 		pharmaGroup.GET("/products", queryService.GetRecentProducts)
 	}
 
+	// Public / Pharmacist Warehouse Listing
+	r.GET("/v1/warehouses", func(c *gin.Context) {
+		userID := c.Query("user_id")
+
+		query := `
+			SELECT 
+				t.id, 
+				t.name, 
+				t.slug, 
+				t.status,
+				COALESCE(p.id::text, '') AS linked_pharmacy_id,
+				COALESCE(p.name, '') AS linked_pharmacy_name,
+				COALESCE(p.code, '') AS linked_pharmacy_code
+			FROM public.tenants t
+			LEFT JOIN public.pharmacies p ON p.tenant_id = t.id AND (p.linked_user_id = $1 AND $1 <> '')
+			WHERE t.status = 'active'
+			ORDER BY t.name ASC
+		`
+		rows, err := router.Pool().Query(c.Request.Context(), query, userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+
+		var warehouses []map[string]interface{}
+		for rows.Next() {
+			var id, name, slug, status, linkedPharmaID, linkedPharmaName, linkedPharmaCode string
+			if err := rows.Scan(&id, &name, &slug, &status, &linkedPharmaID, &linkedPharmaName, &linkedPharmaCode); err != nil {
+				continue
+			}
+
+			isLinked := linkedPharmaID != ""
+			warehouses = append(warehouses, map[string]interface{}{
+				"id":                   id,
+				"name":                 name,
+				"slug":                 slug,
+				"status":               status,
+				"is_linked":            isLinked,
+				"linked_pharmacy_id":   linkedPharmaID,
+				"linked_pharmacy_name": linkedPharmaName,
+				"linked_pharmacy_code": linkedPharmaCode,
+			})
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"success":    true,
+			"warehouses": warehouses,
+		})
+	})
+
 	// Mobile Auth / Linking
 	authGroup := r.Group("/v1/auth")
 	{
+		authGroup.POST("/verify-pharmacy", func(c *gin.Context) {
+			var req struct {
+				TenantID     string `json:"tenant_id" binding:"required"`
+				PharmacyCode string `json:"pharmacy_code" binding:"required"`
+				Phone        string `json:"phone"`
+				UserID       string `json:"user_id"`
+				Email        string `json:"email"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "كود الصيدلية وبيانات المستودع مطلوبة"})
+				return
+			}
+
+			code := strings.TrimSpace(req.PharmacyCode)
+			phone := strings.TrimSpace(req.Phone)
+
+			var pharmacyID, name, dbPhone string
+			var isActive bool
+			lookupQuery := `
+				SELECT id, name, COALESCE(phone, ''), is_active
+				FROM public.pharmacies
+				WHERE tenant_id = $1 AND code = $2
+				LIMIT 1
+			`
+			err := router.Pool().QueryRow(c.Request.Context(), lookupQuery, req.TenantID, code).Scan(&pharmacyID, &name, &dbPhone, &isActive)
+			if err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "كود الصيدلية غير مسجل في قاعدة هذا المستودع. يرجى التأكد من صحة الكود."})
+				return
+			}
+
+			if !isActive {
+				c.JSON(http.StatusForbidden, gin.H{"error": "حساب الصيدلية غير نشط في هذا المستودع"})
+				return
+			}
+
+			if phone != "" && dbPhone != "" {
+				cleanInputPhone := strings.ReplaceAll(strings.ReplaceAll(phone, " ", ""), "-", "")
+				cleanDBPhone := strings.ReplaceAll(strings.ReplaceAll(dbPhone, " ", ""), "-", "")
+				if !strings.Contains(cleanDBPhone, cleanInputPhone) && !strings.Contains(cleanInputPhone, cleanDBPhone) {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "رقم الهاتف غير مطابق لبيانات الصيدلية المسجلة لدى المستودع"})
+					return
+				}
+			}
+
+			if req.UserID != "" {
+				updateQuery := `UPDATE public.pharmacies SET linked_user_id = $1, updated_at = NOW() WHERE id = $2`
+				_, _ = router.Pool().Exec(c.Request.Context(), updateQuery, req.UserID, pharmacyID)
+			}
+
+			token, err := tokenService.GenerateToken(auth.Claims{
+				UserID:     req.UserID,
+				Email:      req.Email,
+				TenantID:   req.TenantID,
+				PharmacyID: pharmacyID,
+				PharmaCode: code,
+				Role:       "pharmacist",
+			}, 30*24*time.Hour)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل توليد التوكن"})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"success":       true,
+				"token":         token,
+				"pharmacy_name": name,
+				"pharmacy_code": code,
+				"tenant_id":     req.TenantID,
+			})
+		})
 		authGroup.POST("/link-pharmacy", func(c *gin.Context) {
 			var req struct {
 				LinkCode string `json:"link_code" binding:"required"`

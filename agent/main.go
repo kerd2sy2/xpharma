@@ -400,6 +400,9 @@ func loadConfig() *Config {
 	// Sanitization
 	cfg.Cloud.APIKey = cleanInput(cfg.Cloud.APIKey)
 	cfg.Firebird.DBPath = cleanInput(cfg.Firebird.DBPath)
+	if cfg.Firebird.DBPath == "" {
+		cfg.Firebird.DBPath = `D:\Orga_Soft\data\ORGA.GDB`
+	}
 	cfg.Firebird.Host = cleanInput(cfg.Firebird.Host)
 	if cfg.Firebird.Host == "" {
 		cfg.Firebird.Host = "127.0.0.1"
@@ -480,6 +483,11 @@ func connectFirebird(cfg *Config) (*sql.DB, error) {
 }
 
 func checkConnections(cfg *Config) (fbOk bool, cloudOk bool) {
+	fbOk, cloudOk, _ = checkConnectionsDetailed(cfg)
+	return
+}
+
+func checkConnectionsDetailed(cfg *Config) (fbOk bool, cloudOk bool, cloudMsg string) {
 	// 1. Check Firebird
 	if cfg.Firebird.DBPath != "" {
 		db, err := connectFirebird(cfg)
@@ -489,13 +497,57 @@ func checkConnections(cfg *Config) (fbOk bool, cloudOk bool) {
 		}
 	}
 
-	// 2. Check Cloud
+	// 2. Check Cloud Health
 	cleanURL := strings.TrimRight(cfg.Cloud.APIURL, "/")
-	client := &http.Client{Timeout: 4 * time.Second}
+	if cleanURL == "" {
+		cleanURL = "https://api.xpharma.cloud"
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(cleanURL + "/health")
-	if err == nil && (resp.StatusCode == http.StatusOK || resp.StatusCode == 404 || resp.StatusCode == 401) {
+	if err != nil {
+		cloudMsg = fmt.Sprintf("تعذر الوصول إلى سيرفر السحابة (%s) - تحقق من اتصال الإنترنت", cleanURL)
+		return
+	}
+	resp.Body.Close()
+
+	if cfg.Cloud.APIKey == "" {
+		cloudOk = false
+		cloudMsg = "سيرفر السحابة متاح، يرجى إدخال مفتاح التوكن السحابي (API Token) لتأكيد الربط بالمستودع"
+		return
+	}
+
+	// 3. Test API Key validity directly with /v1/sync/ingest
+	var gzBuf bytes.Buffer
+	gw := gzip.NewWriter(&gzBuf)
+	_, _ = gw.Write([]byte("{}"))
+	_ = gw.Close()
+
+	req, err := http.NewRequest("POST", cleanURL+"/v1/sync/ingest", &gzBuf)
+	if err != nil {
+		cloudMsg = err.Error()
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("X-Agent-Key", cfg.Cloud.APIKey)
+
+	keyResp, err := client.Do(req)
+	if err != nil {
+		cloudMsg = fmt.Sprintf("فشل فحص مفتاح السحابة: %v", err)
+		return
+	}
+	defer keyResp.Body.Close()
+
+	if keyResp.StatusCode == http.StatusOK {
 		cloudOk = true
-		resp.Body.Close()
+		cloudMsg = "تم التحقق من مفتاح الربط وتأكيد الاتصال بالسحابة بنجاح (المفتاح معتمد ونشط)"
+	} else if keyResp.StatusCode == http.StatusUnauthorized {
+		cloudOk = false
+		cloudMsg = "مفتاح الربط (API Token) غير صحيح أو غير مفعل في لوحة التحكم (401 Unauthorized)"
+	} else {
+		b, _ := io.ReadAll(keyResp.Body)
+		cloudOk = false
+		cloudMsg = fmt.Sprintf("استجابة السحابة (HTTP %d): %s", keyResp.StatusCode, string(b))
 	}
 	return
 }
@@ -1023,7 +1075,19 @@ func runGentleSync(cfg *Config) {
 						end = len(custList)
 					}
 					p := IngestionPayload{Customers: custList[i:end]}
-					_ = postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, p)
+					if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, p); err != nil {
+						if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "Unauthorized") {
+							state.Lock()
+							state.Status = "error"
+							state.CloudConnected = false
+							state.LastError = "مفتاح الربط (API Token) غير صالح أو غير معتمد على السيرفر (401)"
+							state.CurrentTask = "خطأ في مفتاح الربط السحابي (401)"
+							state.Unlock()
+							addLog("خطأ حرج: تم رفض مفتاح الربط السحابي من السيرفر (401 Unauthorized). يرجى التأكد من التوكن في لوحة التحكم.")
+							return
+						}
+						addLog(fmt.Sprintf("تنبيه أثناء رفع دليل الصيدليات: %v", err))
+					}
 					time.Sleep(200 * time.Millisecond)
 				}
 				addLog("اكتمل تحديث دليل الصيدليات بنجاح.")
@@ -1118,6 +1182,16 @@ func runGentleSync(cfg *Config) {
 
 		payload := IngestionPayload{Invoices: batch, Ledger: ledgBatch}
 		if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, payload); err != nil {
+			if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "Unauthorized") {
+				state.Lock()
+				state.Status = "error"
+				state.CloudConnected = false
+				state.LastError = "مفتاح الربط (API Token) غير صالح أو غير معتمد على السيرفر (401)"
+				state.CurrentTask = "خطأ في مفتاح الربط السحابي (401)"
+				state.Unlock()
+				addLog("خطأ حرج: تم رفض مفتاح الربط السحابي من السيرفر (401 Unauthorized). يرجى التأكد من التوكن في لوحة التحكم.")
+				return
+			}
 			addLog(fmt.Sprintf("تنبيه أثناء إرسال الدفعة: %v", err))
 			time.Sleep(2 * time.Second)
 			continue
@@ -1251,6 +1325,16 @@ func runGentleSync(cfg *Config) {
 
 		payload := IngestionPayload{CashReceipts: batch, Ledger: ledgBatch}
 		if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, payload); err != nil {
+			if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "Unauthorized") {
+				state.Lock()
+				state.Status = "error"
+				state.CloudConnected = false
+				state.LastError = "مفتاح الربط (API Token) غير صالح أو غير معتمد على السيرفر (401)"
+				state.CurrentTask = "خطأ في مفتاح الربط السحابي (401)"
+				state.Unlock()
+				addLog("خطأ حرج: تم رفض مفتاح الربط السحابي من السيرفر (401 Unauthorized). يرجى التأكد من التوكن في لوحة التحكم.")
+				return
+			}
 			addLog(fmt.Sprintf("تنبيه أثناء إرسال سندات القبض: %v", err))
 			time.Sleep(2 * time.Second)
 			continue
@@ -1304,6 +1388,16 @@ func runGentleSync(cfg *Config) {
 
 			payload := IngestionPayload{Returns: retBatch, Ledger: ledgBatch}
 			if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, payload); err != nil {
+				if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "Unauthorized") {
+					state.Lock()
+					state.Status = "error"
+					state.CloudConnected = false
+					state.LastError = "مفتاح الربط (API Token) غير صالح أو غير معتمد على السيرفر (401)"
+					state.CurrentTask = "خطأ في مفتاح الربط السحابي (401)"
+					state.Unlock()
+					addLog("خطأ حرج: تم رفض مفتاح الربط السحابي من السيرفر (401 Unauthorized). يرجى التأكد من التوكن في لوحة التحكم.")
+					return
+				}
 				addLog(fmt.Sprintf("تنبيه أثناء إرسال دفعة المرتجعات: %v", err))
 				time.Sleep(2 * time.Second)
 				continue
@@ -1355,6 +1449,11 @@ func startContinuousDaemon(cfg *Config) {
 	state.Unlock()
 
 	addLog("تم تفعيل وضع التحديث التلقائي المستمر (يعمل في الخلفية باستمرار).")
+
+	// Trigger initial sync immediately
+	if cfg.Firebird.DBPath != "" && cfg.Cloud.APIKey != "" {
+		go runGentleSync(cfg)
+	}
 
 	interval := cfg.SyncIntervalSeconds
 	if interval <= 0 {
@@ -1428,6 +1527,10 @@ func startInternalServer(cfg *Config) {
 			Language  string `json:"language"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+			oldKey := cfg.Cloud.APIKey
+			newKey := cleanInput(req.APIKey)
+			keyChanged := (newKey != "" && oldKey != "" && newKey != oldKey)
+
 			if req.DBPath != "" {
 				cfg.Firebird.DBPath = cleanInput(req.DBPath)
 			}
@@ -1435,7 +1538,7 @@ func startInternalServer(cfg *Config) {
 				cfg.Firebird.Host = cleanInput(req.Host)
 			}
 			if req.APIKey != "" {
-				cfg.Cloud.APIKey = cleanInput(req.APIKey)
+				cfg.Cloud.APIKey = newKey
 			}
 			if req.SyncMode != "" {
 				cfg.SyncMode = req.SyncMode
@@ -1462,19 +1565,59 @@ func startInternalServer(cfg *Config) {
 			state.AutoStartEnabled = isWindowsAutoStartEnabled()
 			state.Unlock()
 
+			if keyChanged {
+				addLog("تم رصد مفتاح API سحابي جديد! جاري تصفير المؤشرات للبدء من أول سجل للمستودع الجديد...")
+
+				// 1. Signal any running sync to stop
+				state.Lock()
+				state.ShouldPause = true
+				state.Unlock()
+
+				// Wait up to 1.5 seconds for active loop to exit cleanly
+				for i := 0; i < 15; i++ {
+					state.Lock()
+					running := state.IsRunning
+					state.Unlock()
+					if !running {
+						break
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+
+				// 2. Reset cursors in cfg
+				cfg.Cursors.LastInvoiceID = 0
+				cfg.Cursors.LastReceiptID = 0
+				cfg.Cursors.LastReturnID = 0
+
+				// 3. Reset in-memory state
+				state.Lock()
+				state.SyncedInvoices = 0
+				state.SyncedReceipts = 0
+				state.SyncedReturns = 0
+				state.SyncedLedger = 0
+				state.TotalCustomers = 0
+				state.ProgressPercent = 0
+				state.ShouldPause = false
+				state.IsRunning = false
+				state.DaemonRunning = false
+				state.Status = "idle"
+				state.Unlock()
+			}
+
 			saveConfig(cfg)
-			fbOk, cloudOk := checkConnections(cfg)
+			fbOk, cloudOk, cloudMsg := checkConnectionsDetailed(cfg)
 			state.Lock()
 			state.FirebirdConnected = fbOk
 			state.CloudConnected = cloudOk
 			state.Unlock()
+			_ = cloudMsg
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
 	})
 
 	mux.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
-		fbOk, cloudOk := checkConnections(cfg)
+		fbOk, cloudOk, cloudMsg := checkConnectionsDetailed(cfg)
 		state.Lock()
 		state.FirebirdConnected = fbOk
 		state.CloudConnected = cloudOk
@@ -1486,16 +1629,13 @@ func startInternalServer(cfg *Config) {
 			addLog(fmt.Sprintf("فحص الاتصال: تعذر الاتصال بملف الفايربيرد (%s:%d - %s). تأكد من صحة المسار وتشغيل خدمة Firebird.", cfg.Firebird.Host, cfg.Firebird.Port, cfg.Firebird.DBPath))
 		}
 
-		if cloudOk {
-			addLog("فحص الاتصال: تم الاتصال بالسيرفر السحابي بنجاح.")
-		} else {
-			addLog(fmt.Sprintf("فحص الاتصال: تعذر الاتصال بالسيرفر السحابي (%s).", cfg.Cloud.APIURL))
-		}
+		addLog(fmt.Sprintf("فحص الاتصال: %s", cloudMsg))
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]bool{
-			"firebird": fbOk,
-			"cloud":    cloudOk,
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"firebird":      fbOk,
+			"cloud":         cloudOk,
+			"cloud_message": cloudMsg,
 		})
 	})
 
@@ -1532,10 +1672,29 @@ func startInternalServer(cfg *Config) {
 	})
 
 	mux.HandleFunc("/api/reset", func(w http.ResponseWriter, r *http.Request) {
+		// 1. Signal any running sync to stop immediately
+		state.Lock()
+		state.ShouldPause = true
+		state.Unlock()
+
+		// Wait briefly for running loop to exit
+		for i := 0; i < 15; i++ {
+			state.Lock()
+			running := state.IsRunning
+			state.Unlock()
+			if !running {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		// 2. Reset cursors to 0
 		cfg.Cursors.LastInvoiceID = 0
 		cfg.Cursors.LastReceiptID = 0
 		cfg.Cursors.LastReturnID = 0
 		saveConfig(cfg)
+
+		// 3. Reset state
 		state.Lock()
 		state.SyncedInvoices = 0
 		state.SyncedReceipts = 0
@@ -1544,8 +1703,12 @@ func startInternalServer(cfg *Config) {
 		state.TotalCustomers = 0
 		state.ProgressPercent = 0
 		state.ShouldPause = false
+		state.IsRunning = false
+		state.DaemonRunning = false
+		state.Status = "idle"
 		state.Unlock()
-		addLog("تمت إعادة تعيين مؤشرات المزامنة للبدء من أول سجل وتحديث دليل الصيدليات بالكامل.")
+
+		addLog("تمت إعادة تعيين كافة مؤشرات المزامنة إلى (0). سيتم رفع جميع السجلات ودليل الصيدليات بالكامل من أول سجل.")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "reset"})
 	})
@@ -2481,7 +2644,7 @@ const appHTML = `<!DOCTYPE html>
             <div class="input-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
             </div>
-            <input type="text" class="form-input has-icon" id="inPath" placeholder="D:\ORGA_SOFT\DATA\ORGA.GDB" />
+            <input type="text" class="form-input has-icon" id="inPath" placeholder="D:\Orga_Soft\data\ORGA.GDB" value="D:\Orga_Soft\data\ORGA.GDB" />
           </div>
         </div>
 
@@ -2511,6 +2674,14 @@ const appHTML = `<!DOCTYPE html>
             <button type="button" class="input-toggle" onclick="togglePasswordVisibility()" title="عرض / إخفاء التوكن">
               <svg id="eyeIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>
+          </div>
+          <div style="margin-top:6px; font-size:11px; color:#94a3b8; display:flex; align-items:center; gap:6px;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+            <span id="t-lbl-keyhint">عند تغيير هذا المفتاح، سيقوم البرنامج تلقائياً بالربط بالمستودع الجديد وتصفير المؤشرات لرفع كافة السجلات من البداية.</span>
+          </div>
+          <div id="keyChangeNotice" style="display:none; margin-top:8px; padding:8px 12px; background:rgba(37,99,235,0.12); border:1px solid rgba(59,130,246,0.3); border-radius:6px; font-size:12px; color:#93c5fd; align-items:center; gap:8px;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            <span id="t-lbl-keychange">تم تغيير المفتاح: سيتم تصفير المؤشرات ورفع البيانات بالكامل للمستودع الجديد فور الحفظ.</span>
           </div>
         </div>
       </div>
@@ -2940,11 +3111,11 @@ const appHTML = `<!DOCTYPE html>
       const res = await fetch('/api/test');
       const data = await res.json();
       if (data.firebird && data.cloud) {
-        showToast(currentLang === 'ar' ? 'تم الاتصال بالفايربيرد والسحابة بنجاح!' : 'Connected to Firebird and Cloud successfully!');
+        showToast(data.cloud_message || (currentLang === 'ar' ? 'تم الاتصال بالفايربيرد وتأكيد مفتاح السحابة بنجاح!' : 'Connected successfully!'));
       } else if (!data.firebird) {
-        showToast(currentLang === 'ar' ? 'تعذر الاتصال بقاعدة بيانات الفايربيرد - تأكد من المسار والخدمة' : 'Firebird connection failed', 'error');
+        showToast(currentLang === 'ar' ? 'تعذر الاتصال بقاعدة بيانات الفايربيرد - تأكد من صحة المسار' : 'Firebird connection failed', 'error');
       } else if (!data.cloud) {
-        showToast(currentLang === 'ar' ? 'تعذر الاتصال بالسيرفر السحابي' : 'Cloud connection failed', 'error');
+        showToast(data.cloud_message || (currentLang === 'ar' ? 'خطأ في مفتاح الربط السحابي' : 'Cloud connection failed'), 'error');
       }
       fetchStatus();
     }
@@ -2989,11 +3160,12 @@ const appHTML = `<!DOCTYPE html>
         // Fill form fields once if not populated by user
         if (!isInitialized && data.config) {
           const p = document.getElementById('inPath');
-          if (!p.value) p.value = data.config.firebird.db_path || '';
+          if (!p.value) p.value = data.config.firebird.db_path || 'D:\\Orga_Soft\\data\\ORGA.GDB';
           const h = document.getElementById('inHost');
           if (!h.value) h.value = data.config.firebird.host || '127.0.0.1';
           const k = document.getElementById('inKey');
           if (!k.value) k.value = data.config.cloud.api_key || '';
+          initialLoadedKey = data.config.cloud.api_key || '';
           if (data.config.sync_mode) {
             document.getElementById('selMode').value = data.config.sync_mode;
           }
@@ -3025,24 +3197,38 @@ const appHTML = `<!DOCTYPE html>
         if (data.status === 'syncing') {
           stVal.innerText = currentLang === 'ar' ? 'جاري الرفع والمزامنة...' : 'Syncing in Progress...';
           stVal.style.color = '#38bdf8';
-          btnStart.style.display = 'none';
+          // Always show Start button, but disabled while syncing
+          btnStart.style.display = 'inline-flex';
+          btnStart.disabled = true;
+          btnStart.style.opacity = '0.45';
+          btnStart.style.cursor = 'not-allowed';
+          btnStartText.innerText = currentLang === 'ar' ? 'جارى المزامنة...' : 'Syncing...';
           btnPause.style.display = 'inline-flex';
         } else if (data.status === 'paused') {
           stVal.innerText = currentLang === 'ar' ? 'متوقف مؤقتاً' : 'Paused';
           stVal.style.color = '#f59e0b';
           btnStart.style.display = 'inline-flex';
+          btnStart.disabled = false;
+          btnStart.style.opacity = '1';
+          btnStart.style.cursor = '';
           btnStartText.innerText = currentLang === 'ar' ? 'استئناف المزامنة' : 'Resume Sync';
           btnPause.style.display = 'none';
         } else if (data.status === 'success') {
           stVal.innerText = currentLang === 'ar' ? 'مكتمل - مراقبة مستمرة' : 'Completed (Monitoring)';
           stVal.style.color = '#34d399';
           btnStart.style.display = 'inline-flex';
+          btnStart.disabled = false;
+          btnStart.style.opacity = '1';
+          btnStart.style.cursor = '';
           btnStartText.innerText = currentLang === 'ar' ? 'مزامنة الآن' : 'Sync Now';
           btnPause.style.display = 'none';
         } else if (data.status === 'error') {
           stVal.innerText = currentLang === 'ar' ? 'تنبيه في الاتصال' : 'Connection Error';
           stVal.style.color = '#ef4444';
           btnStart.style.display = 'inline-flex';
+          btnStart.disabled = false;
+          btnStart.style.opacity = '1';
+          btnStart.style.cursor = '';
           btnStartText.innerText = currentLang === 'ar' ? 'إعادة المحاولة' : 'Retry Sync';
           btnPause.style.display = 'none';
         } else {
@@ -3050,6 +3236,9 @@ const appHTML = `<!DOCTYPE html>
           stVal.innerText = currentLang === 'ar' ? 'جاهز لبدء المزامنة' : 'Ready to Start';
           stVal.style.color = '#94a3b8';
           btnStart.style.display = 'inline-flex';
+          btnStart.disabled = false;
+          btnStart.style.opacity = '1';
+          btnStart.style.cursor = '';
           btnStartText.innerText = currentLang === 'ar' ? 'حفظ وبدء المزامنة' : 'Save & Start Sync';
           btnPause.style.display = 'none';
         }
@@ -3142,6 +3331,22 @@ const appHTML = `<!DOCTYPE html>
       await fetch('/api/pause', { method: 'POST' });
       showToast(currentLang === 'ar' ? 'تم إيقاف المزامنة مؤقتاً' : 'Sync paused');
       fetchStatus();
+    }
+
+    let initialLoadedKey = '';
+    const inKeyEl = document.getElementById('inKey');
+    if (inKeyEl) {
+      inKeyEl.addEventListener('input', function() {
+        const notice = document.getElementById('keyChangeNotice');
+        const val = this.value.trim();
+        if (notice) {
+          if (initialLoadedKey && val && val !== initialLoadedKey) {
+            notice.style.display = 'flex';
+          } else {
+            notice.style.display = 'none';
+          }
+        }
+      });
     }
 
     fetchStatus();

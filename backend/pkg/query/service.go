@@ -364,3 +364,69 @@ func (s *QueryService) GetRecentProducts(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "products": products})
 }
+
+// GetReceipts returns cash receipts with pagination and date filter
+func (s *QueryService) GetReceipts(c *gin.Context) {
+	tenantID := c.GetString("tenant_id")
+	pharmaCode := c.GetString("pharma_code")
+	dateFilter := c.Query("date")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+
+	ctx := c.Request.Context()
+	var receipts []map[string]interface{}
+
+	err := s.router.ExecInTenant(ctx, tenantID, func(ctx context.Context, schema string, conn *pgxpool.Conn) error {
+		whereClause := "WHERE pharmacy_code = $1"
+		args := []interface{}{pharmaCode}
+
+		if dateFilter != "" {
+			whereClause += " AND receipt_date::date = $2"
+			args = append(args, dateFilter)
+		}
+
+		limitClause := fmt.Sprintf("ORDER BY receipt_date DESC, id DESC LIMIT %d OFFSET %d", limit, offset)
+		query := fmt.Sprintf(`
+			SELECT id, remote_id, receipt_number, receipt_date, amount, payment_method, COALESCE(collector_name, ''), COALESCE(notes, '')
+			FROM %s.cash_receipts 
+			%s 
+			%s
+		`, schema, whereClause, limitClause)
+
+		rows, err := conn.Query(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var id, remoteID, rcptNum, payMethod, collector, notes string
+			var rcptDate time.Time
+			var amount float64
+
+			if err := rows.Scan(&id, &remoteID, &rcptNum, &rcptDate, &amount, &payMethod, &collector, &notes); err != nil {
+				return err
+			}
+
+			receipts = append(receipts, map[string]interface{}{
+				"id":             id,
+				"remote_id":      remoteID,
+				"receipt_number": rcptNum,
+				"receipt_date":   rcptDate.Format(time.RFC3339),
+				"amount":         amount,
+				"payment_method": payMethod,
+				"collector_name": collector,
+				"notes":          notes,
+			})
+		}
+		return nil
+	})
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "receipts": receipts})
+}
+

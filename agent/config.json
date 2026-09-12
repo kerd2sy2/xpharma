@@ -7,8 +7,19 @@
   "firebird": {
     "host": "127.0.0.1",
     "port": 3050,
-    "db_path": "",
+    "db_path": "D:\\Orga_Soft\\data\\ORGA.GDB",
     "user": "SYSDBA",
     "password": "masterkey"
+  },
+  "sync_mode": "gentle",
+  "batch_size": 100,
+  "batch_delay_ms": 1500,
+  "auto_start": true,
+  "auto_sync": true,
+  "language": "ar",
+  "cursors": {
+    "last_invoice_id": 0,
+    "last_receipt_id": 0,
+    "last_return_id": 0
   }
 }
