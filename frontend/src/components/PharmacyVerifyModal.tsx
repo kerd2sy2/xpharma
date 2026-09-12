@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   StyleSheet,
@@ -86,6 +88,12 @@ export default function PharmacyVerifyModal({
 
   if (!warehouse) return null;
 
+  const logoUri = warehouse.logo_url
+    ? warehouse.logo_url.startsWith('http')
+      ? warehouse.logo_url
+      : `https://xpharma.cloud${warehouse.logo_url}`
+    : null;
+
   return (
     <Modal
       visible={visible}
@@ -108,9 +116,17 @@ export default function PharmacyVerifyModal({
 
                 {/* Warehouse Badge Header */}
                 <View style={styles.header}>
-                  <View style={[styles.crestIcon, { backgroundColor: colors.primarySoft }]}>
-                    <Ionicons name="business" size={28} color={colors.primary} />
-                  </View>
+                  {logoUri ? (
+                    <Image
+                      source={{ uri: logoUri }}
+                      style={styles.warehouseLogoImg}
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <View style={[styles.crestIcon, { backgroundColor: colors.primarySoft }]}>
+                      <Ionicons name="business" size={28} color={colors.primary} />
+                    </View>
+                  )}
                   <View style={styles.headerInfo}>
                     <Text style={[styles.warehouseTitle, { color: colors.text }]}>
                       {warehouse.name}
@@ -129,11 +145,25 @@ export default function PharmacyVerifyModal({
                   </Text>
                 </View>
 
-                {/* Error Banner */}
+                {/* Error Banner & Support Contact */}
                 {error && (
                   <View style={styles.errorBox}>
-                    <Ionicons name="alert-circle" size={18} color="#EF4444" />
-                    <Text style={styles.errorText}>{error}</Text>
+                    <View style={styles.errorTextRow}>
+                      <Ionicons name="alert-circle" size={18} color="#EF4444" />
+                      <Text style={styles.errorText}>{error}</Text>
+                    </View>
+                    {warehouse.contact_phone ? (
+                      <TouchableOpacity
+                        style={styles.supportCallBtn}
+                        onPress={() => Linking.openURL(`tel:${warehouse.contact_phone}`)}
+                        activeOpacity={0.85}
+                      >
+                        <Ionicons name="call" size={13} color="#FFFFFF" />
+                        <Text style={styles.supportCallBtnText}>
+                          اتصل بدعم المخزن لحل مشكلة الربط: {warehouse.contact_phone}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
                   </View>
                 )}
 
@@ -212,6 +242,31 @@ export default function PharmacyVerifyModal({
                     </Text>
                   </TouchableOpacity>
                 </View>
+
+                {/* Warehouse Location & Support info if available */}
+                {(warehouse.contact_phone || warehouse.address) && (
+                  <View style={styles.warehouseMetaInfo}>
+                    {warehouse.address ? (
+                      <View style={styles.metaInfoRow}>
+                        <Ionicons name="location-outline" size={14} color={colors.secondaryText} />
+                        <Text style={[styles.metaInfoText, { color: colors.secondaryText }]}>
+                          {warehouse.address}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {warehouse.contact_phone ? (
+                      <TouchableOpacity
+                        style={styles.metaInfoRow}
+                        onPress={() => Linking.openURL(`tel:${warehouse.contact_phone}`)}
+                      >
+                        <Ionicons name="call-outline" size={14} color={colors.primary} />
+                        <Text style={[styles.metaInfoText, { color: colors.primary, fontWeight: '700' }]}>
+                          دعم العملاء للمخزن: {warehouse.contact_phone}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                )}
               </View>
             </KeyboardAvoidingView>
           </TouchableWithoutFeedback>
@@ -288,14 +343,25 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     textAlign: 'right',
   },
+  warehouseLogoImg: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+  },
   errorBox: {
+    backgroundColor: '#FEE2E2',
+    padding: 12,
+    borderRadius: 14,
+    marginBottom: 14,
+    gap: 8,
+  },
+  errorTextRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#FEE2E2',
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 14,
   },
   errorText: {
     color: '#B91C1C',
@@ -303,6 +369,23 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'right',
     fontWeight: '600',
+    lineHeight: 18,
+  },
+  supportCallBtn: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#EF4444',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginTop: 4,
+  },
+  supportCallBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
   },
   form: {
     gap: 14,
@@ -365,5 +448,21 @@ const styles = StyleSheet.create({
   cancelBtnText: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  warehouseMetaInfo: {
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    gap: 6,
+  },
+  metaInfoRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 6,
+  },
+  metaInfoText: {
+    fontSize: 12,
+    textAlign: 'right',
   },
 });

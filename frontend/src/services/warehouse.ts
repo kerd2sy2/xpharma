@@ -7,6 +7,9 @@ export interface Warehouse {
   name: string;
   slug: string;
   status: string;
+  address?: string;
+  contact_phone?: string;
+  logo_url?: string;
   is_linked: boolean;
   linked_pharmacy_id?: string;
   linked_pharmacy_code?: string;

@@ -514,14 +514,22 @@ export default function HomeScreen() {
                     </View>
                   )}
 
-                  <View
-                    style={[
-                      styles.gridIconCircle,
-                      { backgroundColor: visual.softBg, borderColor: visual.softBorder },
-                    ]}
-                  >
-                    <MaterialCommunityIcons name={visual.iconName} size={24} color={visual.accentColor} />
-                  </View>
+                  {item.logo_url ? (
+                    <Image
+                      source={{ uri: item.logo_url.startsWith('http') ? item.logo_url : `https://xpharma.cloud${item.logo_url}` }}
+                      style={{ width: 44, height: 44, borderRadius: 14, backgroundColor: '#FFFFFF' }}
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <View
+                      style={[
+                        styles.gridIconCircle,
+                        { backgroundColor: visual.softBg, borderColor: visual.softBorder },
+                      ]}
+                    >
+                      <MaterialCommunityIcons name={visual.iconName} size={24} color={visual.accentColor} />
+                    </View>
+                  )}
                 </View>
 
                 {/* Warehouse Name */}
@@ -565,15 +573,23 @@ export default function HomeScreen() {
               <View style={styles.luxuryCardContent}>
                 {/* Main Row */}
                 <View style={styles.luxuryHeaderRow}>
-                  {/* Right Side (RTL): Elegant Brand Icon */}
-                  <View
-                    style={[
-                      styles.luxuryIconBox,
-                      { backgroundColor: visual.softBg, borderColor: visual.softBorder },
-                    ]}
-                  >
-                    <MaterialCommunityIcons name={visual.iconName} size={28} color={visual.accentColor} />
-                  </View>
+                  {/* Right Side (RTL): Elegant Brand Icon or Custom Logo */}
+                  {item.logo_url ? (
+                    <Image
+                      source={{ uri: item.logo_url.startsWith('http') ? item.logo_url : `https://xpharma.cloud${item.logo_url}` }}
+                      style={{ width: 52, height: 52, borderRadius: 16, borderWidth: 1, borderColor: visual.softBorder, backgroundColor: '#FFFFFF' }}
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <View
+                      style={[
+                        styles.luxuryIconBox,
+                        { backgroundColor: visual.softBg, borderColor: visual.softBorder },
+                      ]}
+                    >
+                      <MaterialCommunityIcons name={visual.iconName} size={28} color={visual.accentColor} />
+                    </View>
+                  )}
 
                   {/* Center: Details */}
                   <View style={styles.luxuryTitleCol}>
