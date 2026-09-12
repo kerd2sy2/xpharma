@@ -35,7 +35,7 @@ import { NavGroup } from '@/types';
  */
 export const navGroups: NavGroup[] = [
   {
-    label: 'مركز إدارة XPharma',
+    label: 'منصة إكس فارما',
     items: [
       {
         title: 'نظرة عامة',
@@ -54,7 +54,7 @@ export const navGroups: NavGroup[] = [
         items: []
       },
       {
-        title: 'قواعد البيانات المنسوخة',
+        title: 'قواعد البيانات والتزامن',
         url: '/dashboard/databases',
         icon: 'database',
         isActive: false,
@@ -62,15 +62,7 @@ export const navGroups: NavGroup[] = [
         items: []
       },
       {
-        title: 'الفواتير واشتراكات إنستاباي',
-        url: '/dashboard/billing-review',
-        icon: 'billing',
-        isActive: false,
-        shortcut: ['b', 'b'],
-        items: []
-      },
-      {
-        title: 'مراقبة الوكلاء والتزامن',
+        title: 'مراقبة الوكلاء والخدمات',
         url: '/dashboard/monitoring',
         icon: 'activity',
         isActive: false,
@@ -80,25 +72,10 @@ export const navGroups: NavGroup[] = [
     ]
   },
   {
-    label: 'إدارة النظام',
+    label: 'الصيادلة والاشتراكات',
     items: [
       {
-        title: 'مساحات العمل',
-        url: '/dashboard/workspaces',
-        icon: 'workspace',
-        isActive: false,
-        items: []
-      },
-      {
-        title: 'فرق العمل',
-        url: '/dashboard/workspaces/team',
-        icon: 'teams',
-        isActive: false,
-        items: [],
-        access: { requireOrg: true }
-      },
-      {
-        title: 'المستخدمين',
+        title: 'الصيادلة والمستخدمين',
         url: '/dashboard/users',
         icon: 'teams',
         shortcut: ['u', 'u'],
@@ -106,96 +83,18 @@ export const navGroups: NavGroup[] = [
         items: []
       },
       {
-        title: 'لوحة المهام (كانبان)',
-        url: '/dashboard/kanban',
-        icon: 'kanban',
-        shortcut: ['k', 'k'],
+        title: 'الفواتير واشتراكات إنستاباي',
+        url: '/dashboard/billing-review',
+        icon: 'billing',
         isActive: false,
-        items: []
-      },
-      {
-        title: 'المحادثات',
-        url: '/dashboard/chat',
-        icon: 'chat',
-        shortcut: ['c', 'c'],
-        isActive: false,
-        items: []
-      },
-      {
-        title: 'المساعد الذكي (AI Chat)',
-        url: '/dashboard/ai-chat',
-        icon: 'sparkles',
-        shortcut: ['a', 'i'],
-        isActive: false,
+        shortcut: ['b', 'b'],
         items: []
       }
     ]
   },
   {
-    label: 'عناصر الواجهة',
+    label: 'الحساب والنظام',
     items: [
-      {
-        title: 'النماذج والاستمارات',
-        url: '#',
-        icon: 'forms',
-        isActive: true,
-        items: [
-          {
-            title: 'نموذج بسيط',
-            url: '/dashboard/forms/basic',
-            icon: 'forms',
-            shortcut: ['f', 'f']
-          },
-          {
-            title: 'نموذج متعدد الخطوات',
-            url: '/dashboard/forms/multi-step',
-            icon: 'forms'
-          },
-          {
-            title: 'نافذة جانبية وحوار',
-            url: '/dashboard/forms/sheet-form',
-            icon: 'forms'
-          },
-          {
-            title: 'أنماط متقدمة',
-            url: '/dashboard/forms/advanced',
-            icon: 'forms'
-          }
-        ]
-      },
-      {
-        title: 'ريأكت كويري',
-        url: '/dashboard/react-query',
-        icon: 'code',
-        isActive: false,
-        items: []
-      },
-      {
-        title: 'الأيقونات',
-        url: '/dashboard/elements/icons',
-        icon: 'palette',
-        isActive: false,
-        items: []
-      }
-    ]
-  },
-  {
-    label: 'الحساب والإعدادات',
-    items: [
-      {
-        title: 'العضوية المميزة',
-        url: '#',
-        icon: 'pro',
-        isActive: false,
-        items: [
-          {
-            title: 'ميزات حصرية',
-            url: '/dashboard/exclusive',
-            icon: 'exclusive',
-            shortcut: ['e', 'e']
-          }
-        ]
-      },
       {
         title: 'الحساب الشخصي',
         url: '#',
@@ -206,19 +105,13 @@ export const navGroups: NavGroup[] = [
             title: 'الملف الشخصي',
             url: '/dashboard/profile',
             icon: 'profile',
-            shortcut: ['m', 'm']
+            shortcut: ['p', 'r']
           },
           {
-            title: 'الإشعارات',
+            title: 'الإشعارات والتنبيهات',
             url: '/dashboard/notifications',
             icon: 'notification',
             shortcut: ['n', 'n']
-          },
-          {
-            title: 'الاشتراكات والمدفوعات',
-            url: '/dashboard/billing-review',
-            icon: 'billing',
-            shortcut: ['b', 'b']
           },
           {
             title: 'تسجيل الخروج',
