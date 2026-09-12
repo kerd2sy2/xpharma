@@ -353,28 +353,8 @@ export default function HomeScreen() {
     };
   };
 
-  // Gradient palettes matching the Apple App Store banner screenshot
-  const getWarehouseGradient = (wh: Warehouse): [string, string, string, string] => {
-    const name = (wh.name || '').toLowerCase();
-    if (name.includes('tabarak') || name.includes('تبارك')) {
-      // Tabarak Pharma: Charcoal Slate -> Peacock Teal -> Oceanic Cyan -> Forest Emerald (Exact replica of user screenshot!)
-      return ['#161B22', '#0A4B6E', '#0284C7', '#059669'];
-    }
-    if (name.includes('sheikh') || name.includes('الشيخ')) {
-      // Sheikh: Deep Charcoal -> Royal Purple -> Violet -> Deep Indigo
-      return ['#181424', '#311756', '#6D28D9', '#3730A3'];
-    }
-    if (name.includes('عميرة') || name.includes('abo3mara')) {
-      // Abo Emira: Deep Slate -> Midnight Blue -> Cobalt Blue -> Cyan
-      return ['#0F172A', '#1E3A8A', '#2563EB', '#0284C7'];
-    }
-    if (name.includes('x') || name.includes('إكس')) {
-      // XPharma: Deep Plum -> Purple -> Electric Violet -> Bright Cyan
-      return ['#180A28', '#4C1D95', '#4338CA', '#06B6D4'];
-    }
-    // Universal Medical Banner (charcoal -> deep teal -> azure blue -> emerald)
-    return ['#181F26', '#0E4F6D', '#0284C7', '#0F766E'];
-  };
+  // Fallback neutral gradient when a warehouse does not have an uploaded logo yet
+  const defaultFallbackGradient: [string, string, string] = ['#151922', '#222A38', '#181D26'];
 
   // Handle Android hardware/gesture back button:
   // Close open modals if any, and if on main screen, exit the app
@@ -514,7 +494,6 @@ export default function HomeScreen() {
         }
         renderItem={({ item }) => {
           const visual = getWarehouseVisual(item);
-          const gradientColors = getWarehouseGradient(item);
           const logoUri = item.logo_url
             ? item.logo_url.startsWith('http')
               ? item.logo_url
@@ -528,12 +507,30 @@ export default function HomeScreen() {
                 onPress={() => handleWarehousePress(item)}
                 activeOpacity={0.9}
               >
-                <LinearGradient
-                  colors={gradientColors}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.gridGradient}
-                >
+                {/* 1. Solid Dark Foundation */}
+                <View style={[StyleSheet.absoluteFill, { backgroundColor: '#13161D' }]} />
+
+                {/* 2. Automatic Ambient Logo Blur (Derives card background directly from the logo) */}
+                {logoUri ? (
+                  <Image
+                    source={{ uri: logoUri }}
+                    style={styles.ambientBlurImage}
+                    blurRadius={Platform.select({ ios: 50, android: 25, default: 40 })}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <LinearGradient
+                    colors={defaultFallbackGradient}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={StyleSheet.absoluteFill}
+                  />
+                )}
+
+                {/* 3. Subtle Contrast Tint */}
+                <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(10, 14, 22, 0.35)' }]} />
+
+                <View style={styles.gridContentContainer}>
                   {/* Top Status & Icon Row */}
                   <View style={styles.gridCardTopRow}>
                     {item.is_linked ? (
@@ -579,95 +576,123 @@ export default function HomeScreen() {
                       color="rgba(255, 255, 255, 0.7)"
                     />
                   </View>
-                </LinearGradient>
+                </View>
               </TouchableOpacity>
             );
           }
 
-          // Default: App Store Panoramic Banner Card (Identical to requested design!)
+          // Default: App Store Panoramic Banner Card (Automatic dynamic logo-matched background!)
           return (
             <TouchableOpacity
               style={styles.appStoreBannerCard}
               onPress={() => handleWarehousePress(item)}
               activeOpacity={0.9}
             >
+              {/* 1. Solid Dark Foundation */}
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: '#13161D' }]} />
+
+              {/* 2. Automatic Ambient Logo Blur (Derives card background directly from the logo) */}
+              {logoUri ? (
+                <Image
+                  source={{ uri: logoUri }}
+                  style={styles.ambientBlurImage}
+                  blurRadius={Platform.select({ ios: 65, android: 25, default: 45 })}
+                  resizeMode="cover"
+                />
+              ) : (
+                <LinearGradient
+                  colors={defaultFallbackGradient}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={StyleSheet.absoluteFill}
+                />
+              )}
+
+              {/* 3. Contrast & Vignette Overlay (Gives exact App Store atmospheric depth & crystal-clear text contrast) */}
               <LinearGradient
-                colors={gradientColors}
-                start={{ x: 0, y: 0.15 }}
-                end={{ x: 1, y: 0.85 }}
-                style={styles.bannerGradient}
-              >
-                {/* Subtle top ambient sheen */}
-                <View style={styles.bannerSheen} />
+                colors={['rgba(10, 14, 22, 0.46)', 'rgba(10, 14, 22, 0.16)', 'rgba(10, 14, 22, 0.56)']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={StyleSheet.absoluteFill}
+              />
+              <LinearGradient
+                colors={['rgba(0, 0, 0, 0.05)', 'rgba(0, 0, 0, 0.35)']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 0, y: 1 }}
+                style={StyleSheet.absoluteFill}
+              />
 
-                <View style={styles.bannerContentRow}>
-                  {/* Left indicator arrow (in RTL) */}
-                  <View style={styles.bannerLeftArrowCol}>
-                    <Ionicons
-                      name="chevron-back"
-                      size={18}
-                      color="rgba(255, 255, 255, 0.55)"
-                    />
-                  </View>
+              {/* 4. Subtle Top Ambient Sheen */}
+              <View style={styles.bannerSheen} />
 
-                  {/* Center Details Column */}
-                  <View style={styles.bannerDetailsCol}>
-                    {/* Warehouse Name */}
-                    <Text style={styles.bannerTitleText} numberOfLines={1}>
-                      {item.name}
-                    </Text>
+              {/* 5. Card Content */}
+              <View style={styles.bannerContentRow}>
+                {/* Left indicator arrow (in RTL) */}
+                <View style={styles.bannerLeftArrowCol}>
+                  <Ionicons
+                    name="chevron-back"
+                    size={18}
+                    color="rgba(255, 255, 255, 0.6)"
+                  />
+                </View>
 
-                    {/* Category / Subtitle (Like 'Medical' in App Store) */}
-                    <Text style={styles.bannerCategoryText} numberOfLines={1}>
-                      {item.address ? `مستودع أدوية • ${item.address}` : 'مستودع أدوية معتمد • Medical'}
-                    </Text>
+                {/* Center Details Column */}
+                <View style={styles.bannerDetailsCol}>
+                  {/* Warehouse Name */}
+                  <Text style={styles.bannerTitleText} numberOfLines={1}>
+                    {item.name}
+                  </Text>
 
-                    {/* Small Meta Line (Like 'Only for iPhone • Free...') */}
-                    <Text style={styles.bannerMetaText} numberOfLines={1}>
-                      {item.contact_phone
-                        ? `📞 دعم الربط: ${item.contact_phone} • ربط فوري`
-                        : 'ربط مباشر عبر النظام • تحديث لحظي للفواتير'}
-                    </Text>
+                  {/* Category / Subtitle (Like 'Medicina' / 'Trivia' in the App Store) */}
+                  <Text style={styles.bannerCategoryText} numberOfLines={1}>
+                    {item.address ? `مستودع أدوية • ${item.address}` : 'مستودع أدوية معتمد • Medical'}
+                  </Text>
 
-                    {/* iOS App Store Pill Button (Like 'Share' / 'GET') */}
-                    <View style={styles.bannerPillsRow}>
-                      {item.is_linked ? (
-                        <View style={styles.appStorePillLinked}>
-                          <Ionicons name="checkmark-circle" size={13} color="#34D399" />
-                          <Text style={styles.appStorePillTextLinked}>تم الربط</Text>
-                        </View>
-                      ) : (
-                        <View style={styles.appStorePillUnlinked}>
-                          <Ionicons name="link" size={12} color="#FFFFFF" />
-                          <Text style={styles.appStorePillTextUnlinked}>ربط الآن</Text>
-                        </View>
-                      )}
+                  {/* Small Meta Line */}
+                  <Text style={styles.bannerMetaText} numberOfLines={1}>
+                    {item.contact_phone
+                      ? `📞 دعم الربط: ${item.contact_phone} • ربط فوري`
+                      : 'ربط مباشر عبر النظام • متوافق مع الصيدلية'}
+                  </Text>
 
-                      <View style={styles.appStoreSecondaryPill}>
-                        <Text style={styles.appStoreSecondaryPillText}>
-                          {item.is_linked ? 'فتح اللوحة' : 'فحص الكود'}
-                        </Text>
-                        <Ionicons name="arrow-back" size={11} color="rgba(255, 255, 255, 0.75)" />
+                  {/* App Store Pill Button (Like 'Compartir' / 'Share') */}
+                  <View style={styles.bannerPillsRow}>
+                    {item.is_linked ? (
+                      <View style={styles.appStorePillLinked}>
+                        <Ionicons name="checkmark-circle" size={13} color="#34D399" />
+                        <Text style={styles.appStorePillTextLinked}>تم الربط</Text>
                       </View>
-                    </View>
-                  </View>
-
-                  {/* Right: iOS App Icon Squircle */}
-                  <View style={styles.appIconSquircle}>
-                    {logoUri ? (
-                      <Image
-                        source={{ uri: logoUri }}
-                        style={styles.appIconImg}
-                        resizeMode="contain"
-                      />
                     ) : (
-                      <View style={[styles.appIconFallback, { backgroundColor: visual.softBg }]}>
-                        <MaterialCommunityIcons name={visual.iconName} size={32} color={visual.accentColor} />
+                      <View style={styles.appStorePillUnlinked}>
+                        <Ionicons name="link" size={12} color="#FFFFFF" />
+                        <Text style={styles.appStorePillTextUnlinked}>ربط الآن</Text>
                       </View>
                     )}
+
+                    <View style={styles.appStoreSecondaryPill}>
+                      <Text style={styles.appStoreSecondaryPillText}>
+                        {item.is_linked ? 'فتح اللوحة' : 'فحص الكود'}
+                      </Text>
+                      <Ionicons name="arrow-back" size={11} color="rgba(255, 255, 255, 0.75)" />
+                    </View>
                   </View>
                 </View>
-              </LinearGradient>
+
+                {/* Right: iOS App Icon Squircle */}
+                <View style={styles.appIconSquircle}>
+                  {logoUri ? (
+                    <Image
+                      source={{ uri: logoUri }}
+                      style={styles.appIconImg}
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <View style={[styles.appIconFallback, { backgroundColor: visual.softBg }]}>
+                      <MaterialCommunityIcons name={visual.iconName} size={32} color={visual.accentColor} />
+                    </View>
+                  )}
+                </View>
+              </View>
             </TouchableOpacity>
           );
         }}
@@ -1015,11 +1040,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // App Store Panoramic Banner Card (Requested Design)
+  // App Store Panoramic Banner Card (Automatic dynamic logo-derived background)
   appStoreBannerCard: {
     borderRadius: 22,
     marginBottom: 14,
     overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#13161D',
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.22,
@@ -1028,10 +1055,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.15)',
   },
-  bannerGradient: {
-    padding: 14,
-    paddingHorizontal: 16,
-    position: 'relative',
+  ambientBlurImage: {
+    ...StyleSheet.absoluteFill,
+    width: '100%',
+    height: '100%',
+    transform: [{ scale: 1.8 }],
+    opacity: 0.88,
   },
   bannerSheen: {
     position: 'absolute',
@@ -1044,6 +1073,8 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 22,
   },
   bannerContentRow: {
+    padding: 14,
+    paddingHorizontal: 16,
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 14,
@@ -1168,6 +1199,8 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     marginBottom: CARD_GAP,
     overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#13161D',
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.18,
@@ -1176,7 +1209,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.12)',
   },
-  gridGradient: {
+  gridContentContainer: {
     padding: 12,
     minHeight: 145,
     justifyContent: 'space-between',
