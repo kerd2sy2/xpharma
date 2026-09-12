@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Dimensions, Platform, StatusBar, StyleSheet } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import Animated, { FadeOut } from 'react-native-reanimated';
 import LottieView from 'lottie-react-native';
+
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('screen');
 
 export function AnimatedSplashOverlay() {
   const [visible, setVisible] = useState(true);
@@ -15,66 +17,44 @@ export function AnimatedSplashOverlay() {
   const handleFinish = () => {
     setTimeout(() => {
       setVisible(false);
-    }, 400);
+    }, 250);
   };
 
   if (!visible) return null;
 
   return (
-    <Animated.View exiting={FadeOut.duration(400)} style={styles.splashOverlay}>
-      <View style={styles.centerBox}>
-        <View style={styles.lottieContainer}>
-          <LottieView
-            source={require('@/assets/lottie/letter_x.json')}
-            autoPlay
-            loop={false}
-            onAnimationFinish={handleFinish}
-            style={styles.lottie}
-            resizeMode="contain"
-          />
-        </View>
-
-        <Text style={styles.brandTitle}>إكس فارما</Text>
-        <Text style={styles.brandSubtitle}>شبكة ربط الصيدليات والمخازن</Text>
-      </View>
+    <Animated.View exiting={FadeOut.duration(350)} style={styles.splashOverlay}>
+      <StatusBar
+        barStyle="light-content"
+        backgroundColor="#0E051D"
+        translucent={Platform.OS === 'android'}
+      />
+      <LottieView
+        source={require('@/assets/lottie/letter_x.json')}
+        autoPlay
+        loop={false}
+        onAnimationFinish={handleFinish}
+        style={styles.fullscreenLottie}
+        resizeMode="cover"
+      />
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
   splashOverlay: {
-    ...StyleSheet.absoluteFill,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: '#0E051D',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 9999,
+    zIndex: 99999,
   },
-  centerBox: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  lottieContainer: {
-    width: 180,
-    height: 180,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  lottie: {
-    width: 180,
-    height: (180 * 1920) / 1280,
-  },
-  brandTitle: {
-    fontSize: 28,
-    fontWeight: '900',
-    color: '#F8FAFC',
-    letterSpacing: 0.5,
-    marginTop: 8,
-  },
-  brandSubtitle: {
-    fontSize: 13,
-    color: '#00d780',
-    fontWeight: '700',
+  fullscreenLottie: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
   },
 });

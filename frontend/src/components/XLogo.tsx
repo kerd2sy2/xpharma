@@ -6,6 +6,7 @@ interface XLogoProps {
   size?: number;
   width?: number;
   height?: number;
+  resizeMode?: 'contain' | 'cover' | 'center';
   autoPlay?: boolean;
   loop?: boolean;
   style?: StyleProp<ViewStyle>;
@@ -16,28 +17,29 @@ export default function XLogo({
   size = 38,
   width: customWidth,
   height: customHeight,
+  resizeMode = 'contain',
   autoPlay = true,
   loop = true,
   style,
   onAnimationFinish,
 }: XLogoProps) {
-  // letter_x aspect ratio is 1280 : 1920 (2:3)
-  const containerW = customWidth || size;
-  const containerH = customHeight || size;
-  const animH = customHeight ? customHeight : (containerW * 1920) / 1280;
+  const containerWidth = customWidth ?? size;
+  const containerHeight = customHeight ?? size;
+  const lottieWidth = customWidth ?? size;
+  const lottieHeight = customHeight ?? (size * 1920) / 1280;
 
   return (
-    <View style={[styles.container, { width: containerW, height: containerH }, style]}>
+    <View style={[styles.container, { width: containerWidth, height: containerHeight }, style]}>
       <LottieView
         source={require('@/assets/lottie/letter_x.json')}
         autoPlay={autoPlay}
         loop={loop}
         onAnimationFinish={onAnimationFinish}
         style={{
-          width: containerW,
-          height: animH,
+          width: lottieWidth,
+          height: lottieHeight,
         }}
-        resizeMode="contain"
+        resizeMode={resizeMode}
       />
     </View>
   );

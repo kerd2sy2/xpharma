@@ -56,7 +56,8 @@ export default function LoginScreen() {
         <View style={styles.logoSection}>
           <XLogo
             width={width}
-            height={Math.min(height * 0.65, 540)}
+            height={Math.min(height * 0.7, 560)}
+            resizeMode="contain"
             loop={true}
           />
         </View>
@@ -82,7 +83,7 @@ export default function LoginScreen() {
                 styles.socialButton,
                 {
                   backgroundColor: themeColors.googleBtnBg,
-                  borderColor: themeColors.googleBorder,
+                  borderColor: isDark ? '#3f0082' : '#E0D7F0',
                 },
                 styles.shadow,
               ]}
@@ -91,7 +92,7 @@ export default function LoginScreen() {
               activeOpacity={0.85}
             >
               {isAuthenticating ? (
-                <ActivityIndicator color={themeColors.accent} size="small" />
+                <ActivityIndicator color={themeColors.primary} size="small" />
               ) : (
                 <>
                   <View style={styles.buttonIcon}>
@@ -185,14 +186,15 @@ const styles = StyleSheet.create({
   actionSection: {
     width: '100%',
     paddingHorizontal: 24,
+    paddingBottom: 20,
     alignItems: 'center',
   },
   socialButton: {
     width: '100%',
     maxWidth: 380,
     height: 56,
-    borderRadius: 16,
-    borderWidth: 1,
+    borderRadius: 18,
+    borderWidth: 1.5,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -202,9 +204,9 @@ const styles = StyleSheet.create({
   shadow: {
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
+    shadowOpacity: 0.1,
     shadowRadius: 12,
-    elevation: 3,
+    elevation: 4,
   },
   buttonIcon: {
     width: 28,
