@@ -16,6 +16,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
+import SubscriptionModal from '@/components/SubscriptionModal';
 import XLogo from '@/components/XLogo';
 import {
   fetchPharmacyBalance,
@@ -34,6 +35,11 @@ import {
   VerifyPharmacyResult,
   Warehouse,
 } from '@/services/warehouse';
+import {
+  checkCanAddPharmacy,
+  getSubscriptionStatus,
+  registerGlobalPharmacy,
+} from '@/services/subscription';
 
 interface WarehousePortalScreenProps {
   warehouse: Warehouse;
@@ -66,6 +72,12 @@ export default function WarehousePortalScreen({
   const [currentPharmacyName, setCurrentPharmacyName] = useState(pharmacyName);
   const [pharmacies, setPharmacies] = useState<LinkedPharmacyAccount[]>([]);
   const [showAddModal, setShowAddModal] = useState(false);
+
+  // Subscription & Trial state
+  const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
+  const [subscriptionReason, setSubscriptionReason] = useState<string | undefined>();
+  const [subscriptionRequiredPlan, setSubscriptionRequiredPlan] = useState<number>(2);
+  const [isTrialExpired, setIsTrialExpired] = useState(false);
 
   // Animation values for the flying paper effect
   const pan = useRef(new Animated.ValueXY()).current;
@@ -103,28 +115,44 @@ export default function WarehousePortalScreen({
   // Handle Android hardware/gesture back button: step back hierarchically
   useEffect(() => {
     const onBackPress = () => {
-      // 1. If add pharmacy modal is open, close it
+      // 1. If subscription modal is open and trial not strictly expired, close it
+      if (showSubscriptionModal && !isTrialExpired) {
+        setShowSubscriptionModal(false);
+        return true;
+      }
+      // 2. If add pharmacy modal is open, close it
       if (showAddModal) {
         setShowAddModal(false);
         return true;
       }
-      // 2. If inside a section (purchases/returns/etc.), go back to portal main view
+      // 3. If inside a section (purchases/returns/etc.), go back to portal main view
       if (selectedSection) {
         setSelectedSection(null);
         return true;
       }
-      // 3. Otherwise, go back to main warehouses screen
+      // 4. Otherwise, go back to main warehouses screen
       onBack();
       return true;
     };
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => subscription.remove();
-  }, [showAddModal, selectedSection, onBack]);
+  }, [showSubscriptionModal, isTrialExpired, showAddModal, selectedSection, onBack]);
 
   // Initialize and load saved pharmacies for this warehouse
   useEffect(() => {
     const initPharmacies = async () => {
+      if (pharmacyCode && pharmacyName) {
+        await registerGlobalPharmacy(pharmacyCode, pharmacyName);
+      }
+      const subStatus = await getSubscriptionStatus();
+      if (subStatus.isTrialExpired) {
+        setIsTrialExpired(true);
+        setSubscriptionReason('انتهت الفترة التجريبية (7 أيام). يرجى الاشتراك للاستمرار.');
+        setSubscriptionRequiredPlan(Math.max(1, subStatus.linkedPharmaciesCount));
+        setShowSubscriptionModal(true);
+      }
+
       const list = await getWarehousePharmacies(warehouse.id);
       if (list.length === 0 && token) {
         const initialAccount: LinkedPharmacyAccount = {
@@ -141,7 +169,7 @@ export default function WarehousePortalScreen({
       }
     };
     initPharmacies();
-  }, [warehouse.id, token]);
+  }, [warehouse.id, token, pharmacyCode, pharmacyName]);
 
   const loadData = async (targetToken = currentToken, showLoader = true) => {
     if (showLoader) setLoading(true);
@@ -265,9 +293,23 @@ export default function WarehousePortalScreen({
     []
   );
 
+  // Check if pharmacist can add a new pharmacy before opening modal
+  const handlePressAddPharmacy = async () => {
+    const check = await checkCanAddPharmacy();
+    if (!check.canAdd) {
+      setSubscriptionReason(check.reason);
+      setSubscriptionRequiredPlan(check.requiredPlan || 2);
+      setIsTrialExpired(check.isTrialExpired);
+      setShowSubscriptionModal(true);
+      return;
+    }
+    setShowAddModal(true);
+  };
+
   // When a new pharmacy is verified and added
   const handleAddSuccess = async (result: VerifyPharmacyResult) => {
     if (!result.token) return;
+    await registerGlobalPharmacy(result.pharmacy_code || '', result.pharmacy_name || '');
     setShowAddModal(false);
     setLoaderAnimKey((k) => k + 1);
     setIsSwitchingPharmacy(true);
@@ -724,10 +766,12 @@ export default function WarehousePortalScreen({
         >
           <Ionicons name="arrow-forward" size={24} color={colors.text} />
         </TouchableOpacity>
-        <Text style={[styles.topHeaderTitle, { color: colors.text }]}>حساب الصيدلية</Text>
+        <Text style={[styles.topHeaderTitle, { color: colors.text }]} numberOfLines={1}>
+          {warehouse.name || 'المخزن'}
+        </Text>
         <TouchableOpacity
           style={styles.headerAddBtn}
-          onPress={() => setShowAddModal(true)}
+          onPress={handlePressAddPharmacy}
           activeOpacity={0.6}
         >
           <Ionicons name="add" size={26} color={colors.primary} />
@@ -786,6 +830,19 @@ export default function WarehousePortalScreen({
         onSuccess={handleAddSuccess}
       />
 
+      {/* نافذة خطط وباقات الاشتراك والفترة التجريبية */}
+      <SubscriptionModal
+        visible={showSubscriptionModal}
+        onClose={() => setShowSubscriptionModal(false)}
+        reason={subscriptionReason}
+        isTrialExpired={isTrialExpired}
+        suggestedPlan={subscriptionRequiredPlan}
+        onSubscribed={(plan) => {
+          setShowSubscriptionModal(false);
+          setIsTrialExpired(false);
+        }}
+      />
+
       {/* شاشة اللودر بحجم الصفحة بالكامل زي صفحة البداية بالظبط */}
       {(isSwitchingPharmacy || loading) && (
         <View style={[styles.fullScreenLogoOverlay, { top: -topInset, bottom: -insets.bottom }]}>
@@ -826,6 +883,8 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '800',
     textAlign: 'center',
+    flex: 1,
+    marginHorizontal: 8,
   },
   headerAddBtn: {
     padding: 6,

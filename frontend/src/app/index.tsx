@@ -33,9 +33,15 @@ import {
   Warehouse,
 } from '@/services/warehouse';
 import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
+import SubscriptionModal from '@/components/SubscriptionModal';
 import WarehousePortalScreen from '@/screens/WarehousePortalScreen';
 import XLogo, { XLogoHandle } from '@/components/XLogo';
 import { LinearGradient } from 'expo-linear-gradient';
+import {
+  getSubscriptionStatus,
+  registerGlobalPharmacy,
+  SubscriptionStatus,
+} from '@/services/subscription';
 
 const { width } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -73,6 +79,13 @@ export default function HomeScreen() {
 
   // Profile Bottom Sheet Modal State
   const [profileModalVisible, setProfileModalVisible] = useState(false);
+
+  // Subscription & Trial Modal State
+  const [subscriptionModalVisible, setSubscriptionModalVisible] = useState(false);
+  const [subscriptionReason, setSubscriptionReason] = useState<string | undefined>();
+  const [subscriptionRequiredPlan, setSubscriptionRequiredPlan] = useState<number>(2);
+  const [isTrialExpired, setIsTrialExpired] = useState(false);
+  const [subscriptionStatusInfo, setSubscriptionStatusInfo] = useState<SubscriptionStatus | null>(null);
 
   // Verification Modal State
   const [verifyModalVisible, setVerifyModalVisible] = useState(false);
@@ -217,14 +230,36 @@ export default function HomeScreen() {
 
   useEffect(() => {
     loadWarehouses();
+    const checkTrial = async () => {
+      const status = await getSubscriptionStatus();
+      setSubscriptionStatusInfo(status);
+      if (status.isTrialExpired) {
+        setIsTrialExpired(true);
+        setSubscriptionReason('انتهت الفترة التجريبية (7 أيام). يرجى الاشتراك للاستمرار في فتح المخازن.');
+        setSubscriptionRequiredPlan(Math.max(1, status.linkedPharmaciesCount));
+      }
+    };
+    checkTrial();
   }, [user?.id]);
 
   const onRefresh = () => {
     setRefreshing(true);
     loadWarehouses();
+    getSubscriptionStatus().then(setSubscriptionStatusInfo);
   };
 
   const handleWarehousePress = async (wh: Warehouse) => {
+    // 1. Check if trial has expired
+    const subStatus = await getSubscriptionStatus();
+    setSubscriptionStatusInfo(subStatus);
+    if (subStatus.isTrialExpired) {
+      setSubscriptionReason('انتهت الفترة التجريبية (7 أيام). يرجى الاشتراك للاستمرار في فتح المخازن.');
+      setSubscriptionRequiredPlan(Math.max(1, subStatus.linkedPharmaciesCount));
+      setIsTrialExpired(true);
+      setSubscriptionModalVisible(true);
+      return;
+    }
+
     let session = await getPharmacySession(wh.id);
 
     // If session exists locally OR warehouse is marked linked:
@@ -232,6 +267,10 @@ export default function HomeScreen() {
       const activeToken = session?.token || wh.pharmacy_token || '';
       const activeCode = session?.pharmacy_code || wh.linked_pharmacy_code || '';
       const activeName = session?.pharmacy_name || wh.linked_pharmacy_name || '';
+
+      if (activeCode && activeName) {
+        await registerGlobalPharmacy(activeCode, activeName);
+      }
 
       setActivePortal({
         warehouse: wh,
@@ -247,6 +286,10 @@ export default function HomeScreen() {
 
   const handleVerificationSuccess = async (result: VerifyPharmacyResult) => {
     if (!selectedWarehouseForModal || !result.token) return;
+
+    await registerGlobalPharmacy(result.pharmacy_code || '', result.pharmacy_name || '');
+    const updatedStatus = await getSubscriptionStatus();
+    setSubscriptionStatusInfo(updatedStatus);
 
     setVerifyModalVisible(false);
 
@@ -399,6 +442,10 @@ export default function HomeScreen() {
         // Handled by WarehousePortalScreen
         return false;
       }
+      if (subscriptionModalVisible && !isTrialExpired) {
+        setSubscriptionModalVisible(false);
+        return true;
+      }
       if (requestModalVisible) {
         setRequestModalVisible(false);
         return true;
@@ -423,7 +470,15 @@ export default function HomeScreen() {
 
     const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => sub.remove();
-  }, [activePortal, requestModalVisible, isSearchActive, verifyModalVisible, profileModalVisible]);
+  }, [
+    activePortal,
+    subscriptionModalVisible,
+    isTrialExpired,
+    requestModalVisible,
+    isSearchActive,
+    verifyModalVisible,
+    profileModalVisible,
+  ]);
 
   if (activePortal) {
     return (
@@ -790,7 +845,36 @@ export default function HomeScreen() {
                   {user?.email || 'حساب مفعل'}
                 </Text>
 
-                {/* Note: "صيدلية معتمدة" badge was removed per user request */}
+                {/* Subscription & Trial Status Card */}
+                <TouchableOpacity
+                  style={[styles.profileSubCard, { backgroundColor: colors.primarySoft, borderColor: colors.border }]}
+                  onPress={() => {
+                    setProfileModalVisible(false);
+                    setSubscriptionModalVisible(true);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.profileSubRight}>
+                    <View style={[styles.profileSubIconCircle, { backgroundColor: '#FFFFFF' }]}>
+                      <Ionicons name="sparkles" size={18} color="#F59E0B" />
+                    </View>
+                    <View style={styles.profileSubTextCol}>
+                      <Text style={[styles.profileSubTitle, { color: colors.primary }]}>
+                        {subscriptionStatusInfo?.isSubscribed
+                          ? `باقة نشطة: ${subscriptionStatusInfo.subscribedPlan} صيدليات`
+                          : subscriptionStatusInfo?.isTrialExpired
+                          ? 'انتهت الفترة التجريبية (7 أيام)'
+                          : `الفترة التجريبية: صيدلية واحدة (${subscriptionStatusInfo?.daysRemaining ?? 7} أيام متبقية)`}
+                      </Text>
+                      <Text style={[styles.profileSubSubtitle, { color: colors.secondaryText }]}>
+                        {subscriptionStatusInfo?.isSubscribed
+                          ? 'اشتراك مفعل عبر كل المخازن'
+                          : 'اضغط لعرض خطط وباقات الاشتراك الشهري'}
+                      </Text>
+                    </View>
+                  </View>
+                  <Ionicons name="chevron-back" size={16} color={colors.primary} />
+                </TouchableOpacity>
 
                 <View style={[styles.profileDivider, { backgroundColor: colors.border }]} />
 
@@ -940,6 +1024,21 @@ export default function HomeScreen() {
           </TouchableWithoutFeedback>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Subscription & Pricing Modal */}
+      <SubscriptionModal
+        visible={subscriptionModalVisible}
+        onClose={() => setSubscriptionModalVisible(false)}
+        reason={subscriptionReason}
+        isTrialExpired={isTrialExpired}
+        suggestedPlan={subscriptionRequiredPlan}
+        onSubscribed={async () => {
+          setSubscriptionModalVisible(false);
+          setIsTrialExpired(false);
+          const st = await getSubscriptionStatus();
+          setSubscriptionStatusInfo(st);
+        }}
+      />
 
     </View>
   );
@@ -1372,6 +1471,47 @@ const styles = StyleSheet.create({
   profileEmail: {
     fontSize: 13,
     textAlign: 'center',
+  },
+  profileSubCard: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginTop: 10,
+    marginBottom: 2,
+  },
+  profileSubRight: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  profileSubIconCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 1,
+  },
+  profileSubTextCol: {
+    flex: 1,
+    alignItems: 'flex-end',
+  },
+  profileSubTitle: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
+  profileSubSubtitle: {
+    fontSize: 10.5,
+    fontWeight: '600',
+    textAlign: 'right',
+    marginTop: 2,
   },
   profileDivider: {
     height: 1,
