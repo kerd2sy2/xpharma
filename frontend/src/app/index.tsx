@@ -646,12 +646,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: PADDING_HORIZONTAL,
     paddingTop: 8,
-    paddingBottom: 12,
-    backgroundColor: '#F9F7FD',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(63, 0, 130, 0.05)',
-    zIndex: 100,
-    elevation: 3,
+    paddingBottom: 6,
   },
   brandRow: {
     flexDirection: 'row-reverse',
