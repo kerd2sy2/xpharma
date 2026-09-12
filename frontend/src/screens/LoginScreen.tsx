@@ -19,26 +19,25 @@ const { width, height } = Dimensions.get('window');
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
+  const isDark = false;
   const { loginWithGoogle, loginWithApple, isAuthenticating, error, clearError } = useAuth();
 
   const showGoogle = Platform.OS === 'android' || Platform.OS === 'web';
   const showApple = Platform.OS === 'ios';
 
   const themeColors = {
-    bg: isDark ? '#0E051D' : '#F9F7FD',
-    cardBg: isDark ? '#190C30' : '#FFFFFF',
-    textPrimary: isDark ? '#FBF9FF' : '#1A0A33',
-    textSecondary: isDark ? '#AC9DC2' : '#6B5E82',
+    bg: '#F9F7FD',
+    cardBg: '#FFFFFF',
+    textPrimary: '#1A0A33',
+    textSecondary: '#6B5E82',
     primary: '#3f0082',
     accent: '#00d780',
-    border: isDark ? '#2E184F' : '#E9E3F3',
-    googleBtnBg: isDark ? '#190C30' : '#FFFFFF',
-    googleBtnText: isDark ? '#FBF9FF' : '#1A0A33',
-    googleBorder: isDark ? '#3F226E' : '#D5CBE6',
-    appleBtnBg: isDark ? '#FFFFFF' : '#000000',
-    appleBtnText: isDark ? '#000000' : '#FFFFFF',
+    border: '#E9E3F3',
+    googleBtnBg: '#FFFFFF',
+    googleBtnText: '#1A0A33',
+    googleBorder: '#E0D7F0',
+    appleBtnBg: '#000000',
+    appleBtnText: '#FFFFFF',
   };
 
   const topInset = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 0);
@@ -46,7 +45,7 @@ export default function LoginScreen() {
   return (
     <View style={[styles.container, { backgroundColor: themeColors.bg, paddingTop: topInset }]}>
       <StatusBar
-        barStyle={isDark ? 'light-content' : 'dark-content'}
+        barStyle="dark-content"
         backgroundColor={themeColors.bg}
         translucent={false}
       />

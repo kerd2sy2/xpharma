@@ -46,8 +46,7 @@ interface ActivePortalState {
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
+  const isDark = false;
   const { user, logout } = useAuth();
 
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
@@ -68,17 +67,17 @@ export default function HomeScreen() {
   const [activePortal, setActivePortal] = useState<ActivePortalState | null>(null);
 
   const colors = {
-    bg: isDark ? '#0E051D' : '#F9F7FD',
-    card: isDark ? '#190C30' : '#FFFFFF',
-    text: isDark ? '#FBF9FF' : '#1A0A33',
-    secondaryText: isDark ? '#AC9DC2' : '#6B5E82',
-    border: isDark ? '#2E184F' : '#E9E3F3',
-    primary: isDark ? '#8A3FFC' : '#3f0082',
-    primarySoft: isDark ? '#3f008244' : '#3f008215',
+    bg: '#F9F7FD',
+    card: '#FFFFFF',
+    text: '#1A0A33',
+    secondaryText: '#6B5E82',
+    border: '#E9E3F3',
+    primary: '#3f0082',
+    primarySoft: '#3f008215',
     secondary: '#00d780',
-    secondarySoft: isDark ? '#00d78025' : '#00d78018',
+    secondarySoft: '#00d78018',
     success: '#00d780',
-    successSoft: isDark ? '#00d78025' : '#00d78018',
+    successSoft: '#00d78018',
     warning: '#F59E0B',
     danger: '#EF4444',
   };
@@ -300,8 +299,8 @@ export default function HomeScreen() {
   return (
     <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
       <StatusBar
-        barStyle={isDark ? 'light-content' : 'dark-content'}
-        backgroundColor={colors.card}
+        barStyle="dark-content"
+        backgroundColor="#FFFFFF"
         translucent={false}
       />
 
@@ -543,7 +542,7 @@ export default function HomeScreen() {
               <View style={[styles.sortSheet, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 {/* Drag handle */}
                 <View style={styles.sheetHandleContainer}>
-                  <View style={[styles.sheetHandle, { backgroundColor: isDark ? '#334155' : '#CBD5E1' }]} />
+                  <View style={[styles.sheetHandle, { backgroundColor: '#CBD5E1' }]} />
                 </View>
 
                 <View style={styles.sortHeader}>

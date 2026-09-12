@@ -25,8 +25,8 @@ export function AnimatedSplashOverlay() {
   return (
     <Animated.View exiting={FadeOut.duration(350)} style={styles.splashOverlay}>
       <StatusBar
-        barStyle="light-content"
-        backgroundColor="#0E051D"
+        barStyle="dark-content"
+        backgroundColor="#FFFFFF"
         translucent={Platform.OS === 'android'}
       />
       <LottieView
@@ -48,7 +48,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#0E051D',
+    backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 99999,

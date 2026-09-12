@@ -45,8 +45,7 @@ export default function WarehousePortalScreen({
   pharmacyName,
   onBack,
 }: WarehousePortalScreenProps) {
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
+  const isDark = false;
 
   const [activeTab, setActiveTab] = useState<TabKey>('purchases');
   const [loading, setLoading] = useState(true);
@@ -59,15 +58,15 @@ export default function WarehousePortalScreen({
   const [statement, setStatement] = useState<StatementItem[]>([]);
 
   const colors = {
-    bg: isDark ? '#0E051D' : '#F9F7FD',
-    card: isDark ? '#190C30' : '#FFFFFF',
-    text: isDark ? '#FBF9FF' : '#1A0A33',
-    secondaryText: isDark ? '#AC9DC2' : '#6B5E82',
-    border: isDark ? '#2E184F' : '#E9E3F3',
+    bg: '#F9F7FD',
+    card: '#FFFFFF',
+    text: '#1A0A33',
+    secondaryText: '#6B5E82',
+    border: '#E9E3F3',
     primary: '#3f0082',
-    primarySoft: isDark ? '#3f008244' : '#3f008215',
+    primarySoft: '#3f008215',
     success: '#00d780',
-    successSoft: isDark ? '#00d78025' : '#00d78018',
+    successSoft: '#00d78018',
     warning: '#F59E0B',
     danger: '#EF4444',
   };
@@ -126,7 +125,7 @@ export default function WarehousePortalScreen({
   return (
     <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
       <StatusBar
-        barStyle={isDark ? 'light-content' : 'dark-content'}
+        barStyle="dark-content"
         backgroundColor={colors.card}
         translucent={false}
       />

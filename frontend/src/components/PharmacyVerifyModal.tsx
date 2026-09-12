@@ -29,8 +29,7 @@ export default function PharmacyVerifyModal({
   onClose,
   onSuccess,
 }: PharmacyVerifyModalProps) {
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
+  const isDark = false;
   const { user } = useAuth();
 
   const [pharmacyCode, setPharmacyCode] = useState('');
@@ -39,16 +38,16 @@ export default function PharmacyVerifyModal({
   const [error, setError] = useState<string | null>(null);
 
   const colors = {
-    bg: isDark ? '#190C30' : '#FFFFFF',
+    bg: '#FFFFFF',
     overlay: 'rgba(0, 0, 0, 0.65)',
-    text: isDark ? '#FBF9FF' : '#1A0A33',
-    secondaryText: isDark ? '#AC9DC2' : '#6B5E82',
-    border: isDark ? '#2E184F' : '#E9E3F3',
-    inputBg: isDark ? '#0E051D' : '#F7F6FC',
+    text: '#1A0A33',
+    secondaryText: '#6B5E82',
+    border: '#E9E3F3',
+    inputBg: '#F7F6FC',
     primary: '#3f0082',
     accent: '#00d780',
-    primarySoft: isDark ? '#3f008244' : '#3f008215',
-    successSoft: isDark ? '#00d78025' : '#00d78018',
+    primarySoft: '#3f008215',
+    successSoft: '#00d78018',
     danger: '#EF4444',
   };
 
@@ -104,7 +103,7 @@ export default function PharmacyVerifyModal({
               <View style={[styles.sheet, { backgroundColor: colors.bg, borderColor: colors.border }]}>
                 {/* Drag Handle */}
                 <View style={styles.handleContainer}>
-                  <View style={[styles.handle, { backgroundColor: isDark ? '#334155' : '#CBD5E1' }]} />
+                  <View style={[styles.handle, { backgroundColor: '#CBD5E1' }]} />
                 </View>
 
                 {/* Warehouse Badge Header */}
@@ -125,7 +124,7 @@ export default function PharmacyVerifyModal({
                 {/* Info Callout */}
                 <View style={[styles.callout, { backgroundColor: colors.successSoft }]}>
                   <Ionicons name="information-circle-outline" size={20} color="#00d780" />
-                  <Text style={[styles.calloutText, { color: isDark ? '#A7F3D0' : '#047857' }]}>
+                  <Text style={[styles.calloutText, { color: '#047857' }]}>
                     اكتب كود صيدليتك في المخزن، ورقم الموبايل عشان نفتحلك الفواتير والمرتجعات وكشف الحساب مباشرة.
                   </Text>
                 </View>
