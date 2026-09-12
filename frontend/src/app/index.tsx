@@ -32,6 +32,7 @@ import {
 import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
 import WarehousePortalScreen from '@/screens/WarehousePortalScreen';
 import XLogo, { XLogoHandle } from '@/components/XLogo';
+import { LinearGradient } from 'expo-linear-gradient';
 
 const { width } = Dimensions.get('window');
 const CARD_GAP = 12;
@@ -352,6 +353,29 @@ export default function HomeScreen() {
     };
   };
 
+  // Gradient palettes matching the Apple App Store banner screenshot
+  const getWarehouseGradient = (wh: Warehouse): [string, string, string, string] => {
+    const name = (wh.name || '').toLowerCase();
+    if (name.includes('tabarak') || name.includes('تبارك')) {
+      // Tabarak Pharma: Charcoal Slate -> Peacock Teal -> Oceanic Cyan -> Forest Emerald (Exact replica of user screenshot!)
+      return ['#161B22', '#0A4B6E', '#0284C7', '#059669'];
+    }
+    if (name.includes('sheikh') || name.includes('الشيخ')) {
+      // Sheikh: Deep Charcoal -> Royal Purple -> Violet -> Deep Indigo
+      return ['#181424', '#311756', '#6D28D9', '#3730A3'];
+    }
+    if (name.includes('عميرة') || name.includes('abo3mara')) {
+      // Abo Emira: Deep Slate -> Midnight Blue -> Cobalt Blue -> Cyan
+      return ['#0F172A', '#1E3A8A', '#2563EB', '#0284C7'];
+    }
+    if (name.includes('x') || name.includes('إكس')) {
+      // XPharma: Deep Plum -> Purple -> Electric Violet -> Bright Cyan
+      return ['#180A28', '#4C1D95', '#4338CA', '#06B6D4'];
+    }
+    // Universal Medical Banner (charcoal -> deep teal -> azure blue -> emerald)
+    return ['#181F26', '#0E4F6D', '#0284C7', '#0F766E'];
+  };
+
   // Handle Android hardware/gesture back button:
   // Close open modals if any, and if on main screen, exit the app
   useEffect(() => {
@@ -490,197 +514,160 @@ export default function HomeScreen() {
         }
         renderItem={({ item }) => {
           const visual = getWarehouseVisual(item);
+          const gradientColors = getWarehouseGradient(item);
+          const logoUri = item.logo_url
+            ? item.logo_url.startsWith('http')
+              ? item.logo_url
+              : `https://xpharma.cloud${item.logo_url}`
+            : null;
 
           if (viewMode === 'grid') {
             return (
               <TouchableOpacity
-                style={[
-                  styles.modernGridCard,
-                  { backgroundColor: colors.card, borderColor: colors.border },
-                ]}
+                style={styles.appStoreGridCard}
                 onPress={() => handleWarehousePress(item)}
-                activeOpacity={0.88}
+                activeOpacity={0.9}
               >
-                {/* Top Status & Icon Row */}
-                <View style={styles.gridCardTopRow}>
-                  {item.is_linked ? (
-                    <View style={styles.gridLinkedBadge}>
-                      <Ionicons name="checkmark-circle" size={12} color="#059669" />
-                      <Text style={styles.gridLinkedBadgeText}>تم الربط</Text>
-                    </View>
-                  ) : (
-                    <View style={[styles.gridUnlinkedBadge, { backgroundColor: colors.primarySoft }]}>
-                      <Text style={[styles.gridUnlinkedBadgeText, { color: colors.primary }]}>ربط</Text>
-                    </View>
-                  )}
-
-                  {item.logo_url ? (
-                    <Image
-                      source={{ uri: item.logo_url.startsWith('http') ? item.logo_url : `https://xpharma.cloud${item.logo_url}` }}
-                      style={{ width: 44, height: 44, borderRadius: 14, backgroundColor: '#FFFFFF' }}
-                      resizeMode="contain"
-                    />
-                  ) : (
-                    <View
-                      style={[
-                        styles.gridIconCircle,
-                        { backgroundColor: visual.softBg, borderColor: visual.softBorder },
-                      ]}
-                    >
-                      <MaterialCommunityIcons name={visual.iconName} size={24} color={visual.accentColor} />
-                    </View>
-                  )}
-                </View>
-
-                {/* Warehouse Name */}
-                <Text style={[styles.gridWarehouseName, { color: colors.text }]} numberOfLines={2}>
-                  {item.name}
-                </Text>
-
-                {/* Footer with Tag & Indicator */}
-                <View style={[styles.gridCardFooter, { borderTopColor: colors.border }]}>
-                  <Text style={[styles.gridBrandTag, { color: colors.secondaryText }]}>
-                    {visual.brandTag}
-                  </Text>
-                  <Ionicons
-                    name="chevron-back"
-                    size={15}
-                    color={item.is_linked ? '#059669' : colors.secondaryText}
-                  />
-                </View>
-              </TouchableOpacity>
-            );
-          }
-
-          // Default: Full-Width Luxury Card
-          return (
-            <TouchableOpacity
-              style={[
-                styles.luxuryCard,
-                { backgroundColor: colors.card, borderColor: colors.border },
-              ]}
-              onPress={() => handleWarehousePress(item)}
-              activeOpacity={0.88}
-            >
-              {/* Subtle Decorative Right Accent Bar */}
-              <View
-                style={[
-                  styles.luxuryCardAccentBar,
-                  { backgroundColor: item.is_linked ? '#00d780' : visual.accentColor },
-                ]}
-              />
-
-              <View style={styles.luxuryCardContent}>
-                {/* Main Row */}
-                <View style={styles.luxuryHeaderRow}>
-                  {/* Right Side (RTL): Elegant Brand Icon or Custom Logo */}
-                  {item.logo_url ? (
-                    <Image
-                      source={{ uri: item.logo_url.startsWith('http') ? item.logo_url : `https://xpharma.cloud${item.logo_url}` }}
-                      style={{ width: 52, height: 52, borderRadius: 16, borderWidth: 1, borderColor: visual.softBorder, backgroundColor: '#FFFFFF' }}
-                      resizeMode="contain"
-                    />
-                  ) : (
-                    <View
-                      style={[
-                        styles.luxuryIconBox,
-                        { backgroundColor: visual.softBg, borderColor: visual.softBorder },
-                      ]}
-                    >
-                      <MaterialCommunityIcons name={visual.iconName} size={28} color={visual.accentColor} />
-                    </View>
-                  )}
-
-                  {/* Center: Details */}
-                  <View style={styles.luxuryTitleCol}>
-                    <Text style={[styles.luxuryWarehouseName, { color: colors.text }]} numberOfLines={1}>
-                      {item.name}
-                    </Text>
-
-                    <View style={styles.luxuryMetaRow}>
-                      <View style={[styles.brandTagPill, { backgroundColor: colors.bg }]}>
-                        <Text style={[styles.brandTagPillText, { color: colors.secondaryText }]}>
-                          {visual.brandTag}
-                        </Text>
+                <LinearGradient
+                  colors={gradientColors}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.gridGradient}
+                >
+                  {/* Top Status & Icon Row */}
+                  <View style={styles.gridCardTopRow}>
+                    {item.is_linked ? (
+                      <View style={styles.appStorePillLinkedCompact}>
+                        <Ionicons name="checkmark-circle" size={11} color="#34D399" />
+                        <Text style={styles.appStorePillTextLinkedCompact}>مربوط</Text>
                       </View>
-                      {item.is_linked ? (
-                        <View style={styles.liveStatusRow}>
-                          <View style={styles.liveGreenDot} />
-                          <Text style={styles.liveGreenText}>حساب متصل ومحدث</Text>
-                        </View>
+                    ) : (
+                      <View style={styles.appStorePillUnlinkedCompact}>
+                        <Ionicons name="link" size={10} color="#FFFFFF" />
+                        <Text style={styles.appStorePillTextUnlinkedCompact}>ربط</Text>
+                      </View>
+                    )}
+
+                    <View style={styles.gridAppIconSquircle}>
+                      {logoUri ? (
+                        <Image
+                          source={{ uri: logoUri }}
+                          style={styles.gridAppIconImg}
+                          resizeMode="contain"
+                        />
                       ) : (
-                        <Text style={[styles.inactiveMetaText, { color: colors.secondaryText }]}>
-                          جاهز للربط الفوري
-                        </Text>
+                        <View style={[styles.gridAppIconFallback, { backgroundColor: visual.softBg }]}>
+                          <MaterialCommunityIcons name={visual.iconName} size={22} color={visual.accentColor} />
+                        </View>
                       )}
                     </View>
                   </View>
 
-                  {/* Left Side: Action Pill & Arrow */}
-                  <View style={styles.luxuryActionCol}>
-                    {item.is_linked ? (
-                      <View style={styles.linkedActionPill}>
-                        <Text style={styles.linkedActionPillText}>تم الربط</Text>
-                        <Ionicons name="checkmark-circle" size={13} color="#059669" />
-                      </View>
-                    ) : (
-                      <View style={[styles.connectActionPill, { backgroundColor: colors.primarySoft }]}>
-                        <Text style={[styles.connectActionPillText, { color: colors.primary }]}>
-                          اضغط للربط
-                        </Text>
-                        <Ionicons name="link-outline" size={13} color={colors.primary} />
-                      </View>
-                    )}
-                    <Ionicons
-                      name="chevron-back"
-                      size={16}
-                      color={colors.secondaryText}
-                      style={{ marginTop: 4 }}
-                    />
-                  </View>
-                </View>
+                  {/* Warehouse Name */}
+                  <Text style={styles.gridWarehouseName} numberOfLines={2}>
+                    {item.name}
+                  </Text>
 
-                {/* Bottom Footer: Feature Badges Strip */}
-                <View style={[styles.luxuryCardFooter, { borderTopColor: '#F1F5F9' }]}>
-                  <View style={styles.footerFeaturesList}>
-                    <View style={styles.featureItem}>
-                      <Ionicons name="receipt-outline" size={12} color={colors.secondaryText} />
-                      <Text style={[styles.featureItemText, { color: colors.secondaryText }]}>فواتير</Text>
-                    </View>
-                    <Text style={styles.featureDot}>•</Text>
-                    <View style={styles.featureItem}>
-                      <Ionicons name="refresh-outline" size={12} color={colors.secondaryText} />
-                      <Text style={[styles.featureItemText, { color: colors.secondaryText }]}>مرتجعات</Text>
-                    </View>
-                    <Text style={styles.featureDot}>•</Text>
-                    <View style={styles.featureItem}>
-                      <Ionicons name="cash-outline" size={12} color={colors.secondaryText} />
-                      <Text style={[styles.featureItemText, { color: colors.secondaryText }]}>نقدية</Text>
-                    </View>
-                    <Text style={styles.featureDot}>•</Text>
-                    <View style={styles.featureItem}>
-                      <Ionicons name="document-text-outline" size={12} color={colors.secondaryText} />
-                      <Text style={[styles.featureItemText, { color: colors.secondaryText }]}>كشف حساب</Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.portalEnterHintRow}>
-                    <Text
-                      style={[
-                        styles.portalEnterHintText,
-                        { color: item.is_linked ? colors.primary : colors.secondaryText },
-                      ]}
-                    >
-                      {item.is_linked ? 'فتح اللوحة' : 'ربط الحساب'}
+                  {/* Footer with Tag & Arrow */}
+                  <View style={styles.gridCardFooter}>
+                    <Text style={styles.gridBrandTag} numberOfLines={1}>
+                      {visual.brandTag || 'مستودع أدوية'}
                     </Text>
                     <Ionicons
-                      name="arrow-back"
-                      size={12}
-                      color={item.is_linked ? colors.primary : colors.secondaryText}
+                      name="chevron-back"
+                      size={14}
+                      color="rgba(255, 255, 255, 0.7)"
                     />
                   </View>
+                </LinearGradient>
+              </TouchableOpacity>
+            );
+          }
+
+          // Default: App Store Panoramic Banner Card (Identical to requested design!)
+          return (
+            <TouchableOpacity
+              style={styles.appStoreBannerCard}
+              onPress={() => handleWarehousePress(item)}
+              activeOpacity={0.9}
+            >
+              <LinearGradient
+                colors={gradientColors}
+                start={{ x: 0, y: 0.15 }}
+                end={{ x: 1, y: 0.85 }}
+                style={styles.bannerGradient}
+              >
+                {/* Subtle top ambient sheen */}
+                <View style={styles.bannerSheen} />
+
+                <View style={styles.bannerContentRow}>
+                  {/* Left indicator arrow (in RTL) */}
+                  <View style={styles.bannerLeftArrowCol}>
+                    <Ionicons
+                      name="chevron-back"
+                      size={18}
+                      color="rgba(255, 255, 255, 0.55)"
+                    />
+                  </View>
+
+                  {/* Center Details Column */}
+                  <View style={styles.bannerDetailsCol}>
+                    {/* Warehouse Name */}
+                    <Text style={styles.bannerTitleText} numberOfLines={1}>
+                      {item.name}
+                    </Text>
+
+                    {/* Category / Subtitle (Like 'Medical' in App Store) */}
+                    <Text style={styles.bannerCategoryText} numberOfLines={1}>
+                      {item.address ? `مستودع أدوية • ${item.address}` : 'مستودع أدوية معتمد • Medical'}
+                    </Text>
+
+                    {/* Small Meta Line (Like 'Only for iPhone • Free...') */}
+                    <Text style={styles.bannerMetaText} numberOfLines={1}>
+                      {item.contact_phone
+                        ? `📞 دعم الربط: ${item.contact_phone} • ربط فوري`
+                        : 'ربط مباشر عبر النظام • تحديث لحظي للفواتير'}
+                    </Text>
+
+                    {/* iOS App Store Pill Button (Like 'Share' / 'GET') */}
+                    <View style={styles.bannerPillsRow}>
+                      {item.is_linked ? (
+                        <View style={styles.appStorePillLinked}>
+                          <Ionicons name="checkmark-circle" size={13} color="#34D399" />
+                          <Text style={styles.appStorePillTextLinked}>تم الربط</Text>
+                        </View>
+                      ) : (
+                        <View style={styles.appStorePillUnlinked}>
+                          <Ionicons name="link" size={12} color="#FFFFFF" />
+                          <Text style={styles.appStorePillTextUnlinked}>ربط الآن</Text>
+                        </View>
+                      )}
+
+                      <View style={styles.appStoreSecondaryPill}>
+                        <Text style={styles.appStoreSecondaryPillText}>
+                          {item.is_linked ? 'فتح اللوحة' : 'فحص الكود'}
+                        </Text>
+                        <Ionicons name="arrow-back" size={11} color="rgba(255, 255, 255, 0.75)" />
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Right: iOS App Icon Squircle */}
+                  <View style={styles.appIconSquircle}>
+                    {logoUri ? (
+                      <Image
+                        source={{ uri: logoUri }}
+                        style={styles.appIconImg}
+                        resizeMode="contain"
+                      />
+                    ) : (
+                      <View style={[styles.appIconFallback, { backgroundColor: visual.softBg }]}>
+                        <MaterialCommunityIcons name={visual.iconName} size={32} color={visual.accentColor} />
+                      </View>
+                    )}
+                  </View>
                 </View>
-              </View>
+              </LinearGradient>
             </TouchableOpacity>
           );
         }}
@@ -1028,226 +1015,260 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // Luxury Card (Full-width)
-  luxuryCard: {
-    borderRadius: 20,
-    borderWidth: 1,
-    marginBottom: 12,
-    position: 'relative',
+  // App Store Panoramic Banner Card (Requested Design)
+  appStoreBannerCard: {
+    borderRadius: 22,
+    marginBottom: 14,
     overflow: 'hidden',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    elevation: 3,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
   },
-  luxuryCardAccentBar: {
+  bannerGradient: {
+    padding: 14,
+    paddingHorizontal: 16,
+    position: 'relative',
+  },
+  bannerSheen: {
     position: 'absolute',
     top: 0,
+    left: 0,
     right: 0,
-    bottom: 0,
-    width: 4,
-    borderTopRightRadius: 20,
-    borderBottomRightRadius: 20,
+    height: '42%',
+    backgroundColor: 'rgba(255, 255, 255, 0.07)',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
   },
-  luxuryCardContent: {
-    padding: 14,
-    paddingRight: 16,
-  },
-  luxuryHeaderRow: {
+  bannerContentRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 12,
+    gap: 14,
   },
-  luxuryIconBox: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
+  appIconSquircle: {
+    width: 68,
+    height: 68,
+    borderRadius: 18,
+    backgroundColor: '#FFFFFF',
+    padding: 4,
     borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.4)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.28,
+    shadowRadius: 6,
+    elevation: 6,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  luxuryTitleCol: {
+  appIconImg: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 14,
+  },
+  appIconFallback: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bannerDetailsCol: {
     flex: 1,
     alignItems: 'flex-end',
+    justifyContent: 'center',
   },
-  luxuryWarehouseName: {
-    fontSize: 15,
+  bannerTitleText: {
+    fontSize: 18,
     fontWeight: '800',
+    color: '#FFFFFF',
+    textAlign: 'right',
+    textShadowColor: 'rgba(0, 0, 0, 0.45)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  bannerCategoryText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#BAE6FD',
+    marginTop: 2,
     textAlign: 'right',
   },
-  luxuryMetaRow: {
+  bannerMetaText: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.72)',
+    marginTop: 2,
+    textAlign: 'right',
+  },
+  bannerPillsRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 8,
-    marginTop: 4,
+    marginTop: 8,
   },
-  brandTagPill: {
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  brandTagPillText: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  liveStatusRow: {
+  appStorePillLinked: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 4,
-  },
-  liveGreenDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#00d780',
-  },
-  liveGreenText: {
-    color: '#059669',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  inactiveMetaText: {
-    fontSize: 11,
-  },
-  luxuryActionCol: {
-    alignItems: 'flex-start',
-    justifyContent: 'center',
-  },
-  linkedActionPill: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#ECFDF5',
-    borderColor: '#A7F3D0',
+    gap: 5,
+    backgroundColor: 'rgba(16, 185, 129, 0.24)',
     borderWidth: 1,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
+    borderColor: 'rgba(52, 211, 153, 0.65)',
+    paddingHorizontal: 13,
+    paddingVertical: 4.5,
     borderRadius: 100,
   },
-  linkedActionPillText: {
-    color: '#059669',
-    fontSize: 11,
+  appStorePillTextLinked: {
+    color: '#FFFFFF',
+    fontSize: 11.5,
     fontWeight: '800',
   },
-  connectActionPill: {
+  appStorePillUnlinked: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.45)',
+    paddingHorizontal: 14,
+    paddingVertical: 4.5,
+    borderRadius: 100,
+  },
+  appStorePillTextUnlinked: {
+    color: '#FFFFFF',
+    fontSize: 11.5,
+    fontWeight: '800',
+  },
+  appStoreSecondaryPill: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
+    backgroundColor: 'rgba(0, 0, 0, 0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+    paddingHorizontal: 10,
+    paddingVertical: 4.5,
     borderRadius: 100,
   },
-  connectActionPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  luxuryCardFooter: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 12,
-    paddingTop: 10,
-    borderTopWidth: 1,
-  },
-  footerFeaturesList: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 6,
-  },
-  featureItem: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 3,
-  },
-  featureItemText: {
+  appStoreSecondaryPillText: {
+    color: 'rgba(255, 255, 255, 0.85)',
     fontSize: 11,
     fontWeight: '600',
   },
-  featureDot: {
-    fontSize: 10,
-    color: '#94A3B8',
-  },
-  portalEnterHintRow: {
-    flexDirection: 'row-reverse',
+  bannerLeftArrowCol: {
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: 4,
-  },
-  portalEnterHintText: {
-    fontSize: 11,
-    fontWeight: '700',
   },
 
-  // Modern Grid Card
-  modernGridCard: {
+  // Grid Mode Banner Card
+  appStoreGridCard: {
     width: CARD_WIDTH,
-    borderRadius: 18,
-    borderWidth: 1,
-    padding: 12,
+    borderRadius: 20,
     marginBottom: CARD_GAP,
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.05,
+    overflow: 'hidden',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
     shadowRadius: 8,
-    elevation: 2,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  gridGradient: {
+    padding: 12,
+    minHeight: 145,
     justifyContent: 'space-between',
-    minHeight: 140,
   },
   gridCardTopRow: {
     flexDirection: 'row-reverse',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  gridIconCircle: {
+  gridAppIconSquircle: {
     width: 44,
     height: 44,
     borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    padding: 3,
     borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.4)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  gridLinkedBadge: {
+  gridAppIconImg: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 11,
+  },
+  gridAppIconFallback: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  appStorePillLinkedCompact: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 3,
-    backgroundColor: '#ECFDF5',
-    borderColor: '#A7F3D0',
+    backgroundColor: 'rgba(16, 185, 129, 0.25)',
     borderWidth: 1,
+    borderColor: 'rgba(52, 211, 153, 0.65)',
     paddingHorizontal: 7,
     paddingVertical: 3,
     borderRadius: 100,
   },
-  gridLinkedBadgeText: {
-    color: '#059669',
+  appStorePillTextLinkedCompact: {
+    color: '#FFFFFF',
     fontSize: 10,
     fontWeight: '800',
   },
-  gridUnlinkedBadge: {
+  appStorePillUnlinkedCompact: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.45)',
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 100,
   },
-  gridUnlinkedBadgeText: {
+  appStorePillTextUnlinkedCompact: {
+    color: '#FFFFFF',
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   gridWarehouseName: {
     fontSize: 13,
     fontWeight: '800',
+    color: '#FFFFFF',
     textAlign: 'right',
-    marginVertical: 8,
+    marginVertical: 6,
     lineHeight: 18,
+    textShadowColor: 'rgba(0, 0, 0, 0.45)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   gridCardFooter: {
     flexDirection: 'row-reverse',
     justifyContent: 'space-between',
     alignItems: 'center',
     borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.15)',
     paddingTop: 8,
   },
   gridBrandTag: {
     fontSize: 10,
     fontWeight: '600',
+    color: '#BAE6FD',
   },
   loadingBox: {
     alignItems: 'center',
