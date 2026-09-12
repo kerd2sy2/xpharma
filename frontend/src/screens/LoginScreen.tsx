@@ -15,7 +15,7 @@ import { Ionicons, FontAwesome } from '@expo/vector-icons';
 import { useAuth } from '@/context/AuthContext';
 import XLogo from '@/components/XLogo';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
@@ -52,26 +52,13 @@ export default function LoginScreen() {
       />
 
       <View style={styles.content}>
-        {/* Top Decorative / Brand Glow */}
-        <View style={styles.headerSection}>
-          <View style={[styles.iconContainer, { backgroundColor: isDark ? '#190C30' : '#F2EEFB' }]}>
-            <XLogo size={70} loop={true} />
-          </View>
-
-          <Text style={[styles.brandTitle, { color: themeColors.textPrimary }]}>
-            إكس فارما
-          </Text>
-
-          <View style={styles.badgeContainer}>
-            <Text style={styles.badgeText}>شبكة ربط الصيدليات والمخازن</Text>
-          </View>
-
-          <Text style={[styles.subtitle, { color: themeColors.textSecondary }]}>
-            متابعة فورية لحسابك وفواتيرك مع المخازن
-          </Text>
-          <Text style={[styles.microText, { color: themeColors.textSecondary }]}>
-            فواتير المشتريات • المرتجعات • النقدية • كشف الحساب
-          </Text>
+        {/* Massive Fullscreen Animated Logo - No Text */}
+        <View style={styles.logoSection}>
+          <XLogo
+            width={width}
+            height={Math.min(height * 0.65, 540)}
+            loop={true}
+          />
         </View>
 
         {/* Error Notification (if any) */}
@@ -155,19 +142,6 @@ export default function LoginScreen() {
             </TouchableOpacity>
           )}
         </View>
-
-        {/* Footer Security Badge */}
-        <View style={styles.footerSection}>
-          <View style={styles.securityRow}>
-            <Ionicons name="shield-checkmark" size={16} color="#00d780" />
-            <Text style={[styles.footerText, { color: themeColors.textSecondary }]}>
-              دخول آمن ومشفر 100%
-            </Text>
-          </View>
-          <Text style={[styles.copyrightText, { color: themeColors.textSecondary }]}>
-            © {new Date().getFullYear()} إكس فارما • جميع الحقوق محفوظة
-          </Text>
-        </View>
       </View>
     </View>
   );
@@ -179,62 +153,15 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-    paddingHorizontal: 24,
     justifyContent: 'space-between',
-    paddingVertical: 36,
+    paddingBottom: Platform.OS === 'ios' ? 44 : 32,
   },
-  headerSection: {
-    alignItems: 'center',
-    marginTop: 30,
-  },
-  iconContainer: {
-    width: 88,
-    height: 88,
-    borderRadius: 28,
+  logoSection: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#3f008233',
-  },
-  innerIconGlow: {
-    shadowColor: '#3f0082',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    elevation: 8,
-  },
-  brandTitle: {
-    fontSize: 32,
-    fontWeight: '800',
-    letterSpacing: 1.2,
-    marginBottom: 8,
-  },
-  badgeContainer: {
-    backgroundColor: '#3f008218',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 100,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: '#3f008233',
-  },
-  badgeText: {
-    color: '#3f0082',
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-  },
-  subtitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    textAlign: 'center',
-    marginBottom: 6,
-  },
-  microText: {
-    fontSize: 13,
-    textAlign: 'center',
-    opacity: 0.85,
+    width: '100%',
+    paddingTop: 10,
   },
   errorBox: {
     flexDirection: 'row-reverse',
@@ -246,7 +173,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
     gap: 8,
-    marginVertical: 12,
+    marginHorizontal: 24,
+    marginBottom: 12,
   },
   errorText: {
     color: '#B91C1C',
@@ -256,7 +184,7 @@ const styles = StyleSheet.create({
   },
   actionSection: {
     width: '100%',
-    paddingVertical: 20,
+    paddingHorizontal: 24,
     alignItems: 'center',
   },
   socialButton: {
@@ -285,25 +213,7 @@ const styles = StyleSheet.create({
   },
   socialButtonText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
     textAlign: 'center',
-  },
-  footerSection: {
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
-  },
-  securityRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 6,
-  },
-  footerText: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  copyrightText: {
-    fontSize: 11,
-    opacity: 0.6,
   },
 });
