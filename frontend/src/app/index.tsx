@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
   FlatList,
   Image,
+  Linking,
   Modal,
   Platform,
   RefreshControl,
@@ -29,7 +30,7 @@ import {
 } from '@/services/warehouse';
 import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
 import WarehousePortalScreen from '@/screens/WarehousePortalScreen';
-import XLogo from '@/components/XLogo';
+import XLogo, { XLogoHandle } from '@/components/XLogo';
 
 const { width } = Dimensions.get('window');
 const CARD_GAP = 12;
@@ -65,6 +66,16 @@ export default function HomeScreen() {
 
   // Active Portal State
   const [activePortal, setActivePortal] = useState<ActivePortalState | null>(null);
+
+  // Logo animation ref
+  const headerLogoRef = useRef<XLogoHandle>(null);
+
+  const handleOpenWebsite = () => {
+    headerLogoRef.current?.play();
+    Linking.openURL('https://xpharma.cloud/').catch((err) => {
+      console.warn('Could not open URL:', err);
+    });
+  };
 
   const colors = {
     bg: '#F9F7FD',
@@ -300,17 +311,21 @@ export default function HomeScreen() {
     <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
       <StatusBar
         barStyle="dark-content"
-        backgroundColor="#FFFFFF"
+        backgroundColor={colors.bg}
         translucent={false}
       />
 
-      {/* Top Header: Brand on RIGHT, Avatar on LEFT (Strict RTL Layout) */}
-      <View style={[styles.topBar, { borderBottomColor: colors.border, backgroundColor: colors.card }]}>
-        {/* Right side: Brand in Arabic with Animated Letter X Logo */}
-        <View style={styles.brandRow}>
-          <XLogo size={36} loop={true} />
+      {/* Top Header: Seamless with page background (no card, no border) */}
+      <View style={styles.topBar}>
+        {/* Right side: Clickable Logo & Brand -> animates on press and opens website */}
+        <TouchableOpacity
+          style={styles.brandRow}
+          onPress={handleOpenWebsite}
+          activeOpacity={0.7}
+        >
+          <XLogo ref={headerLogoRef} size={36} autoPlay={false} loop={false} />
           <Text style={[styles.brandText, { color: colors.text }]}>إكس فارما</Text>
-        </View>
+        </TouchableOpacity>
 
         {/* Left side: Avatar opens Profile Modal */}
         <TouchableOpacity
@@ -652,8 +667,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: PADDING_HORIZONTAL,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
+    paddingTop: 8,
+    paddingBottom: 4,
   },
   brandRow: {
     flexDirection: 'row-reverse',
