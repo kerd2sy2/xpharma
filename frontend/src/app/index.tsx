@@ -39,7 +39,6 @@ const isTablet = width >= 768;
 const CARD_GAP = 14;
 const PADDING_HORIZONTAL = 16;
 const TABLET_CARD_WIDTH = (width - PADDING_HORIZONTAL * 2 - CARD_GAP) / 2;
-const ORDER_STORAGE_KEY = 'xpharma_warehouses_custom_order';
 
 interface ActivePortalState {
   warehouse: Warehouse;
@@ -59,9 +58,6 @@ export default function HomeScreen() {
 
   // Profile Modal State
   const [profileModalVisible, setProfileModalVisible] = useState(false);
-
-  // Sorting / Reordering Modal State
-  const [sortModalVisible, setSortModalVisible] = useState(false);
 
   // Verification Modal State
   const [verifyModalVisible, setVerifyModalVisible] = useState(false);
@@ -130,36 +126,20 @@ export default function HomeScreen() {
   };
 
   /**
-   * Sort warehouses according to saved custom order
+   * Sort warehouses:
+   * 1. Linked warehouses always at the very top
+   * 2. Within each group: sorted alphabetically (A-Z) in Arabic
    */
-  const applyCustomOrder = async (list: Warehouse[]): Promise<Warehouse[]> => {
-    try {
-      const savedOrderStr = await SecureStore.getItemAsync(ORDER_STORAGE_KEY);
-      if (!savedOrderStr) return list;
+  const sortWarehouses = (list: Warehouse[]): Warehouse[] => {
+    return [...list].sort((a, b) => {
+      const aLinked = !!(a.is_linked || a.pharmacy_token || a.linked_pharmacy_code);
+      const bLinked = !!(b.is_linked || b.pharmacy_token || b.linked_pharmacy_code);
 
-      const savedOrder: string[] = JSON.parse(savedOrderStr);
-      if (!Array.isArray(savedOrder) || savedOrder.length === 0) return list;
+      if (aLinked && !bLinked) return -1;
+      if (!aLinked && bLinked) return 1;
 
-      const orderMap = new Map<string, number>();
-      savedOrder.forEach((id, idx) => orderMap.set(id, idx));
-
-      return [...list].sort((a, b) => {
-        const orderA = orderMap.has(a.id) ? orderMap.get(a.id)! : 9999;
-        const orderB = orderMap.has(b.id) ? orderMap.get(b.id)! : 9999;
-        return orderA - orderB;
-      });
-    } catch (e) {
-      return list;
-    }
-  };
-
-  const saveCustomOrder = async (list: Warehouse[]) => {
-    try {
-      const idOrder = list.map((w) => w.id);
-      await SecureStore.setItemAsync(ORDER_STORAGE_KEY, JSON.stringify(idOrder));
-    } catch (e) {
-      console.warn('Failed to save warehouse order:', e);
-    }
+      return (a.name || '').localeCompare(b.name || '', 'ar', { sensitivity: 'base' });
+    });
   };
 
   const loadWarehouses = async () => {
@@ -210,8 +190,8 @@ export default function HomeScreen() {
       }
       const uniqueList = Array.from(warehouseMap.values());
 
-      const orderedList = await applyCustomOrder(uniqueList);
-      setWarehouses(orderedList);
+      const sortedList = sortWarehouses(uniqueList);
+      setWarehouses(sortedList);
     } catch (e) {
       console.error('Failed to load warehouses:', e);
     } finally {
@@ -264,7 +244,7 @@ export default function HomeScreen() {
     };
 
     setWarehouses((prev) =>
-      prev.map((item) => (item.id === updatedWh.id ? updatedWh : item))
+      sortWarehouses(prev.map((item) => (item.id === updatedWh.id ? updatedWh : item)))
     );
 
     setActivePortal({
@@ -273,31 +253,6 @@ export default function HomeScreen() {
       pharmacyCode: result.pharmacy_code || '',
       pharmacyName: result.pharmacy_name || '',
     });
-  };
-
-  const moveWarehouse = (index: number, direction: 'up' | 'down') => {
-    const newIndex = direction === 'up' ? index - 1 : index + 1;
-    if (newIndex < 0 || newIndex >= warehouses.length) return;
-
-    const newList = [...warehouses];
-    const temp = newList[index];
-    newList[index] = newList[newIndex];
-    newList[newIndex] = temp;
-
-    setWarehouses(newList);
-    saveCustomOrder(newList);
-  };
-
-  const sortPreset = (type: 'linkedFirst' | 'alphabetical') => {
-    let sorted = [...warehouses];
-    if (type === 'linkedFirst') {
-      sorted.sort((a, b) => (b.is_linked ? 1 : 0) - (a.is_linked ? 1 : 0));
-    } else if (type === 'alphabetical') {
-      sorted.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
-    }
-    setWarehouses(sorted);
-    saveCustomOrder(sorted);
-    setSortModalVisible(false);
   };
 
   // Visual branding with soft luxury tints & distinctive icons
@@ -446,19 +401,17 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Sub-header Bar: Reorder Button (only if multiple warehouses exist) */}
-      {warehouses.length > 1 && (
-        <View style={styles.controlsBar}>
-          <TouchableOpacity
-            style={[styles.reorderBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
-            onPress={() => setSortModalVisible(true)}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="swap-vertical" size={15} color={colors.primary} />
-            <Text style={[styles.reorderBtnText, { color: colors.primary }]}>ترتيب المخازن</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+      {/* Soft gradient fade below header for harmonious scrolling without harsh cutoffs */}
+      <LinearGradient
+        colors={[
+          colors.bg,
+          'rgba(249, 247, 253, 0.9)',
+          'rgba(249, 247, 253, 0.4)',
+          'rgba(249, 247, 253, 0)',
+        ]}
+        style={[styles.topFadeGradient, { top: topInset + 62 }]}
+        pointerEvents="none"
+      />
 
       {/* Warehouses List */}
       <FlatList
@@ -691,116 +644,6 @@ export default function HomeScreen() {
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Sorting & Reordering Modal */}
-      <Modal
-        visible={sortModalVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setSortModalVisible(false)}
-      >
-        <TouchableWithoutFeedback onPress={() => setSortModalVisible(false)}>
-          <View style={styles.modalOverlayBottom}>
-            <TouchableWithoutFeedback>
-              <View style={[styles.sortSheet, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                {/* Drag handle */}
-                <View style={styles.sheetHandleContainer}>
-                  <View style={[styles.sheetHandle, { backgroundColor: '#CBD5E1' }]} />
-                </View>
-
-                <View style={styles.sortHeader}>
-                  <Text style={[styles.sortTitle, { color: colors.text }]}>ترتيب المخازن</Text>
-                  <Text style={[styles.sortSubtitle, { color: colors.secondaryText }]}>
-                    رتب المخازن زي ما تحب وهيتحفظ ترتيبك تلقائي
-                  </Text>
-                </View>
-
-                {/* Quick Presets */}
-                <View style={styles.presetsRow}>
-                  <TouchableOpacity
-                    style={[styles.presetBtn, { borderColor: colors.border, backgroundColor: colors.bg }]}
-                    onPress={() => sortPreset('linkedFirst')}
-                  >
-                    <Ionicons name="checkmark-done" size={15} color={colors.success} />
-                    <Text style={[styles.presetBtnText, { color: colors.text }]}>المربوطة الأول</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.presetBtn, { borderColor: colors.border, backgroundColor: colors.bg }]}
-                    onPress={() => sortPreset('alphabetical')}
-                  >
-                    <Ionicons name="text" size={15} color={colors.primary} />
-                    <Text style={[styles.presetBtnText, { color: colors.text }]}>أبجدي (أ - ي)</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Manual Reorder List */}
-                <Text style={[styles.reorderListLabel, { color: colors.secondaryText }]}>
-                  ترتيب يدوي (حرك بالأسهم فوق وتحت):
-                </Text>
-
-                <ScrollView style={styles.reorderScroll} showsVerticalScrollIndicator={false}>
-                  {warehouses.map((wh, idx) => (
-                    <View
-                      key={wh.id}
-                      style={[styles.reorderItem, { backgroundColor: colors.bg, borderColor: colors.border }]}
-                    >
-                      {/* Arrow Buttons on Left */}
-                      <View style={styles.arrowsCol}>
-                        <TouchableOpacity
-                          style={[styles.arrowBtn, idx === 0 && styles.disabledArrow]}
-                          onPress={() => moveWarehouse(idx, 'up')}
-                          disabled={idx === 0}
-                        >
-                          <Ionicons name="chevron-up" size={18} color={idx === 0 ? colors.border : colors.primary} />
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={[styles.arrowBtn, idx === warehouses.length - 1 && styles.disabledArrow]}
-                          onPress={() => moveWarehouse(idx, 'down')}
-                          disabled={idx === warehouses.length - 1}
-                        >
-                          <Ionicons
-                            name="chevron-down"
-                            size={18}
-                            color={idx === warehouses.length - 1 ? colors.border : colors.primary}
-                          />
-                        </TouchableOpacity>
-                      </View>
-
-                      {/* Linked Badge */}
-                      {wh.is_linked && (
-                        <View style={[styles.reorderLinkedBadge, { backgroundColor: colors.successSoft }]}>
-                          <Text style={[styles.reorderLinkedText, { color: colors.success }]}>مربوطة</Text>
-                        </View>
-                      )}
-
-                      {/* Warehouse Name on Right */}
-                      <Text style={[styles.reorderWhName, { color: colors.text }]} numberOfLines={1}>
-                        {wh.name}
-                      </Text>
-
-                      {/* Position Number */}
-                      <View style={[styles.positionBadge, { backgroundColor: colors.card }]}>
-                        <Text style={[styles.positionBadgeText, { color: colors.secondaryText }]}>
-                          #{idx + 1}
-                        </Text>
-                      </View>
-                    </View>
-                  ))}
-                </ScrollView>
-
-                {/* Done Button */}
-                <TouchableOpacity
-                  style={[styles.doneBtn, { backgroundColor: colors.primary }]}
-                  onPress={() => setSortModalVisible(false)}
-                >
-                  <Text style={styles.doneBtnText}>حفظ الترتيب</Text>
-                </TouchableOpacity>
-              </View>
-            </TouchableWithoutFeedback>
-          </View>
-        </TouchableWithoutFeedback>
-      </Modal>
     </View>
   );
 }
@@ -868,31 +711,17 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#FFFFFF',
   },
-  controlsBar: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'flex-start',
-    alignItems: 'center',
-    paddingHorizontal: PADDING_HORIZONTAL,
-    paddingTop: 8,
-    paddingBottom: 6,
-  },
-  reorderBtn: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 12,
-    borderWidth: 1,
-  },
-  reorderBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
+  topFadeGradient: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 36,
+    zIndex: 15,
   },
   listContent: {
     paddingHorizontal: PADDING_HORIZONTAL,
-    paddingTop: 6,
-    paddingBottom: 28,
+    paddingTop: 10,
+    paddingBottom: 32,
   },
   columnWrapper: {
     flexDirection: 'row-reverse',
@@ -1172,129 +1001,6 @@ const styles = StyleSheet.create({
   },
   profileLogoutText: {
     fontSize: 14,
-    fontWeight: '700',
-  },
-  modalOverlayBottom: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
-    justifyContent: 'flex-end',
-  },
-  sortSheet: {
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    borderTopWidth: 1,
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: Platform.OS === 'ios' ? 38 : 24,
-    maxHeight: '80%',
-  },
-  sheetHandleContainer: {
-    alignItems: 'center',
-    paddingVertical: 6,
-  },
-  sheetHandle: {
-    width: 44,
-    height: 5,
-    borderRadius: 3,
-  },
-  sortHeader: {
-    alignItems: 'flex-end',
-    marginVertical: 8,
-    gap: 2,
-  },
-  sortTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  sortSubtitle: {
-    fontSize: 12,
-  },
-  presetsRow: {
-    flexDirection: 'row-reverse',
-    gap: 10,
-    marginVertical: 12,
-  },
-  presetBtn: {
-    flex: 1,
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-  },
-  presetBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  reorderListLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    textAlign: 'right',
-    marginTop: 4,
-    marginBottom: 8,
-  },
-  reorderScroll: {
-    maxHeight: 250,
-  },
-  reorderItem: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 10,
-    borderRadius: 14,
-    borderWidth: 1,
-    marginBottom: 8,
-    gap: 10,
-  },
-  reorderWhName: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '700',
-    textAlign: 'right',
-  },
-  reorderLinkedBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  reorderLinkedText: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  positionBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  positionBadgeText: {
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  arrowsCol: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  arrowBtn: {
-    padding: 6,
-  },
-  disabledArrow: {
-    opacity: 0.3,
-  },
-  doneBtn: {
-    height: 48,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 14,
-  },
-  doneBtnText: {
-    color: '#FFFFFF',
-    fontSize: 15,
     fontWeight: '700',
   },
 });
