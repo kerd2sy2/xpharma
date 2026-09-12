@@ -355,63 +355,33 @@ export default function HomeScreen() {
   const topInset = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 0);
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
+    <View style={[styles.container, { backgroundColor: colors.bg }]}>
       <StatusBar
         barStyle="dark-content"
         backgroundColor={colors.bg}
         translucent={false}
       />
 
-      {/* Warehouses List with Seamless Scrolling Header */}
+      {/* Warehouses List: Full-screen scroll behind fixed header */}
       <FlatList
         key={isTablet ? 'tablet-grid' : 'phone-list'}
         data={warehouses}
         keyExtractor={(item) => item.id}
         numColumns={isTablet ? 2 : 1}
         columnWrapperStyle={isTablet ? styles.columnWrapper : undefined}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[
+          styles.listContent,
+          { paddingTop: topInset + 64 + 20 },
+        ]}
         showsVerticalScrollIndicator={false}
-        ListHeaderComponent={
-          <View style={styles.topBar}>
-            {/* Right side: Clickable Logo & Brand -> animates on press and opens website after finishing */}
-            <TouchableOpacity
-              style={styles.brandRow}
-              onPress={handleLogoPress}
-              activeOpacity={0.7}
-            >
-              <XLogo
-                ref={headerLogoRef}
-                size={48}
-                scale={1.8}
-                speed={1.0}
-                autoPlay={false}
-                loop={false}
-                onAnimationFinish={handleAnimationFinish}
-              />
-              <Text style={[styles.brandText, { color: '#3f0082' }]}>فارما</Text>
-            </TouchableOpacity>
-
-            {/* Left side: Avatar opens Profile Modal */}
-            <TouchableOpacity
-              style={styles.avatarButton}
-              onPress={() => setProfileModalVisible(true)}
-              activeOpacity={0.8}
-            >
-              {user?.photo ? (
-                <Image source={{ uri: user.photo }} style={styles.avatarImg} />
-              ) : (
-                <View style={[styles.avatarPlaceholder, { backgroundColor: colors.primary }]}>
-                  <Text style={styles.avatarLetter}>
-                    {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
-                  </Text>
-                </View>
-              )}
-              <View style={styles.onlineStatusDot} />
-            </TouchableOpacity>
-          </View>
-        }
+        showsHorizontalScrollIndicator={false}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[colors.primary]}
+            progressViewOffset={topInset + 64}
+          />
         }
         renderItem={({ item }) => {
           const visual = getWarehouseVisual(item);
@@ -539,6 +509,59 @@ export default function HomeScreen() {
         }
       />
 
+      {/* Fixed Top Header (Seamless, No Box, Permanent at Top) */}
+      <View style={[styles.fixedHeaderArea, { paddingTop: topInset, backgroundColor: colors.bg }]}>
+        <View style={styles.topBar}>
+          {/* Right side: Clickable Logo & Brand */}
+          <TouchableOpacity
+            style={styles.brandRow}
+            onPress={handleLogoPress}
+            activeOpacity={0.7}
+          >
+            <XLogo
+              ref={headerLogoRef}
+              size={48}
+              scale={1.8}
+              speed={1.0}
+              autoPlay={false}
+              loop={false}
+              onAnimationFinish={handleAnimationFinish}
+            />
+            <Text style={[styles.brandText, { color: '#3f0082' }]}>فارما</Text>
+          </TouchableOpacity>
+
+          {/* Left side: Avatar opens Profile Modal */}
+          <TouchableOpacity
+            style={styles.avatarButton}
+            onPress={() => setProfileModalVisible(true)}
+            activeOpacity={0.8}
+          >
+            {user?.photo ? (
+              <Image source={{ uri: user.photo }} style={styles.avatarImg} />
+            ) : (
+              <View style={[styles.avatarPlaceholder, { backgroundColor: colors.primary }]}>
+                <Text style={styles.avatarLetter}>
+                  {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
+                </Text>
+              </View>
+            )}
+            <View style={styles.onlineStatusDot} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Soft bottom feathering transition (Eliminates harsh cut completely without a box) */}
+        <LinearGradient
+          colors={[
+            colors.bg,
+            'rgba(249, 247, 253, 0.85)',
+            'rgba(249, 247, 253, 0.35)',
+            'rgba(249, 247, 253, 0)',
+          ]}
+          style={styles.featherEdge}
+          pointerEvents="none"
+        />
+      </View>
+
       {/* Verification Bottom Sheet Modal */}
       <PharmacyVerifyModal
         visible={verifyModalVisible}
@@ -641,13 +664,27 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  fixedHeaderArea: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 100,
+  },
   topBar: {
     flexDirection: 'row-reverse',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 0,
+    paddingHorizontal: PADDING_HORIZONTAL,
     paddingTop: 8,
-    paddingBottom: 16,
+    paddingBottom: 6,
+  },
+  featherEdge: {
+    position: 'absolute',
+    bottom: -18,
+    left: 0,
+    right: 0,
+    height: 18,
   },
   brandRow: {
     flexDirection: 'row-reverse',
