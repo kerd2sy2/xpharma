@@ -1,4 +1,4 @@
-import React, { forwardRef, useImperativeHandle, useRef } from 'react';
+import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { StyleSheet, View, ViewStyle, StyleProp } from 'react-native';
 import LottieView from 'lottie-react-native';
 
@@ -27,7 +27,7 @@ const XLogo = forwardRef<XLogoHandle, XLogoProps>(function XLogo(
     width: customWidth,
     height: customHeight,
     scale = 1,
-    speed = 1.4,
+    speed = 1.35,
     resizeMode = 'contain',
     autoPlay = true,
     loop = true,
@@ -38,13 +38,16 @@ const XLogo = forwardRef<XLogoHandle, XLogoProps>(function XLogo(
   ref
 ) {
   const lottieRef = useRef<LottieView>(null);
+  const [isPlaying, setIsPlaying] = useState(autoPlay);
+  const [animKey, setAnimKey] = useState(0);
 
   useImperativeHandle(ref, () => ({
     play: () => {
-      lottieRef.current?.reset();
-      lottieRef.current?.play();
+      setIsPlaying(true);
+      setAnimKey((k) => k + 1);
     },
     reset: () => {
+      setIsPlaying(false);
       lottieRef.current?.reset();
     },
   }));
@@ -57,12 +60,13 @@ const XLogo = forwardRef<XLogoHandle, XLogoProps>(function XLogo(
   return (
     <View style={[styles.container, { width: containerWidth, height: containerHeight }, style]}>
       <LottieView
+        key={animKey}
         ref={lottieRef}
         source={require('@/assets/lottie/letter_x.json')}
-        autoPlay={autoPlay}
-        loop={loop}
+        autoPlay={isPlaying}
+        loop={isPlaying ? loop : false}
         speed={speed}
-        progress={progress ?? (autoPlay ? undefined : 1)}
+        progress={!isPlaying ? (progress ?? 1) : undefined}
         onAnimationFinish={onAnimationFinish}
         style={{
           width: lottieWidth,

@@ -71,6 +71,7 @@ export default function HomeScreen() {
   const headerLogoRef = useRef<XLogoHandle>(null);
   const isNavigatingRef = useRef(false);
   const navigationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const animationStartTimeRef = useRef(0);
 
   const navigateWebsite = () => {
     if (navigationTimeoutRef.current) {
@@ -80,26 +81,31 @@ export default function HomeScreen() {
     Linking.openURL('https://xpharma.cloud/').catch((err) => {
       console.warn('Could not open URL:', err);
     });
-    // Reset state after 1 second
+    // Reset state after 1.5 seconds
     setTimeout(() => {
       isNavigatingRef.current = false;
-    }, 1000);
+    }, 1500);
   };
 
   const handleLogoPress = () => {
     if (isNavigatingRef.current) return;
     isNavigatingRef.current = true;
+    animationStartTimeRef.current = Date.now();
+
+    // Trigger full fresh animation from frame 0
     headerLogoRef.current?.play();
 
-    // Fallback timer in case onAnimationFinish doesn't fire
+    // Enforce waiting for full animation (~2.2 seconds):
     if (navigationTimeoutRef.current) clearTimeout(navigationTimeoutRef.current);
     navigationTimeoutRef.current = setTimeout(() => {
       navigateWebsite();
-    }, 2400);
+    }, 2200);
   };
 
   const handleAnimationFinish = () => {
-    if (isNavigatingRef.current) {
+    // Only accept animation finish if at least 1800ms has elapsed (prevents premature callback)
+    const elapsed = Date.now() - animationStartTimeRef.current;
+    if (isNavigatingRef.current && elapsed >= 1800) {
       navigateWebsite();
     }
   };
