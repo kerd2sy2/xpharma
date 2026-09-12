@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
+  BackHandler,
   PanResponder,
   RefreshControl,
   ScrollView,
@@ -98,6 +99,28 @@ export default function WarehousePortalScreen({
     indigo: '#4F46E5',
     indigoSoft: '#4F46E514',
   };
+
+  // Handle Android hardware/gesture back button: step back hierarchically
+  useEffect(() => {
+    const onBackPress = () => {
+      // 1. If add pharmacy modal is open, close it
+      if (showAddModal) {
+        setShowAddModal(false);
+        return true;
+      }
+      // 2. If inside a section (purchases/returns/etc.), go back to portal main view
+      if (selectedSection) {
+        setSelectedSection(null);
+        return true;
+      }
+      // 3. Otherwise, go back to main warehouses screen
+      onBack();
+      return true;
+    };
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => subscription.remove();
+  }, [showAddModal, selectedSection, onBack]);
 
   // Initialize and load saved pharmacies for this warehouse
   useEffect(() => {

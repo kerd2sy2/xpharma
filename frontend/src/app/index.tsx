@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   Dimensions,
   FlatList,
   Image,
@@ -324,6 +325,31 @@ export default function HomeScreen() {
       accentColor: '#00d780',
     };
   };
+
+  // Handle Android hardware/gesture back button:
+  // Close open modals if any, and if on main screen, exit the app
+  useEffect(() => {
+    const onBackPress = () => {
+      if (activePortal) {
+        // Handled by WarehousePortalScreen
+        return false;
+      }
+      if (verifyModalVisible) {
+        setVerifyModalVisible(false);
+        setSelectedWarehouseForModal(null);
+        return true;
+      }
+      if (profileModalVisible) {
+        setProfileModalVisible(false);
+        return true;
+      }
+      // On main screen: allow default Android behavior to exit the app
+      return false;
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [activePortal, verifyModalVisible, profileModalVisible]);
 
   if (activePortal) {
     return (
