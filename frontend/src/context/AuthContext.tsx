@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { 
   AuthResponse, 
+  checkDeviceSession,
   getSavedSession, 
   initGoogleSignIn, 
   signInWithApple, 
@@ -9,16 +10,27 @@ import {
   UserProfile 
 } from '@/services/auth';
 
+export interface DeviceMismatchInfo {
+  isMismatch: boolean;
+  registeredDevice?: string;
+  currentDevice?: string;
+  email?: string;
+  error?: string;
+}
+
 interface AuthContextType {
   user: UserProfile | null;
   token: string | null;
   isLoading: boolean;
   isAuthenticating: boolean;
   error: string | null;
+  deviceMismatchInfo: DeviceMismatchInfo | null;
   loginWithGoogle: () => Promise<boolean>;
   loginWithApple: () => Promise<boolean>;
   logout: () => Promise<void>;
   clearError: () => void;
+  clearDeviceMismatch: () => void;
+  refreshDeviceSession: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -29,6 +41,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deviceMismatchInfo, setDeviceMismatchInfo] = useState<DeviceMismatchInfo | null>(null);
 
   useEffect(() => {
     initGoogleSignIn();
@@ -40,6 +53,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsLoading(true);
       const session = await getSavedSession();
       if (session.token && session.user) {
+        // Verify that this device is still the bound device for this user email
+        if (session.user.email) {
+          const checkRes = await checkDeviceSession(session.user.email);
+          if (checkRes.isMismatch) {
+            setDeviceMismatchInfo({
+              isMismatch: true,
+              registeredDevice: checkRes.registeredDevice,
+              currentDevice: checkRes.currentDevice,
+              email: session.user.email,
+              error: checkRes.error,
+            });
+            // Do not authenticate on mismatch
+            setUser(null);
+            setToken(null);
+            setIsLoading(false);
+            return;
+          }
+
+          // Sync updated trial data if available
+          if (typeof checkRes.trialDaysLeft === 'number') {
+            session.user.trialDaysLeft = checkRes.trialDaysLeft;
+            session.user.isTrialExpired = !!checkRes.isTrialExpired;
+            if (checkRes.subscriptionPlan !== undefined) {
+              session.user.subscriptionPlan = checkRes.subscriptionPlan;
+            }
+          }
+        }
+
         setToken(session.token);
         setUser(session.user);
       }
@@ -50,11 +91,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function handleLoginResult(result: AuthResponse): Promise<boolean> {
+  async function refreshDeviceSession(): Promise<void> {
+    if (user?.email) {
+      const checkRes = await checkDeviceSession(user.email);
+      if (checkRes.isMismatch) {
+        setDeviceMismatchInfo({
+          isMismatch: true,
+          registeredDevice: checkRes.registeredDevice,
+          currentDevice: checkRes.currentDevice,
+          email: user.email,
+          error: checkRes.error,
+        });
+      } else {
+        setDeviceMismatchInfo(null);
+      }
+    }
+  }
+
+  async function handleLoginResult(result: AuthResponse, requestedEmail?: string): Promise<boolean> {
+    if (result.code === 'DEVICE_MISMATCH' || (!result.success && result.registeredDevice)) {
+      setDeviceMismatchInfo({
+        isMismatch: true,
+        registeredDevice: result.registeredDevice,
+        currentDevice: result.currentDevice,
+        email: requestedEmail || result.user?.email,
+        error: result.error,
+      });
+      setError(result.error || 'هذا الحساب مسجل على هاتف آخر');
+      return false;
+    }
+
     if (result.success && result.user && result.token) {
       setUser(result.user);
       setToken(result.token);
       setError(null);
+      setDeviceMismatchInfo(null);
       return true;
     } else {
       setError(result.error || 'فشل تسجيل الدخول');
@@ -91,6 +162,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       setToken(null);
       setError(null);
+      setDeviceMismatchInfo(null);
     } finally {
       setIsLoading(false);
     }
@@ -98,6 +170,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   function clearError() {
     setError(null);
+  }
+
+  function clearDeviceMismatch() {
+    setDeviceMismatchInfo(null);
   }
 
   return (
@@ -108,10 +184,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isLoading,
         isAuthenticating,
         error,
+        deviceMismatchInfo,
         loginWithGoogle,
         loginWithApple,
         logout,
         clearError,
+        clearDeviceMismatch,
+        refreshDeviceSession,
       }}>
       {children}
     </AuthContext.Provider>
@@ -125,3 +204,4 @@ export function useAuth(): AuthContextType {
   }
   return context;
 }
+

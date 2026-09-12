@@ -40,6 +40,7 @@ import {
   getSubscriptionStatus,
   registerGlobalPharmacy,
 } from '@/services/subscription';
+import { useAuth } from '@/context/AuthContext';
 
 interface WarehousePortalScreenProps {
   warehouse: Warehouse;
@@ -59,6 +60,7 @@ export default function WarehousePortalScreen({
   onBack,
 }: WarehousePortalScreenProps) {
   const { width, height } = useWindowDimensions();
+  const { user } = useAuth();
   const [selectedSection, setSelectedSection] = useState<SectionKey | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -145,7 +147,7 @@ export default function WarehousePortalScreen({
       if (pharmacyCode && pharmacyName) {
         await registerGlobalPharmacy(pharmacyCode, pharmacyName);
       }
-      const subStatus = await getSubscriptionStatus();
+      const subStatus = await getSubscriptionStatus(user?.email);
       if (subStatus.isTrialExpired) {
         setIsTrialExpired(true);
         setSubscriptionReason('انتهت الفترة التجريبية (7 أيام). يرجى الاشتراك للاستمرار.');
@@ -295,7 +297,7 @@ export default function WarehousePortalScreen({
 
   // Check if pharmacist can add a new pharmacy before opening modal
   const handlePressAddPharmacy = async () => {
-    const check = await checkCanAddPharmacy();
+    const check = await checkCanAddPharmacy(user?.email);
     if (!check.canAdd) {
       setSubscriptionReason(check.reason);
       setSubscriptionRequiredPlan(check.requiredPlan || 2);

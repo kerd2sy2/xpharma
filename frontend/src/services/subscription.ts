@@ -149,24 +149,50 @@ export async function setActiveSubscriptionPlan(planCount: number): Promise<void
   }
 }
 
+import { checkDeviceSession } from './auth';
+
 /**
  * Get full subscription status
+ * If userEmail is provided, synchronizes authoritatively with central backend
  */
-export async function getSubscriptionStatus(): Promise<SubscriptionStatus> {
+export async function getSubscriptionStatus(userEmail?: string): Promise<SubscriptionStatus> {
   const trialStartDate = await getOrInitTrialStartDate();
-  const subscribedPlan = await getActiveSubscriptionPlan();
+  let subscribedPlan = await getActiveSubscriptionPlan();
   const uniquePharmacies = await getGlobalLinkedPharmacies();
 
-  const startMs = new Date(trialStartDate).getTime();
-  const nowMs = Date.now();
-  const elapsedDays = (nowMs - startMs) / (1000 * 60 * 60 * 24);
-  const daysRemaining = Math.max(0, Math.ceil(TRIAL_DURATION_DAYS - elapsedDays));
-  const isTrialExpired = elapsedDays >= TRIAL_DURATION_DAYS && subscribedPlan === 0;
-  const isSubscribed = subscribedPlan > 0;
+  let daysRemaining = 7;
+  let isTrialExpired = false;
+  let hasServerSync = false;
 
-  // Allowed pharmacies:
-  // If subscribed: whatever plan is active (e.g. 2, 3, 4, 5)
-  // If on trial: strictly 1 pharmacy
+  // 1. If email is available, query backend for authoritative trial remaining days & plan
+  if (userEmail) {
+    try {
+      const serverCheck = await checkDeviceSession(userEmail);
+      if (serverCheck.success && typeof serverCheck.trialDaysLeft === 'number') {
+        daysRemaining = serverCheck.trialDaysLeft;
+        isTrialExpired = !!serverCheck.isTrialExpired;
+        hasServerSync = true;
+        if (typeof serverCheck.subscriptionPlan === 'number' && serverCheck.subscriptionPlan > 0) {
+          subscribedPlan = serverCheck.subscriptionPlan;
+          await setActiveSubscriptionPlan(subscribedPlan);
+        }
+      }
+    } catch (err) {
+      console.warn('Subscription server sync warning:', err);
+    }
+  }
+
+  // 2. Fallback to local time calculation if server was unreachable or email was not provided
+  if (!hasServerSync) {
+    const startMs = new Date(trialStartDate).getTime();
+    const nowMs = Date.now();
+    const elapsedDays = (nowMs - startMs) / (1000 * 60 * 60 * 24);
+    daysRemaining = Math.max(0, Math.ceil(TRIAL_DURATION_DAYS - elapsedDays));
+    isTrialExpired = elapsedDays >= TRIAL_DURATION_DAYS && subscribedPlan === 0;
+  }
+
+  const isSubscribed = subscribedPlan > 0;
+  // Allowed pharmacies: 1 pharmacy across all warehouses during trial, or subscribedPlan count
   const allowedPharmacies = isSubscribed ? subscribedPlan : 1;
 
   return {
@@ -184,7 +210,7 @@ export async function getSubscriptionStatus(): Promise<SubscriptionStatus> {
 /**
  * Check if the user can add another pharmacy
  */
-export async function checkCanAddPharmacy(): Promise<{
+export async function checkCanAddPharmacy(userEmail?: string): Promise<{
   canAdd: boolean;
   reason?: string;
   requiredPlan?: number;
@@ -192,7 +218,7 @@ export async function checkCanAddPharmacy(): Promise<{
   allowedCount: number;
   isTrialExpired: boolean;
 }> {
-  const status = await getSubscriptionStatus();
+  const status = await getSubscriptionStatus(userEmail);
 
   if (status.isTrialExpired) {
     return {

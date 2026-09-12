@@ -231,7 +231,7 @@ export default function HomeScreen() {
   useEffect(() => {
     loadWarehouses();
     const checkTrial = async () => {
-      const status = await getSubscriptionStatus();
+      const status = await getSubscriptionStatus(user?.email);
       setSubscriptionStatusInfo(status);
       if (status.isTrialExpired) {
         setIsTrialExpired(true);
@@ -240,17 +240,17 @@ export default function HomeScreen() {
       }
     };
     checkTrial();
-  }, [user?.id]);
+  }, [user?.id, user?.email]);
 
   const onRefresh = () => {
     setRefreshing(true);
     loadWarehouses();
-    getSubscriptionStatus().then(setSubscriptionStatusInfo);
+    getSubscriptionStatus(user?.email).then(setSubscriptionStatusInfo);
   };
 
   const handleWarehousePress = async (wh: Warehouse) => {
     // 1. Check if trial has expired
-    const subStatus = await getSubscriptionStatus();
+    const subStatus = await getSubscriptionStatus(user?.email);
     setSubscriptionStatusInfo(subStatus);
     if (subStatus.isTrialExpired) {
       setSubscriptionReason('انتهت الفترة التجريبية (7 أيام). يرجى الاشتراك للاستمرار في فتح المخازن.');
@@ -288,7 +288,7 @@ export default function HomeScreen() {
     if (!selectedWarehouseForModal || !result.token) return;
 
     await registerGlobalPharmacy(result.pharmacy_code || '', result.pharmacy_name || '');
-    const updatedStatus = await getSubscriptionStatus();
+    const updatedStatus = await getSubscriptionStatus(user?.email);
     setSubscriptionStatusInfo(updatedStatus);
 
     setVerifyModalVisible(false);
@@ -1035,7 +1035,7 @@ export default function HomeScreen() {
         onSubscribed={async () => {
           setSubscriptionModalVisible(false);
           setIsTrialExpired(false);
-          const st = await getSubscriptionStatus();
+          const st = await getSubscriptionStatus(user?.email);
           setSubscriptionStatusInfo(st);
         }}
       />
