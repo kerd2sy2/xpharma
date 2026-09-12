@@ -159,6 +159,45 @@ func main() {
 		})
 	})
 
+	// Pharmacist Request to Onboard an Unlisted Warehouse
+	r.POST("/v1/warehouses/request", func(c *gin.Context) {
+		var req struct {
+			WarehouseName  string `json:"warehouse_name" binding:"required"`
+			WarehousePhone string `json:"warehouse_phone" binding:"required"`
+			Notes          string `json:"notes"`
+			UserID         string `json:"user_id"`
+			UserEmail      string `json:"user_email"`
+			UserName       string `json:"user_name"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "اسم المخزن ورقم الهاتف مطلوبان"})
+			return
+		}
+
+		insertQuery := `
+			INSERT INTO public.warehouse_requests 
+				(warehouse_name, warehouse_phone, notes, requested_by_user_id, requested_by_email, requested_by_name)
+			VALUES ($1, $2, $3, $4, $5, $6)
+		`
+		_, err := router.Pool().Exec(c.Request.Context(), insertQuery,
+			strings.TrimSpace(req.WarehouseName),
+			strings.TrimSpace(req.WarehousePhone),
+			strings.TrimSpace(req.Notes),
+			req.UserID,
+			req.UserEmail,
+			req.UserName,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل حفظ الطلب، يرجى المحاولة لاحقاً"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "تم استلام طلب إضافة المخزن بنجاح",
+		})
+	})
+
 	// Mobile Auth / Linking
 	authGroup := r.Group("/v1/auth")
 	{
