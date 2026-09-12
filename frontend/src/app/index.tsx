@@ -92,20 +92,20 @@ export default function HomeScreen() {
     isNavigatingRef.current = true;
     animationStartTimeRef.current = Date.now();
 
-    // Trigger full fresh animation from frame 0
+    // Trigger full fresh animation immediately without any blank delay
     headerLogoRef.current?.play();
 
-    // Enforce waiting for full animation (~2.2 seconds):
+    // The trimmed animation has zero blank frames and finishes in ~1400ms:
     if (navigationTimeoutRef.current) clearTimeout(navigationTimeoutRef.current);
     navigationTimeoutRef.current = setTimeout(() => {
       navigateWebsite();
-    }, 2200);
+    }, 1450);
   };
 
   const handleAnimationFinish = () => {
-    // Only accept animation finish if at least 1800ms has elapsed (prevents premature callback)
+    // Only accept animation finish once at least 1100ms has elapsed
     const elapsed = Date.now() - animationStartTimeRef.current;
-    if (isNavigatingRef.current && elapsed >= 1800) {
+    if (isNavigatingRef.current && elapsed >= 1100) {
       navigateWebsite();
     }
   };
@@ -360,7 +360,7 @@ export default function HomeScreen() {
             ref={headerLogoRef}
             size={52}
             scale={1.6}
-            speed={1.3}
+            speed={1.0}
             autoPlay={false}
             loop={false}
             onAnimationFinish={handleAnimationFinish}
