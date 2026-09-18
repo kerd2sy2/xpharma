@@ -527,15 +527,12 @@ export default function HomeScreen() {
         keyExtractor={(item) => item.id}
         numColumns={isTablet ? 2 : 1}
         columnWrapperStyle={isTablet ? styles.columnWrapper : undefined}
-        contentContainerStyle={[
-          styles.listContent,
-          { paddingTop: topInset + 54 },
-        ]}
+        contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
         showsHorizontalScrollIndicator={false}
         onScroll={(event) => {
           const y = event.nativeEvent.contentOffset.y;
-          const threshold = isTablet ? 230 : 180;
+          const threshold = isTablet ? 280 : 230;
           if (y >= threshold && !isStickyTabs) {
             setIsStickyTabs(true);
           } else if (y < threshold && isStickyTabs) {
@@ -548,11 +545,61 @@ export default function HomeScreen() {
             refreshing={refreshing}
             onRefresh={onRefresh}
             colors={[colors.primary]}
-            progressViewOffset={topInset + 54}
+            progressViewOffset={topInset + 30}
           />
         }
         ListHeaderComponent={
-          <View style={styles.listHeaderContainer}>
+          <View style={[styles.listHeaderContainer, { paddingTop: topInset + 6 }]}>
+            {/* Top Bar inside Scroll: Avatar & Search on Left, X Logo on Right */}
+            <View style={styles.headerTopRow}>
+              {/* Left side: Avatar & Search Button */}
+              <View style={styles.headerLeftRow}>
+                <TouchableOpacity
+                  style={styles.avatarButton}
+                  onPress={() => setProfileModalVisible(true)}
+                  activeOpacity={0.8}
+                >
+                  {user?.photo ? (
+                    <Image source={{ uri: user.photo }} style={styles.avatarImg} />
+                  ) : (
+                    <View style={[styles.avatarPlaceholder, { backgroundColor: colors.primary }]}>
+                      <Text style={styles.avatarLetter}>
+                        {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
+                      </Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.headerSearchBtn, { backgroundColor: 'rgba(63, 0, 130, 0.08)' }]}
+                  onPress={() => {
+                    setIsSearchActive(true);
+                    setTimeout(() => searchInputRef.current?.focus(), 150);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="search" size={20} color={colors.primary} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Right side: Brand Logo */}
+              <TouchableOpacity
+                style={styles.brandRow}
+                onPress={handleLogoPress}
+                activeOpacity={0.7}
+              >
+                <XLogo
+                  ref={headerLogoRef}
+                  size={48}
+                  scale={1.8}
+                  speed={1.0}
+                  autoPlay={false}
+                  loop={false}
+                  onAnimationFinish={handleAnimationFinish}
+                />
+              </TouchableOpacity>
+            </View>
+
             {/* Promo Banners Carousel */}
             {!isSearchActive && (
               <PromoBannerCarousel
@@ -615,119 +662,69 @@ export default function HomeScreen() {
         }
       />
 
-      {/* Fixed Top Header */}
-      <View style={[styles.fixedHeaderArea, { paddingTop: topInset, backgroundColor: colors.bg }]}>
-        {isSearchActive ? (
-          <View style={styles.searchBarActiveContainer}>
-            <TouchableOpacity
-              style={styles.searchCloseBtn}
-              onPress={() => {
-                setIsSearchActive(false);
-                setSearchQuery('');
-              }}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="arrow-forward" size={22} color={colors.text} />
-            </TouchableOpacity>
-
-            <View style={styles.searchInputActiveWrapper}>
-              <Ionicons name="search" size={18} color={colors.secondaryText} style={styles.searchInnerIcon} />
-              <TextInput
-                ref={searchInputRef}
-                style={styles.searchActiveTextInput}
-                placeholder="ابحث باسم المخزن أو الصيدلية..."
-                placeholderTextColor={colors.secondaryText}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                returnKeyType="search"
-                onSubmitEditing={() => {
-                  if (searchQuery.trim().length > 0 && filteredWarehouses.length === 0) {
-                    openRequestModal(searchQuery.trim());
-                  }
-                }}
-                autoFocus
-              />
-              {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.clearSearchBtn}>
-                  <Ionicons name="close-circle" size={18} color={colors.secondaryText} />
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-        ) : (
-          <View style={styles.headerTopRow}>
-            {/* Left side: Avatar & Search Button */}
-            <View style={styles.headerLeftRow}>
+      {/* Floating Top Area: Only shows Search Bar when active OR Category Tabs when scrolling */}
+      {(isSearchActive || isStickyTabs) && (
+        <View style={[styles.fixedHeaderArea, { paddingTop: topInset, backgroundColor: colors.bg }]}>
+          {isSearchActive ? (
+            <View style={styles.searchBarActiveContainer}>
               <TouchableOpacity
-                style={styles.avatarButton}
-                onPress={() => setProfileModalVisible(true)}
-                activeOpacity={0.8}
-              >
-                {user?.photo ? (
-                  <Image source={{ uri: user.photo }} style={styles.avatarImg} />
-                ) : (
-                  <View style={[styles.avatarPlaceholder, { backgroundColor: colors.primary }]}>
-                    <Text style={styles.avatarLetter}>
-                      {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
-                    </Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.headerSearchBtn, { backgroundColor: 'rgba(63, 0, 130, 0.08)' }]}
+                style={styles.searchCloseBtn}
                 onPress={() => {
-                  setIsSearchActive(true);
-                  setTimeout(() => searchInputRef.current?.focus(), 150);
+                  setIsSearchActive(false);
+                  setSearchQuery('');
                 }}
                 activeOpacity={0.7}
               >
-                <Ionicons name="search" size={20} color={colors.primary} />
+                <Ionicons name="arrow-forward" size={22} color={colors.text} />
               </TouchableOpacity>
+
+              <View style={styles.searchInputActiveWrapper}>
+                <Ionicons name="search" size={18} color={colors.secondaryText} style={styles.searchInnerIcon} />
+                <TextInput
+                  ref={searchInputRef}
+                  style={styles.searchActiveTextInput}
+                  placeholder="ابحث باسم المخزن أو الصيدلية..."
+                  placeholderTextColor={colors.secondaryText}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  returnKeyType="search"
+                  onSubmitEditing={() => {
+                    if (searchQuery.trim().length > 0 && filteredWarehouses.length === 0) {
+                      openRequestModal(searchQuery.trim());
+                    }
+                  }}
+                  autoFocus
+                />
+                {searchQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.clearSearchBtn}>
+                    <Ionicons name="close-circle" size={18} color={colors.secondaryText} />
+                  </TouchableOpacity>
+                )}
+              </View>
             </View>
+          ) : isStickyTabs ? (
+            <View style={[styles.stickyTabsHeaderWrapper, { backgroundColor: colors.bg }]}>
+              {renderCategoryTabs(true)}
+            </View>
+          ) : null}
 
-            {/* Right side: Brand Logo */}
-            <TouchableOpacity
-              style={styles.brandRow}
-              onPress={handleLogoPress}
-              activeOpacity={0.7}
-            >
-              <XLogo
-                ref={headerLogoRef}
-                size={48}
-                scale={1.8}
-                speed={1.0}
-                autoPlay={false}
-                loop={false}
-                onAnimationFinish={handleAnimationFinish}
-              />
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Sticky Category Tabs pinned in the header when scrolling past the promo banner */}
-        {!isSearchActive && isStickyTabs && (
-          <View style={[styles.stickyTabsHeaderWrapper, { backgroundColor: colors.bg }]}>
-            {renderCategoryTabs(true)}
-          </View>
-        )}
-
-        <LinearGradient
-          colors={[
-            colors.bg,
-            'rgba(249, 247, 253, 0.98)',
-            'rgba(249, 247, 253, 0.90)',
-            'rgba(249, 247, 253, 0.76)',
-            'rgba(249, 247, 253, 0.56)',
-            'rgba(249, 247, 253, 0.35)',
-            'rgba(249, 247, 253, 0.16)',
-            'rgba(249, 247, 253, 0.04)',
-            'rgba(249, 247, 253, 0)',
-          ]}
-          style={styles.featherEdge}
-          pointerEvents="none"
-        />
-      </View>
+          <LinearGradient
+            colors={[
+              colors.bg,
+              'rgba(249, 247, 253, 0.98)',
+              'rgba(249, 247, 253, 0.90)',
+              'rgba(249, 247, 253, 0.76)',
+              'rgba(249, 247, 253, 0.56)',
+              'rgba(249, 247, 253, 0.35)',
+              'rgba(249, 247, 253, 0.16)',
+              'rgba(249, 247, 253, 0.04)',
+              'rgba(249, 247, 253, 0)',
+            ]}
+            style={styles.featherEdge}
+            pointerEvents="none"
+          />
+        </View>
+      )}
 
       {/* Modular Modals */}
       <PharmacyVerifyModal
