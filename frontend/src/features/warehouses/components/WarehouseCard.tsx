@@ -110,7 +110,7 @@ export const WarehouseCard = React.memo(({ item, onPress, width, marginBottom }:
 
         {/* Right side: Name, Status & Category */}
         <View style={styles.bannerDetailsCol}>
-          <Text style={styles.bannerTitleText} numberOfLines={1}>
+          <Text style={styles.bannerTitleText} numberOfLines={2}>
             {item.name}
           </Text>
 
@@ -148,7 +148,7 @@ export const WarehouseCard = React.memo(({ item, onPress, width, marginBottom }:
 
 const styles = StyleSheet.create({
   appStoreBannerCard: {
-    height: 96,
+    minHeight: 96,
     borderRadius: 22,
     overflow: 'hidden',
     position: 'relative',
@@ -184,8 +184,10 @@ const styles = StyleSheet.create({
     marginLeft: 14,
   },
   bannerTitleText: {
+    width: '100%',
     color: '#FFFFFF',
-    fontSize: 16.5,
+    fontSize: 16,
+    lineHeight: 22,
     fontWeight: '800',
     textAlign: 'right',
     marginBottom: 6,
