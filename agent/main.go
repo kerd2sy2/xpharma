@@ -1647,6 +1647,11 @@ func runGentleSync(cfg *Config) {
 	state.CloudConnected = true
 	state.Unlock()
 
+	// Send heartbeat upon sync completion so dashboard is immediately updated to Online
+	if cfg.Cloud.APIKey != "" {
+		_ = sendHeartbeat(cfg)
+	}
+
 	if isAr {
 		addLog(fmt.Sprintf("اكتملت المزامنة بنجاح. المحرك الآن في وضع المراقبة التلقائية كل %d ثانية.", cfg.SyncIntervalSeconds))
 	} else {
@@ -1655,8 +1660,22 @@ func runGentleSync(cfg *Config) {
 }
 
 // -----------------------------------------------------------------------------
-// Continuous Background Sync Loop (المراقبة والتحديث التلقائي المستمر)
+// Cloud Heartbeat & Continuous Background Sync Loop
 // -----------------------------------------------------------------------------
+
+func sendHeartbeat(cfg *Config) error {
+	if cfg.Cloud.APIKey == "" {
+		return nil
+	}
+	payload := IngestionPayload{
+		Cursors: SyncCursors{
+			InvoiceCursor: fmt.Sprintf("%d", cfg.Cursors.LastInvoiceID),
+			ReceiptCursor: fmt.Sprintf("%d", cfg.Cursors.LastReceiptID),
+			ReturnCursor:  fmt.Sprintf("%d", cfg.Cursors.LastReturnID),
+		},
+	}
+	return postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, payload)
+}
 
 func startContinuousDaemon(cfg *Config) {
 	state.Lock()
@@ -1667,16 +1686,29 @@ func startContinuousDaemon(cfg *Config) {
 	state.DaemonRunning = true
 	state.Unlock()
 
-	addLog("تم تفعيل وضع التحديث التلقائي المستمر (يعمل في الخلفية باستمرار).")
+	addLog("تم تفعيل وضع التحديث التلقائي المستمر (يعمل في الخلفية باستمرار ويرسل إشارات النشاط للسحابة).")
 
-	// Trigger initial sync immediately
+	// 1. Send immediate heartbeat so cloud dashboard instantly marks warehouse as Active/Online
+	if cfg.Cloud.APIKey != "" {
+		go func() {
+			if err := sendHeartbeat(cfg); err == nil {
+				state.Lock()
+				state.CloudConnected = true
+				state.LastSyncTime = time.Now()
+				state.Unlock()
+			}
+		}()
+	}
+
+	// 2. Trigger initial sync immediately
 	if cfg.Firebird.DBPath != "" && cfg.Cloud.APIKey != "" {
 		go runGentleSync(cfg)
 	}
 
+	// 3. Heartbeat & Sync ticker (every 30 seconds to guarantee warehouse never becomes idle in dashboard)
 	interval := cfg.SyncIntervalSeconds
-	if interval <= 0 {
-		interval = 60
+	if interval <= 0 || interval > 30 {
+		interval = 30
 	}
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
@@ -1688,6 +1720,14 @@ func startContinuousDaemon(cfg *Config) {
 
 		if !autoSync {
 			continue
+		}
+
+		// Keep cloud status active and fresh in dashboard
+		if cfg.Cloud.APIKey != "" {
+			_ = sendHeartbeat(cfg)
+			state.Lock()
+			state.CloudConnected = true
+			state.Unlock()
 		}
 
 		if cfg.Firebird.DBPath != "" && cfg.Cloud.APIKey != "" {
@@ -2995,6 +3035,11 @@ const appHTML = `<!DOCTYPE html>
           <span id="t-btn-start">حفظ وبدء المزامنة</span>
         </button>
 
+        <button class="btn btn-secondary" id="btnRunBg" onclick="runInBackground()" style="background:#E8FBF2; color:#065F46; border-color:#A7F3D0;" title="تشغيل المزامنة وإخفاء النافذة للعمل في الخلفية دون توقف">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+          <span id="t-btn-run-bg">تشغيل في الخلفية</span>
+        </button>
+
         <button class="btn btn-warning" id="btnPause" onclick="pauseSync()" style="display:none;">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
           <span id="t-btn-pause">إيقاف مؤقت</span>
@@ -3166,6 +3211,7 @@ const appHTML = `<!DOCTYPE html>
         autostartTitle: 'التشغيل التلقائي مع إقلاع النظام (Windows Auto-Start)',
         autostartDesc: 'يبدأ البرنامج تلقائياً في الخلفية عند إعادة تشغيل الكمبيوتر، ويستمر في التحديث كل دقيقة.',
         btnStart: 'حفظ وبدء المزامنة',
+        btnRunBg: 'تشغيل في الخلفية',
         btnPause: 'إيقاف مؤقت',
         btnTest: 'فحص الاتصال',
         btnSave: 'حفظ الإعدادات فقط',
@@ -3205,6 +3251,7 @@ const appHTML = `<!DOCTYPE html>
         autostartTitle: 'Windows Auto-Start on Boot',
         autostartDesc: 'Launches automatically in background on system reboot and syncs updates continuously.',
         btnStart: 'Save & Start Sync',
+        btnRunBg: 'Run in Background',
         btnPause: 'Pause Sync',
         btnTest: 'Test Connection',
         btnSave: 'Save Settings Only',
@@ -3254,6 +3301,7 @@ const appHTML = `<!DOCTYPE html>
       document.getElementById('t-autostart-title').innerText = t.autostartTitle;
       document.getElementById('t-autostart-desc').innerText = t.autostartDesc;
       document.getElementById('t-btn-start').innerText = t.btnStart;
+      if (document.getElementById('t-btn-run-bg')) document.getElementById('t-btn-run-bg').innerText = t.btnRunBg;
       document.getElementById('t-btn-pause').innerText = t.btnPause;
       document.getElementById('t-btn-test').innerText = t.btnTest;
       document.getElementById('t-btn-save').innerText = t.btnSave;
@@ -3596,6 +3644,28 @@ const appHTML = `<!DOCTYPE html>
       await fetch('/api/start', { method: 'POST' });
       showToast(currentLang === 'ar' ? 'تم بدء المزامنة بنجاح' : 'Sync started successfully');
       fetchStatus();
+    }
+
+    async function runInBackground() {
+      const dbPath = document.getElementById('inPath').value.trim();
+      const key = document.getElementById('inKey').value.trim();
+
+      if (!dbPath) {
+        showToast(currentLang === 'ar' ? 'يرجى إدخال مسار قاعدة بيانات الفايربيرد أولاً' : 'Please enter database path first', 'error');
+        document.getElementById('inPath').focus();
+        return;
+      }
+      if (!key) {
+        showToast(currentLang === 'ar' ? 'يرجى إدخال مفتاح التوكن السحابي (API Token)' : 'Please enter cloud API token', 'error');
+        document.getElementById('inKey').focus();
+        return;
+      }
+
+      await startSync();
+      showToast(currentLang === 'ar' ? 'تم تفعيل التشغيل في الخلفية! سيتم إغلاق النافذة والعمل بصمت واستمرار.' : 'Running in background! Window will close now.', 'success');
+      setTimeout(() => {
+        window.close();
+      }, 1500);
     }
 
     async function pauseSync() {
