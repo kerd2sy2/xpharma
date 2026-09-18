@@ -3,7 +3,9 @@ import {
   ActivityIndicator,
   Dimensions,
   Image,
+  Linking,
   Modal,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -11,10 +13,11 @@ import {
   View,
 } from 'react-native';
 import { Ionicons, FontAwesome } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useOTAUpdates } from '../hooks/useOTAUpdates';
 import { SubscriptionStatus } from '@/services/subscription';
 
-const { width } = Dimensions.get('window');
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 interface SettingsModalProps {
   visible: boolean;
@@ -41,16 +44,10 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const { checkingUpdate, checkForUpdates } = useOTAUpdates();
 
-  const colors = {
-    bg: '#F9F7FD',
-    card: '#FFFFFF',
-    text: '#1A0A33',
-    secondaryText: '#6B5E82',
-    border: '#E9E3F3',
-    primary: '#3f0082',
-    primarySoft: '#3f008215',
-    success: '#00d780',
-    danger: '#EF4444',
+  const handleSupportPress = () => {
+    Linking.openURL('https://wa.me/201019688000').catch(() => {
+      // Fallback
+    });
   };
 
   return (
@@ -61,141 +58,282 @@ export function SettingsModal({
       onRequestClose={onClose}
     >
       <TouchableWithoutFeedback onPress={onClose}>
-        <View style={styles.modalOverlayBottom}>
+        <View style={styles.modalOverlay}>
           <TouchableWithoutFeedback>
-            <View style={[styles.bottomSheetCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              {/* Drag Handle Indicator */}
-              <View style={[styles.sheetHandle, { backgroundColor: colors.border }]} />
+            <View style={styles.sheetContainer}>
+              {/* Top Drag Indicator */}
+              <View style={styles.dragHandle} />
 
-              {/* Header Row */}
-              <View style={styles.headerRow}>
-                <Text style={[styles.headerTitle, { color: colors.text }]}>الإعدادات والحساب</Text>
+              {/* Header Bar */}
+              <View style={styles.headerBar}>
                 <TouchableOpacity
-                  style={[styles.closeIconBtnSheet, { borderColor: colors.border }]}
+                  style={styles.closeBtn}
                   onPress={onClose}
+                  activeOpacity={0.7}
                 >
-                  <Ionicons name="close" size={20} color={colors.text} />
+                  <Ionicons name="close" size={20} color="#1E1335" />
                 </TouchableOpacity>
-              </View>
 
-              {/* Avatar */}
-              <View style={styles.profileAvatarContainer}>
-                {user?.photo ? (
-                  <Image source={{ uri: user.photo }} style={styles.profileAvatarImg} />
-                ) : (
-                  <View style={[styles.profileAvatarPlaceholder, { backgroundColor: colors.primary }]}>
-                    <Text style={styles.profileAvatarLetter}>
-                      {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
-                    </Text>
-                  </View>
-                )}
-                <View style={styles.profileBadgeIcon}>
-                  {user?.provider === 'google' ? (
-                    <FontAwesome name="google" size={14} color="#EA4335" />
-                  ) : (
-                    <Ionicons name="logo-apple" size={14} color="#000000" />
-                  )}
+                <View style={styles.headerTitleBox}>
+                  <Text style={styles.headerTitle}>الحساب والإعدادات</Text>
+                  <Text style={styles.headerSubtitle}>إدارة ملف الصيدلية والاشتراكات</Text>
                 </View>
+
+                <View style={{ width: 36 }} />
               </View>
 
-              {/* User Info */}
-              <Text style={[styles.profileName, { color: colors.text }]}>
-                {user?.name || 'دكتور صيدلي'}
-              </Text>
-              <Text style={[styles.profileEmail, { color: colors.secondaryText }]}>
-                {user?.email || 'حساب مفعل'}
-              </Text>
-
-              {/* Subscription & Trial Status Card */}
-              <TouchableOpacity
-                style={[styles.profileSubCard, { backgroundColor: colors.primarySoft, borderColor: colors.border }]}
-                onPress={() => {
-                  onClose();
-                  onOpenSubscriptionModal();
-                }}
-                activeOpacity={0.8}
+              <ScrollView
+                style={styles.scrollBody}
+                contentContainerStyle={styles.scrollContent}
+                showsVerticalScrollIndicator={false}
+                bounces={true}
               >
-                <View style={styles.profileSubRight}>
-                  <View style={[styles.profileSubIconCircle, { backgroundColor: '#FFFFFF' }]}>
-                    <Ionicons name="sparkles" size={18} color="#F59E0B" />
+                {/* 1. Executive Profile Hero Card */}
+                <LinearGradient
+                  colors={['#25044A', '#3F0082', '#5610A3']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.profileHeroCard}
+                >
+                  {/* Background Ambient Glow */}
+                  <View style={styles.heroGlowCircle} />
+
+                  <View style={styles.profileHeroContent}>
+                    {/* Avatar with Glow Border */}
+                    <View style={styles.avatarWrapper}>
+                      {user?.photo ? (
+                        <Image source={{ uri: user.photo }} style={styles.avatarImg} />
+                      ) : (
+                        <LinearGradient
+                          colors={['#7C3AED', '#4C1D95']}
+                          style={styles.avatarPlaceholder}
+                        >
+                          <Text style={styles.avatarLetter}>
+                            {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
+                          </Text>
+                        </LinearGradient>
+                      )}
+
+                      {/* Provider / Verified Badge */}
+                      <View style={styles.providerBadge}>
+                        {user?.provider === 'google' ? (
+                          <FontAwesome name="google" size={13} color="#EA4335" />
+                        ) : user?.provider === 'apple' ? (
+                          <Ionicons name="logo-apple" size={13} color="#000000" />
+                        ) : (
+                          <Ionicons name="shield-checkmark" size={13} color="#10B981" />
+                        )}
+                      </View>
+                    </View>
+
+                    {/* Name & Details */}
+                    <View style={styles.profileTextWrapper}>
+                      <View style={styles.nameRow}>
+                        <Text style={styles.profileName} numberOfLines={1}>
+                          {user?.name || 'دكتور صيدلي'}
+                        </Text>
+                        <View style={styles.verifiedPill}>
+                          <Ionicons name="checkmark-circle" size={12} color="#10B981" />
+                          <Text style={styles.verifiedPillText}>موثق</Text>
+                        </View>
+                      </View>
+
+                      <Text style={styles.profileEmail} numberOfLines={1}>
+                        {user?.email || 'حساب مفعل في شبكة XPharma'}
+                      </Text>
+                    </View>
                   </View>
-                  <View style={styles.profileSubTextCol}>
-                    <Text style={[styles.profileSubTitle, { color: colors.primary }]}>
-                      {subscriptionStatusInfo?.isSubscribed
-                        ? `باقة نشطة: ${subscriptionStatusInfo.subscribedPlan} صيدليات`
+                </LinearGradient>
+
+                {/* 2. VIP Subscription Status Card */}
+                <TouchableOpacity
+                  style={styles.subscriptionCard}
+                  onPress={() => {
+                    onClose();
+                    onOpenSubscriptionModal();
+                  }}
+                  activeOpacity={0.88}
+                >
+                  <LinearGradient
+                    colors={
+                      subscriptionStatusInfo?.isSubscribed
+                        ? ['#0B2B1E', '#064E3B']
                         : subscriptionStatusInfo?.isTrialExpired
-                        ? 'انتهت الفترة التجريبية (7 أيام)'
-                        : `الفترة التجريبية: صيدلية واحدة (${subscriptionStatusInfo?.daysRemaining ?? 7} أيام متبقية)`}
-                    </Text>
-                    <Text style={[styles.profileSubSubtitle, { color: colors.secondaryText }]}>
-                      {subscriptionStatusInfo?.isSubscribed
-                        ? 'اشتراك مفعل عبر كل المخازن'
-                        : 'اضغط لعرض خطط وباقات الاشتراك الشهري'}
-                    </Text>
+                        ? ['#360B12', '#7F1D1D']
+                        : ['#281702', '#78350F']
+                    }
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.subscriptionGradient}
+                  >
+                    <View style={styles.subIconBadge}>
+                      <Ionicons
+                        name={
+                          subscriptionStatusInfo?.isSubscribed
+                            ? 'sparkles'
+                            : subscriptionStatusInfo?.isTrialExpired
+                            ? 'alert-circle'
+                            : 'time-outline'
+                        }
+                        size={22}
+                        color={
+                          subscriptionStatusInfo?.isSubscribed
+                            ? '#34D399'
+                            : subscriptionStatusInfo?.isTrialExpired
+                            ? '#F87171'
+                            : '#FBBF24'
+                        }
+                      />
+                    </View>
+
+                    <View style={styles.subDetailsCol}>
+                      <View style={styles.subTitleRow}>
+                        <Text style={styles.subTitleText}>
+                          {subscriptionStatusInfo?.isSubscribed
+                            ? `باقة نشطة: ${subscriptionStatusInfo.subscribedPlan} صيدليات`
+                            : subscriptionStatusInfo?.isTrialExpired
+                            ? 'انتهت الفترة التجريبية'
+                            : 'الفترة التجريبية المجانية'}
+                        </Text>
+                        <View
+                          style={[
+                            styles.subStatusBadge,
+                            subscriptionStatusInfo?.isSubscribed
+                              ? styles.badgeSuccess
+                              : subscriptionStatusInfo?.isTrialExpired
+                              ? styles.badgeDanger
+                              : styles.badgeWarning,
+                          ]}
+                        >
+                          <Text style={styles.subStatusBadgeText}>
+                            {subscriptionStatusInfo?.isSubscribed
+                              ? 'نشط ⚡'
+                              : subscriptionStatusInfo?.isTrialExpired
+                              ? 'منتهي'
+                              : `${subscriptionStatusInfo?.daysRemaining ?? 7} يوم`}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <Text style={styles.subSubtitleText}>
+                        {subscriptionStatusInfo?.isSubscribed
+                          ? 'ربط غير محدود ومزامنة فورية لكافة المخازن'
+                          : subscriptionStatusInfo?.isTrialExpired
+                          ? 'قم بالترقية لمواصلة التمتع بالربط الذكي'
+                          : 'اضغط هنا للاطلاع على خطط وترقية الاشتراك'}
+                      </Text>
+                    </View>
+
+                    <Ionicons name="chevron-back" size={18} color="rgba(255, 255, 255, 0.7)" />
+                  </LinearGradient>
+                </TouchableOpacity>
+
+                {/* 3. Settings Group 1: Features & System Actions */}
+                <Text style={styles.sectionHeaderLabel}>الخدمات وتحديثات النظام</Text>
+                <View style={styles.groupedCard}>
+                  {/* OTA Updates Row */}
+                  <TouchableOpacity
+                    style={styles.menuRowItem}
+                    onPress={checkForUpdates}
+                    disabled={checkingUpdate}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="chevron-back" size={17} color="#9CA3AF" />
+
+                    <View style={styles.menuRowDetails}>
+                      <Text style={styles.menuRowTitle}>
+                        {checkingUpdate ? 'جاري فحص التحديثات...' : 'تحديثات النظام الفورية (OTA)'}
+                      </Text>
+                      <Text style={styles.menuRowSubtitle}>
+                        تنزيل وتطبيق أحدث ميزات التطبيق بدون متجر
+                      </Text>
+                    </View>
+
+                    <View style={[styles.menuIconBox, { backgroundColor: '#EDE9FE' }]}>
+                      {checkingUpdate ? (
+                        <ActivityIndicator size="small" color="#6D28D9" />
+                      ) : (
+                        <Ionicons name="cloud-download" size={19} color="#6D28D9" />
+                      )}
+                    </View>
+                  </TouchableOpacity>
+
+                  <View style={styles.menuDivider} />
+
+                  {/* Customer Support via WhatsApp */}
+                  <TouchableOpacity
+                    style={styles.menuRowItem}
+                    onPress={handleSupportPress}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="chevron-back" size={17} color="#9CA3AF" />
+
+                    <View style={styles.menuRowDetails}>
+                      <Text style={styles.menuRowTitle}>الدعم الفني المباشر</Text>
+                      <Text style={styles.menuRowSubtitle}>تواصل سريع مع خدمة عملاء XPharma عبر واتساب</Text>
+                    </View>
+
+                    <View style={[styles.menuIconBox, { backgroundColor: '#DCFCE7' }]}>
+                      <Ionicons name="logo-whatsapp" size={19} color="#16A34A" />
+                    </View>
+                  </TouchableOpacity>
+
+                  <View style={styles.menuDivider} />
+
+                  {/* Security & Encryption Row */}
+                  <View style={styles.menuRowItem}>
+                    <View style={styles.securityPill}>
+                      <Ionicons name="lock-closed" size={12} color="#059669" />
+                      <Text style={styles.securityPillText}>256-bit SSL</Text>
+                    </View>
+
+                    <View style={styles.menuRowDetails}>
+                      <Text style={styles.menuRowTitle}>الأمان وحماية البيانات</Text>
+                      <Text style={styles.menuRowSubtitle}>اتصال ومزامنة مشفرة بالكامل مع الخوادم</Text>
+                    </View>
+
+                    <View style={[styles.menuIconBox, { backgroundColor: '#E0F2FE' }]}>
+                      <Ionicons name="shield-checkmark" size={19} color="#0284C7" />
+                    </View>
                   </View>
                 </View>
-                <Ionicons name="chevron-back" size={16} color={colors.primary} />
-              </TouchableOpacity>
 
-              <View style={[styles.profileDivider, { backgroundColor: colors.border }]} />
-
-              {/* Check for OTA Updates Button */}
-              <TouchableOpacity
-                style={[
-                  styles.profileUpdateBtn,
-                  { backgroundColor: colors.bg, borderColor: colors.border },
-                ]}
-                onPress={checkForUpdates}
-                disabled={checkingUpdate}
-                activeOpacity={0.8}
-              >
-                <View style={styles.profileUpdateRight}>
-                  <View style={styles.iconCircle}>
-                    <Ionicons name="cloud-download-outline" size={19} color={colors.primary} />
+                {/* 4. App Info & Version Section */}
+                <Text style={styles.sectionHeaderLabel}>عن التطبيق والنظام</Text>
+                <View style={styles.groupedCard}>
+                  <View style={styles.infoRowItem}>
+                    <View style={styles.versionBadge}>
+                      <Text style={styles.versionBadgeText}>v1.0.0 (Build 6)</Text>
+                    </View>
+                    <Text style={styles.infoRowLabel}>إصدار التطبيق</Text>
                   </View>
-                  <View style={{ alignItems: 'flex-end', flex: 1 }}>
-                    <Text style={[styles.profileUpdateText, { color: colors.text }]}>
-                      {checkingUpdate ? 'جاري فحص التحديثات الهوائية...' : 'البحث عن التحديثات الهوائية (OTA Updates)'}
-                    </Text>
-                    <Text style={{ fontSize: 11, color: colors.secondaryText, marginTop: 1 }}>
-                      التحقق الفوري من التحديثات وتطبيقها بدون الحاجة لمتجر
-                    </Text>
+
+                  <View style={styles.menuDivider} />
+
+                  <View style={styles.infoRowItem}>
+                    <View style={styles.serverStatusBadge}>
+                      <View style={styles.serverStatusDot} />
+                      <Text style={styles.serverStatusText}>سحابي متصل</Text>
+                    </View>
+                    <Text style={styles.infoRowLabel}>حالة خوادم XPharma Cloud</Text>
                   </View>
                 </View>
-                {checkingUpdate ? (
-                  <ActivityIndicator size="small" color={colors.primary} />
-                ) : (
-                  <Ionicons name="chevron-back" size={16} color={colors.secondaryText} />
-                )}
-              </TouchableOpacity>
 
-              {/* Security & Version Row */}
-              <View style={styles.securityRow}>
-                <View style={styles.profileSecurityRow}>
-                  <Ionicons name="shield-checkmark" size={15} color={colors.success} />
-                  <Text style={[styles.profileSecurityText, { color: colors.secondaryText }]}>
-                    اتصال مشفر 100%
-                  </Text>
-                </View>
-                <Text style={{ fontSize: 11, color: colors.secondaryText, fontWeight: '600' }}>
-                  الإصدار 1.0.0
-                </Text>
-              </View>
+                {/* 5. Modern Redesigned Logout Button */}
+                <TouchableOpacity
+                  style={styles.logoutBtn}
+                  onPress={async () => {
+                    onClose();
+                    await onLogout();
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="log-out-outline" size={19} color="#DC2626" />
+                  <Text style={styles.logoutBtnText}>تسجيل الخروج من الحساب</Text>
+                </TouchableOpacity>
 
-              {/* Logout Button */}
-              <TouchableOpacity
-                style={[styles.profileLogoutBtn, { borderColor: colors.danger }]}
-                onPress={async () => {
-                  onClose();
-                  await onLogout();
-                }}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="log-out-outline" size={18} color={colors.danger} />
-                <Text style={[styles.profileLogoutText, { color: colors.danger }]}>
-                  تسجيل خروج
-                </Text>
-              </TouchableOpacity>
+                <View style={{ height: 20 }} />
+              </ScrollView>
             </View>
           </TouchableWithoutFeedback>
         </View>
@@ -205,194 +343,371 @@ export function SettingsModal({
 }
 
 const styles = StyleSheet.create({
-  modalOverlayBottom: {
+  modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(26, 10, 51, 0.45)',
+    backgroundColor: 'rgba(15, 10, 30, 0.58)',
     justifyContent: 'flex-end',
   },
-  bottomSheetCard: {
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    borderTopWidth: 1,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 32,
-    alignItems: 'center',
+  sheetContainer: {
+    backgroundColor: '#F8FAFC',
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    maxHeight: SCREEN_HEIGHT * 0.88,
     width: '100%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    elevation: 20,
   },
-  sheetHandle: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    marginBottom: 12,
-  },
-  headerRow: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    width: '100%',
-    marginBottom: 12,
-  },
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  closeIconBtnSheet: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  profileAvatarContainer: {
-    position: 'relative',
-    marginTop: 4,
+  dragHandle: {
+    width: 44,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#CBD5E1',
+    alignSelf: 'center',
+    marginTop: 10,
     marginBottom: 8,
   },
-  profileAvatarImg: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-  },
-  profileAvatarPlaceholder: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  profileAvatarLetter: {
-    color: '#FFFFFF',
-    fontSize: 30,
-    fontWeight: '800',
-  },
-  profileBadgeIcon: {
-    position: 'absolute',
-    bottom: -2,
-    left: -2,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    width: 24,
-    height: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 2,
-  },
-  profileName: {
-    fontSize: 18,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-  profileEmail: {
-    fontSize: 13,
-    textAlign: 'center',
-  },
-  profileSubCard: {
+  headerBar: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     justifyContent: 'space-between',
-    width: '100%',
+    paddingHorizontal: 20,
     paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-    marginTop: 10,
-    marginBottom: 2,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EDF2F7',
   },
-  profileSubRight: {
-    flexDirection: 'row-reverse',
+  headerTitleBox: {
     alignItems: 'center',
-    gap: 10,
-    flex: 1,
   },
-  profileSubIconCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  headerSubtitle: {
+    fontSize: 11.5,
+    color: '#64748B',
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  closeBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#EDF2F7',
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 1,
   },
-  profileSubTextCol: {
+  scrollBody: {
+    width: '100%',
+  },
+  scrollContent: {
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 24,
+  },
+  profileHeroCard: {
+    borderRadius: 24,
+    padding: 16,
+    position: 'relative',
+    overflow: 'hidden',
+    marginBottom: 14,
+    shadowColor: '#3F0082',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  heroGlowCircle: {
+    position: 'absolute',
+    top: -40,
+    right: -40,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  profileHeroContent: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 14,
+  },
+  avatarWrapper: {
+    position: 'relative',
+  },
+  avatarImg: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    borderWidth: 2.5,
+    borderColor: '#FFFFFF',
+  },
+  avatarPlaceholder: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2.5,
+    borderColor: 'rgba(255, 255, 255, 0.4)',
+  },
+  avatarLetter: {
+    color: '#FFFFFF',
+    fontSize: 26,
+    fontWeight: '800',
+  },
+  providerBadge: {
+    position: 'absolute',
+    bottom: -1,
+    left: -1,
+    backgroundColor: '#FFFFFF',
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  profileTextWrapper: {
     flex: 1,
     alignItems: 'flex-end',
   },
-  profileSubTitle: {
-    fontSize: 12.5,
+  nameRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  profileName: {
+    color: '#FFFFFF',
+    fontSize: 17.5,
     fontWeight: '800',
     textAlign: 'right',
   },
-  profileSubSubtitle: {
-    fontSize: 10.5,
-    fontWeight: '600',
-    textAlign: 'right',
-    marginTop: 2,
-  },
-  profileDivider: {
-    height: 1,
-    width: '100%',
-    marginVertical: 12,
-  },
-  profileUpdateBtn: {
+  verifiedPill: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    width: '100%',
-    paddingVertical: 11,
-    paddingHorizontal: 14,
-    borderRadius: 14,
+    gap: 3,
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 10,
     borderWidth: 1,
-    marginBottom: 10,
+    borderColor: 'rgba(16, 185, 129, 0.4)',
   },
-  profileUpdateRight: {
+  verifiedPillText: {
+    color: '#34D399',
+    fontSize: 10.5,
+    fontWeight: '700',
+  },
+  profileEmail: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 12.5,
+    fontWeight: '500',
+    textAlign: 'right',
+  },
+  subscriptionCard: {
+    borderRadius: 20,
+    overflow: 'hidden',
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  subscriptionGradient: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 10,
-    flex: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 12,
   },
-  iconCircle: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: 'rgba(63, 0, 130, 0.1)',
+  subIconBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  profileUpdateText: {
-    fontSize: 13,
+  subDetailsCol: {
+    flex: 1,
+    alignItems: 'flex-end',
+  },
+  subTitleRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 3,
+  },
+  subTitleText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
+  subStatusBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  badgeSuccess: {
+    backgroundColor: 'rgba(52, 211, 153, 0.25)',
+  },
+  badgeWarning: {
+    backgroundColor: 'rgba(251, 191, 36, 0.25)',
+  },
+  badgeDanger: {
+    backgroundColor: 'rgba(248, 113, 113, 0.25)',
+  },
+  subStatusBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10.5,
     fontWeight: '700',
   },
-  securityRow: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    width: '100%',
-    marginBottom: 10,
-    paddingHorizontal: 4,
+  subSubtitleText: {
+    color: 'rgba(255, 255, 255, 0.75)',
+    fontSize: 11.5,
+    fontWeight: '500',
+    textAlign: 'right',
   },
-  profileSecurityRow: {
+  sectionHeaderLabel: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#64748B',
+    textAlign: 'right',
+    marginBottom: 8,
+    marginRight: 4,
+  },
+  groupedCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingVertical: 4,
+    paddingHorizontal: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  menuRowItem: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    paddingVertical: 12,
+    gap: 12,
+  },
+  menuIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuRowDetails: {
+    flex: 1,
+    alignItems: 'flex-end',
+  },
+  menuRowTitle: {
+    fontSize: 13.5,
+    fontWeight: '700',
+    color: '#0F172A',
+    textAlign: 'right',
+  },
+  menuRowSubtitle: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#64748B',
+    textAlign: 'right',
+    marginTop: 2,
+  },
+  menuDivider: {
+    height: 1,
+    backgroundColor: '#F1F5F9',
+    width: '100%',
+  },
+  securityPill: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+  },
+  securityPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  infoRowItem: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+  },
+  infoRowLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#334155',
+  },
+  versionBadge: {
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  versionBadgeText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  serverStatusBadge: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 6,
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
   },
-  profileSecurityText: {
-    fontSize: 12,
-    fontWeight: '500',
+  serverStatusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#10B981',
   },
-  profileLogoutBtn: {
+  serverStatusText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#047857',
+  },
+  logoutBtn: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    width: '100%',
-    height: 46,
-    borderRadius: 14,
-    borderWidth: 1,
-    marginTop: 4,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1.2,
+    borderColor: '#FECACA',
+    borderRadius: 16,
+    paddingVertical: 13,
+    marginTop: 2,
   },
-  profileLogoutText: {
+  logoutBtnText: {
+    color: '#DC2626',
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '800',
   },
 });
