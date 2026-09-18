@@ -261,3 +261,63 @@ func (s *WarehouseService) LinkPharmacy(c *gin.Context) {
 		"tenant_id":     tenantID,
 	})
 }
+
+// GetBanners returns active promotional banners for the mobile app
+func (s *WarehouseService) GetBanners(c *gin.Context) {
+	query := `
+		SELECT 
+			id::text, 
+			COALESCE(title, '') AS title, 
+			COALESCE(subtitle, '') AS subtitle, 
+			image_url, 
+			COALESCE(badge_text, 'إعلان') AS badge_text, 
+			COALESCE(action_type, 'none') AS action_type, 
+			COALESCE(action_value, '') AS action_value, 
+			COALESCE(bg_color, '#3F0082') AS bg_color, 
+			is_active, 
+			sort_order, 
+			created_at
+		FROM public.banners
+		WHERE is_active = true
+		ORDER BY sort_order ASC, created_at DESC
+	`
+	rows, err := s.router.Pool().Query(c.Request.Context(), query)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": true, "banners": []interface{}{}})
+		return
+	}
+	defer rows.Close()
+
+	var banners []map[string]interface{}
+	for rows.Next() {
+		var id, title, subtitle, imageURL, badgeText, actionType, actionValue, bgColor string
+		var isActive bool
+		var sortOrder int
+		var createdAt time.Time
+		if err := rows.Scan(&id, &title, &subtitle, &imageURL, &badgeText, &actionType, &actionValue, &bgColor, &isActive, &sortOrder, &createdAt); err == nil {
+			banners = append(banners, map[string]interface{}{
+				"id":           id,
+				"title":        title,
+				"subtitle":     subtitle,
+				"image_url":    imageURL,
+				"badge_text":   badgeText,
+				"action_type":  actionType,
+				"action_value": actionValue,
+				"bg_color":     bgColor,
+				"is_active":    isActive,
+				"sort_order":   sortOrder,
+				"created_at":   createdAt,
+			})
+		}
+	}
+
+	if banners == nil {
+		banners = []map[string]interface{}{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"banners": banners,
+	})
+}
+

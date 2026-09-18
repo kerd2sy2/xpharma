@@ -94,7 +94,8 @@ func main() {
 		pharmaGroup.GET("/products", queryService.GetRecentProducts)
 	}
 
-	// 4. Warehouse Module
+	// 4. Warehouse & Banners Module
+	r.GET("/v1/banners", warehouseService.GetBanners)
 	warehouseGroup := r.Group("/v1/warehouses")
 	{
 		warehouseGroup.GET("", warehouseService.GetWarehouses)

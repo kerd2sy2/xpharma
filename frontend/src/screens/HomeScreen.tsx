@@ -41,6 +41,8 @@ import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
 import SubscriptionModal from '@/components/SubscriptionModal';
 import WarehousePortalScreen from '@/screens/WarehousePortalScreen';
 import XLogo, { XLogoHandle } from '@/components/XLogo';
+import PromoBannerCarousel from '@/components/PromoBannerCarousel';
+import { fetchBanners, Banner } from '@/services/banner';
 
 const { width } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -62,6 +64,10 @@ export default function HomeScreen() {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [loadingWarehouses, setLoadingWarehouses] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Banners & Category Tabs State
+  const [banners, setBanners] = useState<Banner[]>([]);
+  const [selectedCategoryTab, setSelectedCategoryTab] = useState<'pharma' | 'accessories'>('pharma');
 
   // Search State
   const [isSearchActive, setIsSearchActive] = useState(false);
@@ -208,6 +214,7 @@ export default function HomeScreen() {
 
   useEffect(() => {
     loadWarehouses();
+    fetchBanners().then(setBanners);
     const checkTrial = async () => {
       const status = await getSubscriptionStatus(user?.email);
       setSubscriptionStatusInfo(status);
@@ -223,6 +230,7 @@ export default function HomeScreen() {
   const onRefresh = () => {
     setRefreshing(true);
     loadWarehouses();
+    fetchBanners().then(setBanners);
     getSubscriptionStatus(user?.email).then(setSubscriptionStatusInfo);
   };
 
@@ -289,16 +297,33 @@ export default function HomeScreen() {
     });
   };
 
+  const pharmaCount = useMemo(() => {
+    return warehouses.filter(
+      (w) => !w.category?.includes('إكسسوار') && !w.category?.includes('مستلزمات')
+    ).length;
+  }, [warehouses]);
+
+  const accessoriesCount = useMemo(() => {
+    return warehouses.filter(
+      (w) => w.category?.includes('إكسسوار') || w.category?.includes('مستلزمات')
+    ).length;
+  }, [warehouses]);
+
   const filteredWarehouses = useMemo(() => {
-    if (!searchQuery.trim()) return warehouses;
+    const categoryFiltered = warehouses.filter((w) => {
+      const isAcc = w.category?.includes('إكسسوار') || w.category?.includes('مستلزمات');
+      return selectedCategoryTab === 'accessories' ? isAcc : !isAcc;
+    });
+
+    if (!searchQuery.trim()) return categoryFiltered;
     const q = searchQuery.trim().toLowerCase();
-    return warehouses.filter((w) => {
+    return categoryFiltered.filter((w) => {
       const nameMatch = (w.name || '').toLowerCase().includes(q);
       const catMatch = (w.category || '').toLowerCase().includes(q);
       const slugMatch = (w.slug || '').toLowerCase().includes(q);
       return nameMatch || catMatch || slugMatch;
     });
-  }, [warehouses, searchQuery]);
+  }, [warehouses, selectedCategoryTab, searchQuery]);
 
   const openRequestModal = (name?: string) => {
     setRequestedWhName(name !== undefined ? name : searchQuery.trim());
@@ -415,7 +440,7 @@ export default function HomeScreen() {
         columnWrapperStyle={isTablet ? styles.columnWrapper : undefined}
         contentContainerStyle={[
           styles.listContent,
-          { paddingTop: topInset + 60 + 44 },
+          { paddingTop: topInset + 60 + 20 },
         ]}
         showsVerticalScrollIndicator={false}
         showsHorizontalScrollIndicator={false}
@@ -426,6 +451,107 @@ export default function HomeScreen() {
             colors={[colors.primary]}
             progressViewOffset={topInset + 60}
           />
+        }
+        ListHeaderComponent={
+          <View style={styles.listHeaderContainer}>
+            {/* Promo Banners Carousel */}
+            {!isSearchActive && (
+              <PromoBannerCarousel
+                banners={banners}
+                onWarehousePress={(slugOrId) => {
+                  const target = warehouses.find(
+                    (w) => w.slug === slugOrId || w.id === slugOrId
+                  );
+                  if (target) handleWarehousePress(target);
+                }}
+              />
+            )}
+
+            {/* Google Play Style Category Tabs */}
+            <View style={styles.tabsContainer}>
+              <TouchableOpacity
+                style={[
+                  styles.categoryTab,
+                  selectedCategoryTab === 'pharma' && styles.categoryTabActive,
+                ]}
+                onPress={() => setSelectedCategoryTab('pharma')}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name="medkit"
+                  size={15}
+                  color={selectedCategoryTab === 'pharma' ? '#FFFFFF' : colors.primary}
+                  style={{ marginLeft: 6 }}
+                />
+                <Text
+                  style={[
+                    styles.categoryTabText,
+                    selectedCategoryTab === 'pharma' && styles.categoryTabTextActive,
+                  ]}
+                >
+                  مخازن الأدوية
+                </Text>
+                <View
+                  style={[
+                    styles.tabCountBadge,
+                    selectedCategoryTab === 'pharma'
+                      ? styles.tabCountBadgeActive
+                      : styles.tabCountBadgeInactive,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.tabCountText,
+                      selectedCategoryTab === 'pharma' && styles.tabCountTextActive,
+                    ]}
+                  >
+                    {pharmaCount}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.categoryTab,
+                  selectedCategoryTab === 'accessories' && styles.categoryTabActive,
+                ]}
+                onPress={() => setSelectedCategoryTab('accessories')}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name="sparkles"
+                  size={15}
+                  color={selectedCategoryTab === 'accessories' ? '#FFFFFF' : colors.primary}
+                  style={{ marginLeft: 6 }}
+                />
+                <Text
+                  style={[
+                    styles.categoryTabText,
+                    selectedCategoryTab === 'accessories' && styles.categoryTabTextActive,
+                  ]}
+                >
+                  إكسسوارات ومستحضرات
+                </Text>
+                <View
+                  style={[
+                    styles.tabCountBadge,
+                    selectedCategoryTab === 'accessories'
+                      ? styles.tabCountBadgeActive
+                      : styles.tabCountBadgeInactive,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.tabCountText,
+                      selectedCategoryTab === 'accessories' && styles.tabCountTextActive,
+                    ]}
+                  >
+                    {accessoriesCount}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          </View>
         }
         renderItem={({ item }) => (
           <WarehouseCard
@@ -808,5 +934,70 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '800',
+  },
+  listHeaderContainer: {
+    paddingBottom: 14,
+  },
+  tabsContainer: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  categoryTab: {
+    flex: 1,
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#E9E3F3',
+    shadowColor: '#3F0082',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 5,
+    elevation: 1.5,
+    gap: 6,
+  },
+  categoryTabActive: {
+    backgroundColor: '#3F0082',
+    borderColor: '#3F0082',
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  categoryTabText: {
+    fontSize: isTablet ? 14 : 12.5,
+    fontWeight: '800',
+    color: '#3F0082',
+  },
+  categoryTabTextActive: {
+    color: '#FFFFFF',
+  },
+  tabCountBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 10,
+    minWidth: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabCountBadgeActive: {
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+  },
+  tabCountBadgeInactive: {
+    backgroundColor: 'rgba(63, 0, 130, 0.08)',
+  },
+  tabCountText: {
+    fontSize: 10.5,
+    fontWeight: '900',
+    color: '#3F0082',
+  },
+  tabCountTextActive: {
+    color: '#FFFFFF',
   },
 });

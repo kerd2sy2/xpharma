@@ -46,6 +46,10 @@ const routeMapping: Record<string, BreadcrumbItem[]> = {
     { title: 'لوحة التحكم', link: '/dashboard' },
     { title: 'المخازن والمستأجرين', link: '/dashboard/tenants' }
   ],
+  '/dashboard/banners': [
+    { title: 'لوحة التحكم', link: '/dashboard' },
+    { title: 'الإعلانات والبانرات', link: '/dashboard/banners' }
+  ],
   '/dashboard/databases': [
     { title: 'لوحة التحكم', link: '/dashboard' },
     { title: 'قواعد البيانات المنسوخة', link: '/dashboard/databases' }

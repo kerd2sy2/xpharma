@@ -54,6 +54,14 @@ export const navGroups: NavGroup[] = [
         items: []
       },
       {
+        title: 'الإعلانات والبانرات',
+        url: '/dashboard/banners',
+        icon: 'media',
+        isActive: false,
+        shortcut: ['b', 'n'],
+        items: []
+      },
+      {
         title: 'قواعد البيانات والتزامن',
         url: '/dashboard/databases',
         icon: 'database',
