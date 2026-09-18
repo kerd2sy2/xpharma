@@ -17,8 +17,8 @@ import { Banner } from '@/services/banner';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
-// STRICT FIXED DIMENSIONS: Exactly 25% of screen height, 100% of screen width
-export const BANNER_HEIGHT = Math.round(SCREEN_HEIGHT * 0.25);
+// STRICT FIXED DIMENSIONS: Exactly 1/3 (33.3%) of screen height, 100% of screen width
+export const BANNER_HEIGHT = Math.round(SCREEN_HEIGHT * (1 / 3));
 export const BANNER_WIDTH = SCREEN_WIDTH;
 
 interface PromoBannerCarouselProps {
