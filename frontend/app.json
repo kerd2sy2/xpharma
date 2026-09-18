@@ -31,9 +31,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#FFFFFF",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 160
+          "backgroundColor": "#FFFFFF"
         }
       ],
       "@react-native-google-signin/google-signin",
