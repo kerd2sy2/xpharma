@@ -549,7 +549,7 @@ export default function HomeScreen() {
           />
         }
         ListHeaderComponent={
-          <View style={[styles.listHeaderContainer, { paddingTop: topInset + 6 }]}>
+          <View style={[styles.listHeaderContainer, { paddingTop: topInset + 10 }]}>
             {/* Top Bar inside Scroll: Avatar & Search on Left, X Logo on Right */}
             <View style={styles.headerTopRow}>
               {/* Left side: Avatar & Search Button */}
@@ -797,7 +797,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 18,
-    height: 60,
+    height: 52,
+    marginBottom: 12,
   },
   brandRow: {
     flexDirection: 'row',
