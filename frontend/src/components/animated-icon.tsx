@@ -1,60 +1,65 @@
 import React, { useEffect, useState } from 'react';
-import { Dimensions, Platform, StatusBar, StyleSheet } from 'react-native';
+import { Dimensions, Platform, StatusBar, StyleSheet, View } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import Animated, { FadeOut } from 'react-native-reanimated';
 import LottieView from 'lottie-react-native';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('screen');
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export function AnimatedSplashOverlay() {
   const [visible, setVisible] = useState(true);
 
   useEffect(() => {
-    // Hide native splash once component mounts so Lottie animation is visible
+    // Hide native OS splash immediately so Lottie animation is seen first
     SplashScreen.hideAsync().catch(() => {});
   }, []);
 
   const handleFinish = () => {
     setTimeout(() => {
       setVisible(false);
-    }, 250);
+    }, 150);
   };
 
   if (!visible) return null;
 
   return (
-    <Animated.View exiting={FadeOut.duration(350)} style={styles.splashOverlay}>
+    <Animated.View exiting={FadeOut.duration(300)} style={styles.splashOverlay}>
       <StatusBar
         barStyle="dark-content"
         backgroundColor="#FFFFFF"
         translucent={Platform.OS === 'android'}
       />
-      <LottieView
-        source={require('@/assets/lottie/letter_x.json')}
-        autoPlay
-        loop={false}
-        onAnimationFinish={handleFinish}
-        style={styles.fullscreenLottie}
-        resizeMode="cover"
-      />
+      <View style={styles.lottieContainer}>
+        <LottieView
+          source={require('@/assets/lottie/letter_x.json')}
+          autoPlay
+          loop={false}
+          onAnimationFinish={handleFinish}
+          style={styles.lottie}
+          resizeMode="contain"
+        />
+      </View>
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
   splashOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    ...StyleSheet.absoluteFill,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 99999,
+    zIndex: 999999,
+    elevation: 999999,
   },
-  fullscreenLottie: {
+  lottieContainer: {
     width: SCREEN_WIDTH,
-    height: SCREEN_HEIGHT,
+    height: (SCREEN_WIDTH * 1920) / 1280,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lottie: {
+    width: '100%',
+    height: '100%',
   },
 });

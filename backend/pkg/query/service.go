@@ -3,7 +3,6 @@ package query
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -66,14 +65,20 @@ func (s *QueryService) GetPurchases(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	pharmaCode := c.GetString("pharma_code")
 	dateFilter := c.Query("date")
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "30"))
+	if limit <= 0 || limit > 1000 {
+		limit = 30
+	}
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if offset < 0 {
+		offset = 0
+	}
 
 	ctx := c.Request.Context()
 	var invoices []map[string]interface{}
 
 	err := s.router.ExecInTenant(ctx, tenantID, func(ctx context.Context, schema string, conn *pgxpool.Conn) error {
-		whereClause := fmt.Sprintf("WHERE pharmacy_code = $1")
+		whereClause := "WHERE pharmacy_code = $1"
 		args := []interface{}{pharmaCode}
 
 		if dateFilter != "" {
@@ -104,14 +109,20 @@ func (s *QueryService) GetPurchases(c *gin.Context) {
 				return err
 			}
 
+			// In Firebird (ORGA SOFT), TOTAL_TOTAL is the true final net invoice amount after discount
+			realNet := total
+			if realNet <= 0 && net > 0 {
+				realNet = net
+			}
+
 			invoices = append(invoices, map[string]interface{}{
 				"id":               id,
 				"remote_id":        remoteID,
 				"invoice_number":   invNum,
 				"invoice_date":     invDate.Format(time.RFC3339),
-				"total_amount":     total,
+				"total_amount":     realNet,
 				"discount_amount":  disc,
-				"net_amount":       net,
+				"net_amount":       realNet,
 				"paid_amount":      paid,
 				"remaining_amount": remaining,
 				"status":           status,
@@ -147,7 +158,7 @@ func (s *QueryService) GetInvoiceDetails(c *gin.Context) {
 		invQuery := fmt.Sprintf(`
 			SELECT id::text, remote_id, invoice_number, invoice_date, total_amount, discount_amount, net_amount, paid_amount, remaining_amount, status
 			FROM %s.invoices
-			WHERE (id::text = $1 OR remote_id = $1 OR invoice_number = $1)
+			WHERE (id::text = $1 OR remote_id = $1 OR invoice_number = $1 OR REPLACE(invoice_number, 'INV-', '') = $1 OR invoice_number = ('INV-' || $1))
 			  AND pharmacy_code = $2
 			LIMIT 1
 		`, schema)
@@ -160,7 +171,7 @@ func (s *QueryService) GetInvoiceDetails(c *gin.Context) {
 			invQueryFallback := fmt.Sprintf(`
 				SELECT id::text, remote_id, invoice_number, invoice_date, total_amount, discount_amount, net_amount, paid_amount, remaining_amount, status
 				FROM %s.invoices
-				WHERE (id::text = $1 OR remote_id = $1 OR invoice_number = $1)
+				WHERE (id::text = $1 OR remote_id = $1 OR invoice_number = $1 OR REPLACE(invoice_number, 'INV-', '') = $1 OR invoice_number = ('INV-' || $1))
 				LIMIT 1
 			`, schema)
 			err = conn.QueryRow(ctx, invQueryFallback, invoiceID).Scan(
@@ -171,14 +182,19 @@ func (s *QueryService) GetInvoiceDetails(c *gin.Context) {
 			}
 		}
 
+		realNet := total
+		if realNet <= 0 && net > 0 {
+			realNet = net
+		}
+
 		invoice = map[string]interface{}{
 			"id":               id,
 			"remote_id":        remoteID,
 			"invoice_number":   invNum,
 			"invoice_date":     invDate.Format(time.RFC3339),
-			"total_amount":     total,
+			"total_amount":     realNet,
 			"discount_amount":  disc,
-			"net_amount":       net,
+			"net_amount":       realNet,
 			"paid_amount":      paid,
 			"remaining_amount": remaining,
 			"status":           status,
@@ -186,13 +202,32 @@ func (s *QueryService) GetInvoiceDetails(c *gin.Context) {
 
 		// 2. Fetch line items
 		itemsQuery := fmt.Sprintf(`
-			SELECT id::text, COALESCE(remote_item_id, ''), COALESCE(item_code, ''), item_name, COALESCE(unit, ''), quantity, bonus_quantity, unit_price, discount_percent, total_price
-			FROM %s.invoice_items
-			WHERE invoice_id::text = $1
-			ORDER BY id ASC
-		`, schema)
+			SELECT it.id::text, 
+			       COALESCE(it.remote_item_id, ''), 
+			       COALESCE(it.item_code, ''), 
+			       COALESCE(it.item_name, 'صنف'), 
+			       COALESCE(it.unit, 'علبة'), 
+			       COALESCE(it.quantity::float8, 0), 
+			       COALESCE(it.bonus_quantity::float8, 0), 
+			       COALESCE(it.unit_price::float8, 0), 
+			       COALESCE(it.discount_percent::float8, 0), 
+			       COALESCE(it.total_price::float8, 0)
+			FROM %s.invoice_items it
+			WHERE it.invoice_id::text = $1 
+			   OR it.invoice_id::text = $2 
+			   OR it.invoice_id::text = $3
+			   OR it.invoice_id IN (
+			       SELECT inv.id FROM %s.invoices inv 
+			       WHERE inv.id::text = $1 OR inv.remote_id = $1 OR inv.remote_id = $2 OR inv.remote_id = $3
+			          OR inv.invoice_number = $1 OR inv.invoice_number = $2 OR inv.invoice_number = $3 
+			          OR REPLACE(inv.invoice_number, 'INV-', '') = $1 
+			          OR REPLACE(inv.invoice_number, 'INV-', '') = $2
+			          OR REPLACE(inv.invoice_number, 'INV-', '') = $3
+			   )
+			ORDER BY it.id ASC
+		`, schema, schema)
 
-		rows, err := conn.Query(ctx, itemsQuery, id)
+		rows, err := conn.Query(ctx, itemsQuery, id, remoteID, invoiceID)
 		if err != nil {
 			return nil
 		}
@@ -213,87 +248,13 @@ func (s *QueryService) GetInvoiceDetails(c *gin.Context) {
 					"unit_price":       price,
 					"discount_percent": discPct,
 					"total_price":      totalItem,
+					// Compatibility aliases
+					"name":             itemName,
+					"qty":              qty,
+					"price":            price,
+					"discount":         discPct,
+					"total":            totalItem,
 				})
-			}
-		}
-
-		// 3. Fallback: If no line items exist in DB for this invoice (e.g. prior sync before items extraction), populate realistic medical catalog items
-		if len(items) == 0 && net > 0 {
-			catalog := []struct {
-				Code  string
-				Name  string
-				Price float64
-			}{
-				{"P-1001", "بانادول إكسترا 500 ملغ (24 قرص)", 45.00},
-				{"P-1002", "أوجمنتين 1 جم مضاد حيوي (14 قرص)", 120.00},
-				{"P-1003", "كونكور 5 ملغ لضغط الدم (30 قرص)", 65.50},
-				{"P-1004", "كاتافلام 50 ملغ مسكن (20 قرص)", 38.00},
-				{"P-1005", "أوميبرال 20 ملغ للمعدة (14 كبسولة)", 52.00},
-				{"P-1006", "فيتامين سي زنك فوار (10 أقراص)", 35.00},
-				{"P-1007", "بروفين 400 ملغ مسكن (30 قرص)", 42.00},
-				{"P-1008", "أنتينال مطهر معوي (24 كبسولة)", 32.00},
-				{"P-1009", "كيتوفان 50 ملغ مسكن ومضاد التهاب", 28.50},
-			}
-
-			discPct := 0.0
-			if total > 0 && disc > 0 {
-				discPct = math.Round((disc / total) * 100)
-			}
-
-			remainingNet := net
-			seed := 0
-			if len(invNum) > 0 {
-				seed = int(invNum[len(invNum)-1])
-			}
-			itemIdx := 0
-
-			for remainingNet > 0 && itemIdx < 5 {
-				cat := catalog[(seed+itemIdx)%len(catalog)]
-				unitPrice := cat.Price
-				if unitPrice <= 0 {
-					unitPrice = 40.0
-				}
-				priceAfterDisc := unitPrice * (1.0 - (discPct / 100.0))
-				if priceAfterDisc <= 0 {
-					priceAfterDisc = unitPrice
-				}
-
-				qty := math.Floor(remainingNet / priceAfterDisc)
-				if qty < 1 {
-					qty = 1
-				}
-				itemTotal := math.Round(qty*priceAfterDisc*100) / 100
-
-				if itemIdx == 2 || itemTotal >= remainingNet {
-					itemTotal = math.Round(remainingNet*100) / 100
-					qty = math.Max(1, math.Round((itemTotal/priceAfterDisc)*10)/10)
-					remainingNet = 0
-				} else {
-					remainingNet -= itemTotal
-				}
-
-				genItem := map[string]interface{}{
-					"id":               fmt.Sprintf("gen-%s-%d", id, itemIdx+1),
-					"remote_item_id":   fmt.Sprintf("ITM-%s-%d", invNum, itemIdx+1),
-					"item_code":        cat.Code,
-					"item_name":        cat.Name,
-					"unit":             "علبة",
-					"quantity":         qty,
-					"bonus_quantity":   0.0,
-					"unit_price":       unitPrice,
-					"discount_percent": discPct,
-					"total_price":      itemTotal,
-				}
-				items = append(items, genItem)
-
-				insertQ := fmt.Sprintf(`
-					INSERT INTO %s.invoice_items (invoice_id, remote_item_id, item_code, item_name, unit, quantity, bonus_quantity, unit_price, discount_percent, total_price)
-					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-					ON CONFLICT DO NOTHING
-				`, schema)
-				_, _ = conn.Exec(ctx, insertQ, id, genItem["remote_item_id"], genItem["item_code"], genItem["item_name"], genItem["unit"], qty, 0.0, unitPrice, discPct, itemTotal)
-
-				itemIdx++
 			}
 		}
 
@@ -306,9 +267,10 @@ func (s *QueryService) GetInvoiceDetails(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"invoice": invoice,
-		"items":   items,
+		"success":   true,
+		"invoice":   invoice,
+		"items":     items,
+		"itemsList": items,
 	})
 }
 
@@ -316,7 +278,14 @@ func (s *QueryService) GetInvoiceDetails(c *gin.Context) {
 func (s *QueryService) GetStatement(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	pharmaCode := c.GetString("pharma_code")
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "150"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if offset < 0 {
+		offset = 0
+	}
 
 	ctx := c.Request.Context()
 	var entries []map[string]interface{}
@@ -334,8 +303,8 @@ func (s *QueryService) GetStatement(c *gin.Context) {
 				FROM %s.ledger_entries
 				WHERE pharmacy_code = $1
 				ORDER BY entry_date ASC, id ASC
-				LIMIT %d
-			`, schema, limit)
+				LIMIT %d OFFSET %d
+			`, schema, limit, offset)
 		} else {
 			// 2. Comprehensive union of all account movements (Invoices, Receipts, Returns)
 			query = fmt.Sprintf(`
@@ -384,8 +353,8 @@ func (s *QueryService) GetStatement(c *gin.Context) {
 					WHERE pharmacy_code = $1
 				) movements
 				ORDER BY entry_date ASC
-				LIMIT %d
-			`, schema, schema, schema, limit)
+				LIMIT %d OFFSET %d
+			`, schema, schema, schema, limit, offset)
 		}
 
 		rows, err := conn.Query(ctx, query, pharmaCode)
@@ -431,8 +400,14 @@ func (s *QueryService) GetReturns(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	pharmaCode := c.GetString("pharma_code")
 	dateFilter := c.Query("date")
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "30"))
+	if limit <= 0 || limit > 500 {
+		limit = 30
+	}
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if offset < 0 {
+		offset = 0
+	}
 
 	ctx := c.Request.Context()
 	var returns []map[string]interface{}
@@ -489,6 +464,111 @@ func (s *QueryService) GetReturns(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "returns": returns})
+}
+
+// GetReturnDetails returns a sales return header along with any line items
+func (s *QueryService) GetReturnDetails(c *gin.Context) {
+	tenantID := c.GetString("tenant_id")
+	pharmaCode := c.GetString("pharma_code")
+	returnID := c.Param("id")
+
+	ctx := c.Request.Context()
+	var retHeader map[string]interface{}
+	var items []map[string]interface{}
+
+	err := s.router.ExecInTenant(ctx, tenantID, func(ctx context.Context, schema string, conn *pgxpool.Conn) error {
+		var id, remoteID, retNum, status, reason string
+		var retDate time.Time
+		var total, net float64
+
+		retQuery := fmt.Sprintf(`
+			SELECT id::text, remote_id, return_number, return_date, total_amount, net_amount, status, COALESCE(reason, '')
+			FROM %s.returns
+			WHERE (id::text = $1 OR remote_id = $1 OR return_number = $1)
+			  AND pharmacy_code = $2
+			LIMIT 1
+		`, schema)
+
+		err := conn.QueryRow(ctx, retQuery, returnID, pharmaCode).Scan(
+			&id, &remoteID, &retNum, &retDate, &total, &net, &status, &reason,
+		)
+		if err != nil {
+			retQueryFallback := fmt.Sprintf(`
+				SELECT id::text, remote_id, return_number, return_date, total_amount, net_amount, status, COALESCE(reason, '')
+				FROM %s.returns
+				WHERE (id::text = $1 OR remote_id = $1 OR return_number = $1)
+				LIMIT 1
+			`, schema)
+			err = conn.QueryRow(ctx, retQueryFallback, returnID).Scan(
+				&id, &remoteID, &retNum, &retDate, &total, &net, &status, &reason,
+			)
+			if err != nil {
+				return err
+			}
+		}
+
+		retHeader = map[string]interface{}{
+			"id":            id,
+			"remote_id":     remoteID,
+			"return_number": retNum,
+			"return_date":   retDate.Format(time.RFC3339),
+			"total_amount":  total,
+			"net_amount":    net,
+			"status":        status,
+			"reason":        reason,
+		}
+
+		// Check if return_items table exists
+		var hasItemsTable bool
+		_ = conn.QueryRow(ctx, fmt.Sprintf(`
+			SELECT EXISTS (
+				SELECT FROM information_schema.tables 
+				WHERE table_schema = '%s' AND table_name = 'return_items'
+			)
+		`, schema)).Scan(&hasItemsTable)
+
+		if hasItemsTable {
+			itemsQuery := fmt.Sprintf(`
+				SELECT id::text, COALESCE(item_code, ''), COALESCE(item_name, 'صنف مرتجع'), 
+				       COALESCE(quantity::float8, 0), COALESCE(unit_price::float8, 0), COALESCE(discount_percent::float8, 0), COALESCE(total_price::float8, 0)
+				FROM %s.return_items
+				WHERE return_id::text = $1
+				ORDER BY id ASC
+			`, schema)
+			rows, err := conn.Query(ctx, itemsQuery, id)
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var itmID, itmCode, itmName string
+					var qty, price, discPct, totalItm float64
+					if err := rows.Scan(&itmID, &itmCode, &itmName, &qty, &price, &discPct, &totalItm); err == nil {
+						items = append(items, map[string]interface{}{
+							"id":               itmID,
+							"item_code":        itmCode,
+							"item_name":        itmName,
+							"quantity":         qty,
+							"unit_price":       price,
+							"discount_percent": discPct,
+							"total_price":      totalItm,
+						})
+					}
+				}
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "فاتورة المرتجع غير موجودة"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"return":  retHeader,
+		"items":   items,
+	})
 }
 
 // GetRecentProducts returns recent products and offers
@@ -555,8 +635,14 @@ func (s *QueryService) GetReceipts(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	pharmaCode := c.GetString("pharma_code")
 	dateFilter := c.Query("date")
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "30"))
+	if limit <= 0 || limit > 500 {
+		limit = 30
+	}
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if offset < 0 {
+		offset = 0
+	}
 
 	ctx := c.Request.Context()
 	var receipts []map[string]interface{}

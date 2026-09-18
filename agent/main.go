@@ -24,9 +24,13 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	_ "embed"
 	_ "github.com/nakagami/firebirdsql"
 	"golang.org/x/text/encoding/charmap"
 )
+
+//go:embed logo.png
+var embeddedLogo []byte
 
 // -----------------------------------------------------------------------------
 // Configuration Model
@@ -57,9 +61,10 @@ type Config struct {
 	} `json:"firebird"`
 
 	Cursors struct {
-		LastInvoiceID int64 `json:"last_invoice_id"`
-		LastReceiptID int64 `json:"last_receipt_id"`
-		LastReturnID  int64 `json:"last_return_id"`
+		LastInvoiceID         int64 `json:"last_invoice_id"`
+		LastArchivedInvoiceID int64 `json:"last_archived_invoice_id"`
+		LastReceiptID         int64 `json:"last_receipt_id"`
+		LastReturnID          int64 `json:"last_return_id"`
 	} `json:"cursors"`
 }
 
@@ -272,6 +277,22 @@ func isWindowsAutoStartEnabled() bool {
 // Windows Console UTF-8 & App Launcher
 // -----------------------------------------------------------------------------
 
+func hideConsoleWindow() {
+	if runtime.GOOS == "windows" {
+		kernel32 := syscall.NewLazyDLL("kernel32.dll")
+		user32 := syscall.NewLazyDLL("user32.dll")
+		getConsoleWindow := kernel32.NewProc("GetConsoleWindow")
+		showWindow := user32.NewProc("ShowWindow")
+		if getConsoleWindow.Find() == nil && showWindow.Find() == nil {
+			hwnd, _, _ := getConsoleWindow.Call()
+			if hwnd != 0 {
+				const SW_HIDE = 0
+				showWindow.Call(hwnd, SW_HIDE)
+			}
+		}
+	}
+}
+
 func initWindowsConsole() {
 	if runtime.GOOS == "windows" {
 		kernel32 := syscall.NewLazyDLL("kernel32.dll")
@@ -355,15 +376,31 @@ func decodeText(input []byte) string {
 	if len(input) == 0 {
 		return ""
 	}
+	// If already valid UTF-8 and contains Arabic letters or is pure ASCII, keep it
 	if utf8.Valid(input) {
-		return cleanControlChars(strings.TrimSpace(string(input)))
+		s := string(input)
+		hasArabic := false
+		isPureASCII := true
+		for _, r := range s {
+			if r >= 0x0600 && r <= 0x06FF {
+				hasArabic = true
+				break
+			}
+			if r >= 128 {
+				isPureASCII = false
+			}
+		}
+		if hasArabic || isPureASCII {
+			return cleanControlChars(strings.TrimSpace(s))
+		}
 	}
+	// Decode from Windows-1256 (ORGA SOFT Arabic charset)
 	decoder := charmap.Windows1256.NewDecoder()
 	utf8Bytes, err := decoder.Bytes(input)
-	if err != nil {
-		return cleanControlChars(strings.TrimSpace(string(input)))
+	if err == nil && len(utf8Bytes) > 0 {
+		return cleanControlChars(strings.TrimSpace(string(utf8Bytes)))
 	}
-	return cleanControlChars(strings.TrimSpace(string(utf8Bytes)))
+	return cleanControlChars(strings.TrimSpace(string(input)))
 }
 
 func cleanControlChars(s string) string {
@@ -551,13 +588,14 @@ func checkConnectionsDetailed(cfg *Config) (fbOk bool, cloudOk bool, cloudMsg st
 	}
 	defer keyResp.Body.Close()
 
-	if keyResp.StatusCode == http.StatusOK {
+	switch keyResp.StatusCode {
+	case http.StatusOK:
 		cloudOk = true
 		cloudMsg = "تم التحقق من مفتاح الربط وتأكيد الاتصال بالسحابة بنجاح (المفتاح معتمد ونشط)"
-	} else if keyResp.StatusCode == http.StatusUnauthorized {
+	case http.StatusUnauthorized:
 		cloudOk = false
 		cloudMsg = "مفتاح الربط (API Token) غير صحيح أو غير مفعل في لوحة التحكم (401 Unauthorized)"
-	} else {
+	default:
 		b, _ := io.ReadAll(keyResp.Body)
 		cloudOk = false
 		cloudMsg = fmt.Sprintf("استجابة السحابة (HTTP %d): %s", keyResp.StatusCode, string(b))
@@ -781,7 +819,7 @@ func extractReturnsBatch(db *sql.DB, tableName string, lastID int64, limit int) 
 		})
 
 		ledgBatch = append(ledgBatch, LedgerSyncItem{
-			RemoteID:     "RET-" + remoteID,
+			RemoteID:     fmt.Sprintf("RET-%d", id),
 			PharmacyCode: accountID,
 			EntryDate:    dateD,
 			DocType:      "مرتجع مبيعات",
@@ -792,6 +830,7 @@ func extractReturnsBatch(db *sql.DB, tableName string, lastID int64, limit int) 
 			Description:  reason,
 		})
 	}
+	_ = qRows.Err()
 
 	return retBatch, ledgBatch, maxID, nil
 }
@@ -897,6 +936,11 @@ func runGentleSync(cfg *Config) {
 	// 1. Quick indexed counts & returns discovery
 	var totalInvoices, totalReceipts, totalReturns int
 	_ = db.QueryRow("SELECT COUNT(*) FROM INVOICES_H").Scan(&totalInvoices)
+	if tableExists(db, "INVOICES_HH") {
+		var cntHH int
+		_ = db.QueryRow("SELECT COUNT(*) FROM INVOICES_HH").Scan(&cntHH)
+		totalInvoices += cntHH
+	}
 	_ = db.QueryRow("SELECT COUNT(*) FROM INCOME_CASH").Scan(&totalReceipts)
 
 	returnsTables := discoverReturnsTables(db)
@@ -928,355 +972,466 @@ func runGentleSync(cfg *Config) {
 		delayMs = 250
 	}
 
-	// 2. Sync Customers once if not yet loaded
+	// -------------------------------------------------------------------------
+	// 1. أول خطوة أساسية: سحب دليل العملاء والصيدليات بالكامل ورفعهم للسحابة
+	// -------------------------------------------------------------------------
 	state.Lock()
-	currCusts := state.TotalCustomers
+	state.CurrentTask = "المرحلة الأولى: سحب دليل العملاء والصيدليات بالكامل..."
 	state.Unlock()
+	addLog("بدء المرحلة الأولى: فحص وسحب دليل العملاء والصيدليات (ACCOUNTS)...")
 
-	if currCusts == 0 {
-		addLog("فحص دليل العملاء والصيدليات...")
-
-		// Optional: pre-load extra phone numbers from TELE_PHON table if available
-		extraPhones := make(map[string]string)
-		if tableExists(db, "TELE_PHON") {
-			tRows, tErr := db.Query("SELECT ACCOUNT_ID, TEL_ FROM TELE_PHON")
-			if tErr == nil {
-				for tRows.Next() {
-					var accID int64
-					var tRaw interface{}
-					if err := tRows.Scan(&accID, &tRaw); err == nil {
-						k := fmt.Sprintf("%d", accID)
-						var ph string
-						switch tv := tRaw.(type) {
-						case []byte:
-							ph = decodeText(tv)
-						default:
-							ph = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", tv)))
-						}
-						if ph != "" {
-							if existing, ok := extraPhones[k]; ok {
-								if !strings.Contains(existing, ph) {
-									extraPhones[k] = existing + " / " + ph
-								}
-							} else {
-								extraPhones[k] = ph
+	// Pre-load extra phone numbers from TELE_PHON table if available
+	extraPhones := make(map[string]string)
+	if tableExists(db, "TELE_PHON") {
+		tRows, tErr := db.Query("SELECT ACCOUNT_ID, TEL_ FROM TELE_PHON")
+		if tErr == nil {
+			for tRows.Next() {
+				var accID int64
+				var tRaw interface{}
+				if err := tRows.Scan(&accID, &tRaw); err == nil {
+					k := fmt.Sprintf("%d", accID)
+					var ph string
+					switch tv := tRaw.(type) {
+					case []byte:
+						ph = decodeText(tv)
+					default:
+						ph = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", tv)))
+					}
+					if ph != "" {
+						if existing, ok := extraPhones[k]; ok {
+							if !strings.Contains(existing, ph) {
+								extraPhones[k] = existing + " / " + ph
 							}
-						}
-					}
-				}
-				tRows.Close()
-			}
-		}
-
-		custRows, err := db.Query("SELECT * FROM ACCOUNTS")
-		if err == nil {
-			cols, _ := custRows.Columns()
-			idIdx, nameIdx, phoneIdx, phone2Idx, addrIdx := -1, -1, -1, -1, -1
-			for idx, c := range cols {
-				u := strings.ToUpper(strings.TrimSpace(c))
-				if idIdx == -1 && (u == "ACCOUNT_ID" || u == "ACC_ID" || u == "ID" || u == "CODE") {
-					idIdx = idx
-				}
-				if nameIdx == -1 && (u == "ACCOUNT_NAME" || u == "ACC_NAME" || u == "NAME") {
-					nameIdx = idx
-				}
-				if phoneIdx == -1 && (u == "ACCOUNT_TEL1" || strings.Contains(u, "TEL1") || strings.Contains(u, "PHONE1")) {
-					phoneIdx = idx
-				}
-				if phone2Idx == -1 && (u == "ACCOUNT_TEL2" || strings.Contains(u, "TEL2") || strings.Contains(u, "PHONE2")) {
-					phone2Idx = idx
-				}
-				if addrIdx == -1 && (u == "ACCOUNT_ADDRESS" || strings.Contains(u, "ADDR") || strings.Contains(u, "ADDRESS")) {
-					addrIdx = idx
-				}
-			}
-
-			// Fallbacks if not named TEL1/TEL2
-			if phoneIdx == -1 {
-				for idx, c := range cols {
-					u := strings.ToUpper(strings.TrimSpace(c))
-					if idx != idIdx && idx != nameIdx && idx != addrIdx && (strings.Contains(u, "TEL") || strings.Contains(u, "PHONE") || strings.Contains(u, "MOB")) {
-						phoneIdx = idx
-						break
-					}
-				}
-			}
-
-			var custList []CustomerSyncItem
-			if idIdx != -1 && nameIdx != -1 {
-				for custRows.Next() {
-					vals := make([]interface{}, len(cols))
-					valPtrs := make([]interface{}, len(cols))
-					for i := range vals {
-						valPtrs[i] = &vals[i]
-					}
-					if err := custRows.Scan(valPtrs...); err != nil {
-						continue
-					}
-					var cCode, cName, cPhone, cPhone2, cAddr string
-					if vals[idIdx] != nil {
-						cCode = strings.TrimSpace(fmt.Sprintf("%v", vals[idIdx]))
-					}
-					if vals[nameIdx] != nil {
-						switch v := vals[nameIdx].(type) {
-						case []byte:
-							cName = decodeText(v)
-						default:
-							cName = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
-						}
-					}
-					if phoneIdx != -1 && vals[phoneIdx] != nil {
-						switch v := vals[phoneIdx].(type) {
-						case []byte:
-							cPhone = decodeText(v)
-						default:
-							cPhone = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
-						}
-					}
-					if phone2Idx != -1 && vals[phone2Idx] != nil {
-						switch v := vals[phone2Idx].(type) {
-						case []byte:
-							cPhone2 = decodeText(v)
-						default:
-							cPhone2 = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
-						}
-					}
-					if cPhone2 != "" && cPhone2 != cPhone {
-						if cPhone != "" {
-							cPhone = cPhone + " / " + cPhone2
 						} else {
-							cPhone = cPhone2
+							extraPhones[k] = ph
 						}
-					}
-					// Include extra phones from TELE_PHON if available
-					if exPh, ok := extraPhones[cCode]; ok && exPh != "" {
-						if cPhone == "" {
-							cPhone = exPh
-						} else if !strings.Contains(cPhone, exPh) {
-							cPhone = cPhone + " / " + exPh
-						}
-					}
-					if addrIdx != -1 && vals[addrIdx] != nil {
-						switch v := vals[addrIdx].(type) {
-						case []byte:
-							cAddr = decodeText(v)
-						default:
-							cAddr = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
-						}
-					}
-					if cCode != "" && cName != "" && cCode != "0" {
-						custList = append(custList, CustomerSyncItem{
-							Code:    cCode,
-							Name:    cName,
-							Phone:   cPhone,
-							Address: cAddr,
-						})
 					}
 				}
 			}
-			custRows.Close()
-
-			state.Lock()
-			state.TotalCustomers = len(custList)
-			state.Unlock()
-
-			if len(custList) > 0 {
-				addLog(fmt.Sprintf("تم استخراج %d صيدلية وعميل بأرقام الهواتف والعناوين، جاري الرفع للسحابة...", len(custList)))
-				for i := 0; i < len(custList); i += 300 {
-					end := i + 300
-					if end > len(custList) {
-						end = len(custList)
-					}
-					p := IngestionPayload{Customers: custList[i:end]}
-					if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, p); err != nil {
-						if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "Unauthorized") {
-							state.Lock()
-							state.Status = "error"
-							state.CloudConnected = false
-							state.LastError = "مفتاح الربط (API Token) غير صالح أو غير معتمد على السيرفر (401)"
-							state.CurrentTask = "خطأ في مفتاح الربط السحابي (401)"
-							state.Unlock()
-							addLog("خطأ حرج: تم رفض مفتاح الربط السحابي من السيرفر (401 Unauthorized). يرجى التأكد من التوكن في لوحة التحكم.")
-							return
-						}
-						addLog(fmt.Sprintf("تنبيه أثناء رفع دليل الصيدليات: %v", err))
-					}
-					time.Sleep(200 * time.Millisecond)
-				}
-				addLog("اكتمل تحديث دليل الصيدليات بنجاح.")
-			}
+			_ = tRows.Err()
+			tRows.Close()
 		}
 	}
 
-	// 3. Gentle Indexed Invoices Extraction
-	lastInvID := cfg.Cursors.LastInvoiceID
-	syncedInvoices := 0
-
-	addLog(fmt.Sprintf("بدء فحص الفواتير من المعرف %d (حجم الدفعة: %d)...", lastInvID, batchSize))
-
-	for {
-		state.Lock()
-		if state.ShouldPause {
-			state.Status = "paused"
-			state.CurrentTask = "المزامنة متوقفة مؤقتاً"
-			state.Unlock()
-			addLog("تم إيقاف المزامنة مؤقتاً.")
-			return
-		}
-		state.CurrentTask = fmt.Sprintf("رفع الفواتير بهدوء... تم رفع %d فاتورة", syncedInvoices)
-		state.Unlock()
-
-		q := fmt.Sprintf(`
-			SELECT FIRST %d 
-				INVOICES_H_ID, DATE_D, TOTAL_TOTAL, TOTAL_DISCOUNT1, TOTAL_MONY_PAY, ACCOUNT_ID
-			FROM INVOICES_H
-			WHERE INVOICES_H_ID > %d
-			ORDER BY INVOICES_H_ID ASC
-		`, batchSize, lastInvID)
-
-		rows, err := db.Query(q)
-		if err != nil {
-			addLog(fmt.Sprintf("تنبيه في الاستعلام من جدول الفواتير: %v", err))
-			break
+	custRows, err := db.Query("SELECT * FROM ACCOUNTS")
+	if err == nil {
+		cols, _ := custRows.Columns()
+		idIdx, nameIdx, phoneIdx, phone2Idx, addrIdx := -1, -1, -1, -1, -1
+		for idx, c := range cols {
+			u := strings.ToUpper(strings.TrimSpace(c))
+			if idIdx == -1 && (u == "ACCOUNT_ID" || u == "ACC_ID" || u == "ID" || u == "CODE") {
+				idIdx = idx
+			}
+			if nameIdx == -1 && (u == "ACCOUNT_NAME" || u == "ACC_NAME" || u == "NAME") {
+				nameIdx = idx
+			}
+			if phoneIdx == -1 && (u == "ACCOUNT_TEL1" || strings.Contains(u, "TEL1") || strings.Contains(u, "PHONE1")) {
+				phoneIdx = idx
+			}
+			if phone2Idx == -1 && (u == "ACCOUNT_TEL2" || strings.Contains(u, "TEL2") || strings.Contains(u, "PHONE2")) {
+				phone2Idx = idx
+			}
+			if addrIdx == -1 && (u == "ACCOUNT_ADDRESS" || strings.Contains(u, "ADDR") || strings.Contains(u, "ADDRESS")) {
+				addrIdx = idx
+			}
 		}
 
-		var batch []InvoiceSyncItem
-		var ledgBatch []LedgerSyncItem
-		var maxIDInBatch int64 = lastInvID
-
-		for rows.Next() {
-			var id int64
-			var rawDate interface{}
-			var total, discount, paid float64
-			var accountID int64
-			if err := rows.Scan(&id, &rawDate, &total, &discount, &paid, &accountID); err != nil {
-				continue
+		// Fallbacks if not named TEL1/TEL2
+		if phoneIdx == -1 {
+			for idx, c := range cols {
+				u := strings.ToUpper(strings.TrimSpace(c))
+				if idx != idIdx && idx != nameIdx && idx != addrIdx && (strings.Contains(u, "TEL") || strings.Contains(u, "PHONE") || strings.Contains(u, "MOB")) {
+					phoneIdx = idx
+					break
+				}
 			}
-			if id > maxIDInBatch {
-				maxIDInBatch = id
-			}
-			dateD := parseDate(rawDate)
-			net := total - discount
-			rem := net - paid
-			remoteID := fmt.Sprintf("%d", id)
-			invNum := fmt.Sprintf("INV-%d", id)
-			pharmaCode := fmt.Sprintf("%d", accountID)
+		}
 
-			// Extract Line Items from INVOICES_D joined with PRODUCTS (per ERP_DATABASE_MAP.md)
-			var items []InvoiceLineSyncItem
-			dQuery := fmt.Sprintf(`
-				SELECT 
-					D.INVOICES_D_ID,
-					COALESCE(D.PROD_ID, 0),
-					P.PROD_NAME,
-					COALESCE(P.PROD_NAME_EN, ''),
-					COALESCE(CAST(D.TOTAL_QTY_ALL AS DOUBLE PRECISION), 0),
-					COALESCE(CAST(D.CONSUMER AS DOUBLE PRECISION), 0),
-					COALESCE(CAST(D.DISCOUNT1 AS DOUBLE PRECISION), 0),
-					COALESCE(CAST(D.TOTAL_TOTAL AS DOUBLE PRECISION), 0)
-				FROM INVOICES_D D
-				LEFT JOIN PRODUCTS P ON D.PROD_ID = P.PROD_ID
-				WHERE D.INVOICES_H_ID = %d
-				ORDER BY D.INVOICES_D_ID ASC
-			`, id)
-
-			dRows, dErr := db.Query(dQuery)
-			if dErr == nil {
-				for dRows.Next() {
-					var dID, prodID int64
-					var rawName []byte
-					var nameEn string
-					var qty, price, discPct, totalItem float64
-					if err := dRows.Scan(&dID, &prodID, &rawName, &nameEn, &qty, &price, &discPct, &totalItem); err == nil {
-						itemName := decodeText(rawName)
-						if itemName == "" && nameEn != "" {
-							itemName = cleanControlChars(nameEn)
-						}
-						if itemName == "" {
-							itemName = fmt.Sprintf("صنف كود %d", prodID)
-						}
-						items = append(items, InvoiceLineSyncItem{
-							RemoteItemID:    fmt.Sprintf("%d", dID),
-							ItemCode:        fmt.Sprintf("%d", prodID),
-							ItemName:        itemName,
-							Unit:            "علبة",
-							Quantity:        qty,
-							BonusQuantity:   0,
-							UnitPrice:       price,
-							DiscountPercent: discPct,
-							TotalPrice:      totalItem,
-						})
+		var custList []CustomerSyncItem
+		if idIdx != -1 && nameIdx != -1 {
+			for custRows.Next() {
+				vals := make([]interface{}, len(cols))
+				valPtrs := make([]interface{}, len(cols))
+				for i := range vals {
+					valPtrs[i] = &vals[i]
+				}
+				if err := custRows.Scan(valPtrs...); err != nil {
+					continue
+				}
+				var cCode, cName, cPhone, cPhone2, cAddr string
+				if vals[idIdx] != nil {
+					cCode = strings.TrimSpace(fmt.Sprintf("%v", vals[idIdx]))
+				}
+				if vals[nameIdx] != nil {
+					switch v := vals[nameIdx].(type) {
+					case []byte:
+						cName = decodeText(v)
+					default:
+						cName = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
 					}
 				}
-				dRows.Close()
+				if phoneIdx != -1 && vals[phoneIdx] != nil {
+					switch v := vals[phoneIdx].(type) {
+					case []byte:
+						cPhone = decodeText(v)
+					default:
+						cPhone = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
+					}
+				}
+				if phone2Idx != -1 && vals[phone2Idx] != nil {
+					switch v := vals[phone2Idx].(type) {
+					case []byte:
+						cPhone2 = decodeText(v)
+					default:
+						cPhone2 = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
+					}
+				}
+				if cPhone2 != "" && cPhone2 != cPhone {
+					if cPhone != "" {
+						cPhone = cPhone + " / " + cPhone2
+					} else {
+						cPhone = cPhone2
+					}
+				}
+				// Include extra phones from TELE_PHON if available
+				if exPh, ok := extraPhones[cCode]; ok && exPh != "" {
+					if cPhone == "" {
+						cPhone = exPh
+					} else if !strings.Contains(cPhone, exPh) && len(cPhone)+len(exPh)+3 <= 32 {
+						cPhone = cPhone + " / " + exPh
+					}
+				}
+				if len(cPhone) > 32 {
+					cPhone = strings.TrimSpace(cPhone[:32])
+				}
+				if addrIdx != -1 && vals[addrIdx] != nil {
+					switch v := vals[addrIdx].(type) {
+					case []byte:
+						cAddr = decodeText(v)
+					default:
+						cAddr = cleanControlChars(strings.TrimSpace(fmt.Sprintf("%v", v)))
+					}
+				}
+				if cCode != "" && cName != "" && cCode != "0" {
+					custList = append(custList, CustomerSyncItem{
+						Code:    cCode,
+						Name:    cName,
+						Phone:   cPhone,
+						Address: cAddr,
+					})
+				}
 			}
-
-			batch = append(batch, InvoiceSyncItem{
-				RemoteID:        remoteID,
-				InvoiceNumber:   invNum,
-				PharmacyCode:    pharmaCode,
-				InvoiceDate:     dateD,
-				TotalAmount:     total,
-				DiscountAmount:  discount,
-				NetAmount:       net,
-				PaidAmount:      paid,
-				RemainingAmount: rem,
-				Status:          "synced",
-				Items:           items,
-			})
-
-			ledgBatch = append(ledgBatch, LedgerSyncItem{
-				RemoteID:     "INV-" + remoteID,
-				PharmacyCode: pharmaCode,
-				EntryDate:    dateD,
-				DocType:      "فاتورة مبيعات",
-				DocNumber:    invNum,
-				Debit:        net,
-				Credit:       0.00,
-				Balance:      0.00,
-				Description:  "فاتورة مبيعات أدوية",
-			})
 		}
-		rows.Close() // Release locks immediately
-
-		if len(batch) == 0 {
-			break
-		}
-
-		payload := IngestionPayload{Invoices: batch, Ledger: ledgBatch}
-		if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, payload); err != nil {
-			if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "Unauthorized") {
-				state.Lock()
-				state.Status = "error"
-				state.CloudConnected = false
-				state.LastError = "مفتاح الربط (API Token) غير صالح أو غير معتمد على السيرفر (401)"
-				state.CurrentTask = "خطأ في مفتاح الربط السحابي (401)"
-				state.Unlock()
-				addLog("خطأ حرج: تم رفض مفتاح الربط السحابي من السيرفر (401 Unauthorized). يرجى التأكد من التوكن في لوحة التحكم.")
-				return
-			}
-			addLog(fmt.Sprintf("تنبيه أثناء إرسال الدفعة: %v", err))
-			time.Sleep(2 * time.Second)
-			continue
-		}
-
-		syncedInvoices += len(batch)
-		lastInvID = maxIDInBatch
-		cfg.Cursors.LastInvoiceID = lastInvID
-		saveConfig(cfg)
+		_ = custRows.Err()
+		custRows.Close()
 
 		state.Lock()
-		state.SyncedInvoices = syncedInvoices
-		state.SyncedLedger = syncedInvoices + state.SyncedReceipts + state.SyncedReturns
-		if totalInvoices > 0 {
-			state.ProgressPercent = (syncedInvoices * 50) / totalInvoices
-		}
+		state.TotalCustomers = len(custList)
 		state.Unlock()
 
-		addLog(fmt.Sprintf("تم رفع دفعة (%d فاتورة) بنجاح - الإجمالي المرفوع: %d فاتورة.", len(batch), syncedInvoices))
+		if len(custList) > 0 {
+			addLog(fmt.Sprintf("تم استخراج %d صيدلية وعميل بالكامل، جاري رفع الدليل للسحابة أولاً...", len(custList)))
+			for i := 0; i < len(custList); i += 300 {
+				end := i + 300
+				if end > len(custList) {
+					end = len(custList)
+				}
+				p := IngestionPayload{Customers: custList[i:end]}
+				if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, p); err != nil {
+					if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "Unauthorized") {
+						state.Lock()
+						state.Status = "error"
+						state.CloudConnected = false
+						state.LastError = "مفتاح الربط (API Token) غير صالح أو غير معتمد على السيرفر (401)"
+						state.CurrentTask = "خطأ في مفتاح الربط السحابي (401)"
+						state.Unlock()
+						addLog("خطأ حرج: تم رفض مفتاح الربط السحابي من السيرفر (401 Unauthorized). يرجى التأكد من التوكن في لوحة التحكم.")
+						return
+					}
+					addLog(fmt.Sprintf("تنبيه أثناء رفع دليل الصيدليات: %v", err))
+				}
+				time.Sleep(150 * time.Millisecond)
+			}
+			addLog(fmt.Sprintf("اكتمل تحديث دليل العملاء بنجاح (%d صيدلية/عميل).", len(custList)))
+		}
+	}
 
-		// Gentle pause between batches
-		time.Sleep(time.Duration(delayMs) * time.Millisecond)
+	// 3. Gentle Indexed Invoices Extraction (Active & Archived)
+	type invTableSource struct {
+		Name        string
+		HeaderTable string
+		DetailTable string
+		HeaderIDCol string
+		DetailIDCol string
+		JoinCol     string
+		CursorPtr   *int64
+	}
+
+	invSources := []invTableSource{
+		{
+			Name:        "الفواتير الحالية (INVOICES_H)",
+			HeaderTable: "INVOICES_H",
+			DetailTable: "INVOICES_D",
+			HeaderIDCol: "INVOICES_H_ID",
+			DetailIDCol: "INVOICES_D_ID",
+			JoinCol:     "INVOICES_H_ID",
+			CursorPtr:   &cfg.Cursors.LastInvoiceID,
+		},
+	}
+
+	if tableExists(db, "INVOICES_HH") {
+		invSources = append(invSources, invTableSource{
+			Name:        "الفواتير المؤرشفة (INVOICES_HH)",
+			HeaderTable: "INVOICES_HH",
+			DetailTable: "INVOICES_DD",
+			HeaderIDCol: "INVOICES_HH_ID",
+			DetailIDCol: "INVOICES_DD_ID",
+			JoinCol:     "INVOICES_HH_ID",
+			CursorPtr:   &cfg.Cursors.LastArchivedInvoiceID,
+		})
+	}
+
+	syncedInvoices := 0
+	for _, src := range invSources {
+		lastID := *src.CursorPtr
+		addLog(fmt.Sprintf("بدء فحص %s من المعرف %d (حجم الدفعة: %d)...", src.Name, lastID, batchSize))
+
+		for {
+			state.Lock()
+			if state.ShouldPause {
+				state.Status = "paused"
+				state.CurrentTask = "المزامنة متوقفة مؤقتاً"
+				state.Unlock()
+				addLog("تم إيقاف المزامنة مؤقتاً.")
+				return
+			}
+			state.CurrentTask = fmt.Sprintf("رفع الفواتير بهدوء (%s)... تم رفع %d فاتورة", src.Name, syncedInvoices)
+			state.Unlock()
+
+			q := fmt.Sprintf(`
+				SELECT FIRST %d 
+					%s, DATE_D, TOTAL_TOTAL, TOTAL_DISCOUNT1, TOTAL_MONY_PAY, ACCOUNT_ID
+				FROM %s
+				WHERE %s > %d
+				ORDER BY %s ASC
+			`, batchSize, src.HeaderIDCol, src.HeaderTable, src.HeaderIDCol, lastID, src.HeaderIDCol)
+
+			rows, err := db.Query(q)
+			if err != nil {
+				addLog(fmt.Sprintf("تنبيه في الاستعلام من جدول %s: %v", src.HeaderTable, err))
+				break
+			}
+
+			var batch []InvoiceSyncItem
+			var ledgBatch []LedgerSyncItem
+			var maxIDInBatch int64 = lastID
+
+			for rows.Next() {
+				var id int64
+				var rawDate interface{}
+				var total, discount, paid float64
+				var accountID int64
+				if err := rows.Scan(&id, &rawDate, &total, &discount, &paid, &accountID); err != nil {
+					continue
+				}
+				if id > maxIDInBatch {
+					maxIDInBatch = id
+				}
+				dateD := parseDate(rawDate)
+				// In Firebird (ORGA SOFT), TOTAL_TOTAL is ALREADY the true net total amount after discount
+				net := total
+				rem := net - paid
+				remoteID := fmt.Sprintf("%d", id)
+				invNum := fmt.Sprintf("INV-%d", id)
+				pharmaCode := fmt.Sprintf("%d", accountID)
+
+				// Extract Line Items from detail table joined with PRODUCTS (per reference_tabarak)
+				var items []InvoiceLineSyncItem
+				if tableExists(db, src.DetailTable) {
+					// Clean, robust queries matching reference_tabarak without problematic COALESCE or missing columns
+					dQueries := []string{
+						fmt.Sprintf(`
+							SELECT 
+								I.PROD_ID, 
+								P.PROD_NAME, 
+								CAST(I.TOTAL_QTY_ALL AS DOUBLE PRECISION), 
+								CAST(I.CONSUMER AS DOUBLE PRECISION), 
+								CAST(I.DISCOUNT1 AS DOUBLE PRECISION),
+								CAST(I.TOTAL_TOTAL AS DOUBLE PRECISION)
+							FROM %s I
+							LEFT JOIN PRODUCTS P ON I.PROD_ID = P.PROD_ID
+							WHERE I.%s = %d
+						`, src.DetailTable, src.JoinCol, id),
+						fmt.Sprintf(`
+							SELECT 
+								I.PROD_ID, 
+								P.PROD_NAME, 
+								CAST(I.QTY_QTY AS DOUBLE PRECISION), 
+								CAST(I.CONSUMER AS DOUBLE PRECISION), 
+								CAST(I.DISCOUNT1 AS DOUBLE PRECISION),
+								CAST(I.TOTAL_TOTAL AS DOUBLE PRECISION)
+							FROM %s I
+							LEFT JOIN PRODUCTS P ON I.PROD_ID = P.PROD_ID
+							WHERE I.%s = %d
+						`, src.DetailTable, src.JoinCol, id),
+						fmt.Sprintf(`
+							SELECT 
+								I.PROD_ID, 
+								P.PROD_NAME, 
+								CAST(I.TOTAL_QTY_ALL AS DOUBLE PRECISION), 
+								CAST(I.CONSUMER AS DOUBLE PRECISION), 
+								CAST(0.0 AS DOUBLE PRECISION),
+								CAST(I.TOTAL_TOTAL AS DOUBLE PRECISION)
+							FROM %s I
+							LEFT JOIN PRODUCTS P ON I.PROD_ID = P.PROD_ID
+							WHERE I.%s = %d
+						`, src.DetailTable, src.JoinCol, id),
+						fmt.Sprintf(`
+							SELECT 
+								I.PROD_ID, 
+								NULL, 
+								CAST(I.TOTAL_QTY_ALL AS DOUBLE PRECISION), 
+								CAST(I.CONSUMER AS DOUBLE PRECISION), 
+								CAST(0.0 AS DOUBLE PRECISION),
+								CAST(I.TOTAL_TOTAL AS DOUBLE PRECISION)
+							FROM %s I
+							WHERE I.%s = %d
+						`, src.DetailTable, src.JoinCol, id),
+					}
+
+					for _, dQuery := range dQueries {
+						dRows, dErr := db.Query(dQuery)
+						if dErr != nil {
+							continue
+						}
+						var itemIdx int
+						for dRows.Next() {
+							itemIdx++
+							var (
+								prodID                         sql.NullInt64
+								rawName                        interface{}
+								qty, price, discPct, totalItem sql.NullFloat64
+							)
+							if err := dRows.Scan(&prodID, &rawName, &qty, &price, &discPct, &totalItem); err == nil {
+								var itemName string
+								switch v := rawName.(type) {
+								case []byte:
+									itemName = decodeText(v)
+								case string:
+									itemName = decodeText([]byte(v))
+								}
+								if itemName == "" {
+									if prodID.Valid && prodID.Int64 > 0 {
+										itemName = fmt.Sprintf("صنف كود %d", prodID.Int64)
+									} else {
+										itemName = "صنف مبيعات عام"
+									}
+								}
+
+								qVal := qty.Float64
+								if qVal <= 0 {
+									qVal = 1
+								}
+								pVal := price.Float64
+								dVal := discPct.Float64
+								tVal := totalItem.Float64
+								if tVal <= 0 && qVal > 0 && pVal > 0 {
+									tVal = qVal * pVal * (1.0 - (dVal / 100.0))
+								}
+
+								pCode := "0"
+								if prodID.Valid {
+									pCode = fmt.Sprintf("%d", prodID.Int64)
+								}
+
+								items = append(items, InvoiceLineSyncItem{
+									RemoteItemID:    fmt.Sprintf("%d-%d", id, itemIdx),
+									ItemCode:        pCode,
+									ItemName:        itemName,
+									Unit:            "علبة",
+									Quantity:        qVal,
+									BonusQuantity:   0,
+									UnitPrice:       pVal,
+									DiscountPercent: dVal,
+									TotalPrice:      tVal,
+								})
+							}
+						}
+						_ = dRows.Err()
+						dRows.Close()
+						if len(items) > 0 {
+							break
+						}
+					}
+				}
+
+				batch = append(batch, InvoiceSyncItem{
+					RemoteID:        remoteID,
+					InvoiceNumber:   invNum,
+					PharmacyCode:    pharmaCode,
+					InvoiceDate:     dateD,
+					TotalAmount:     total,
+					DiscountAmount:  discount,
+					NetAmount:       net,
+					PaidAmount:      paid,
+					RemainingAmount: rem,
+					Status:          "closed",
+					Items:           items,
+				})
+
+				ledgBatch = append(ledgBatch, LedgerSyncItem{
+					RemoteID:     fmt.Sprintf("INV-%d", id),
+					PharmacyCode: pharmaCode,
+					EntryDate:    dateD,
+					DocType:      "فاتورة مبيعات",
+					DocNumber:    invNum,
+					Debit:        net,
+					Credit:       0.00,
+					Balance:      0.00,
+					Description:  "فاتورة مبيعات أدوية",
+				})
+			}
+			_ = rows.Err()
+			rows.Close()
+
+			if len(batch) == 0 {
+				break
+			}
+
+			payload := IngestionPayload{Invoices: batch, Ledger: ledgBatch}
+			if err := postBatch(cfg.Cloud.APIURL, cfg.Cloud.APIKey, payload); err != nil {
+				if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "Unauthorized") {
+					state.Lock()
+					state.Status = "error"
+					state.CloudConnected = false
+					state.LastError = "مفتاح الربط (API Token) غير صالح أو غير معتمد على السيرفر (401)"
+					state.CurrentTask = "خطأ في مفتاح الربط السحابي (401)"
+					state.Unlock()
+					addLog("خطأ حرج: تم رفض مفتاح الربط السحابي من السيرفر (401 Unauthorized). يرجى التأكد من التوكن في لوحة التحكم.")
+					return
+				}
+				addLog(fmt.Sprintf("تنبيه أثناء إرسال الدفعة (%s): %v", src.HeaderTable, err))
+				time.Sleep(2 * time.Second)
+				continue
+			}
+
+			syncedInvoices += len(batch)
+			lastID = maxIDInBatch
+			*src.CursorPtr = lastID
+			saveConfig(cfg)
+
+			state.Lock()
+			state.SyncedInvoices = syncedInvoices
+			state.SyncedLedger = syncedInvoices + state.SyncedReceipts + state.SyncedReturns
+			if totalInvoices > 0 {
+				state.ProgressPercent = (syncedInvoices * 50) / totalInvoices
+			}
+			state.Unlock()
+
+			addLog(fmt.Sprintf("تم رفع دفعة (%d فاتورة من %s) بنجاح - الإجمالي المرفوع: %d فاتورة.", len(batch), src.HeaderTable, syncedInvoices))
+
+			time.Sleep(time.Duration(delayMs) * time.Millisecond)
+		}
 	}
 
 	// 4. Gentle Indexed Cash Receipts Extraction
@@ -1380,6 +1535,7 @@ func runGentleSync(cfg *Config) {
 				Description:  fmt.Sprintf("سند تحصيل نقدي - المحصل: %s", collector),
 			})
 		}
+		_ = rows.Err()
 		rows.Close()
 
 		if len(batch) == 0 {
@@ -1605,13 +1761,14 @@ func startInternalServer(cfg *Config) {
 			}
 			if req.SyncMode != "" {
 				cfg.SyncMode = req.SyncMode
-				if req.SyncMode == "gentle" {
+				switch req.SyncMode {
+				case "gentle":
 					cfg.BatchSize = 100
 					cfg.BatchDelayMs = 1500
-				} else if req.SyncMode == "balanced" {
+				case "balanced":
 					cfg.BatchSize = 150
 					cfg.BatchDelayMs = 800
-				} else if req.SyncMode == "fast" {
+				case "fast":
 					cfg.BatchSize = 300
 					cfg.BatchDelayMs = 300
 				}
@@ -1649,6 +1806,7 @@ func startInternalServer(cfg *Config) {
 
 				// 2. Reset cursors in cfg
 				cfg.Cursors.LastInvoiceID = 0
+				cfg.Cursors.LastArchivedInvoiceID = 0
 				cfg.Cursors.LastReceiptID = 0
 				cfg.Cursors.LastReturnID = 0
 
@@ -1753,6 +1911,7 @@ func startInternalServer(cfg *Config) {
 
 		// 2. Reset cursors to 0
 		cfg.Cursors.LastInvoiceID = 0
+		cfg.Cursors.LastArchivedInvoiceID = 0
 		cfg.Cursors.LastReceiptID = 0
 		cfg.Cursors.LastReturnID = 0
 		saveConfig(cfg)
@@ -1776,6 +1935,18 @@ func startInternalServer(cfg *Config) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "reset"})
 	})
 
+	mux.HandleFunc("/logo.png", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(embeddedLogo)
+	})
+
+	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(embeddedLogo)
+	})
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, appHTML)
@@ -1796,29 +1967,36 @@ const appHTML = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>XPharma Sync Agent | وكيل مزامنة المستودع</title>
+  <link rel="icon" type="image/png" href="/logo.png">
+  <link rel="shortcut icon" type="image/png" href="/logo.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #090d16;
-      --card: #0f172a;
-      --card-hover: #131d35;
-      --border: rgba(148, 163, 184, 0.12);
-      --border-focus: rgba(59, 130, 246, 0.5);
-      --primary: #2563eb;
-      --primary-hover: #1d4ed8;
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
-      --text-sub: #64748b;
-      --success: #10b981;
-      --success-bg: rgba(16, 185, 129, 0.1);
-      --warning: #f59e0b;
-      --warning-bg: rgba(245, 158, 11, 0.1);
-      --danger: #ef4444;
-      --danger-bg: rgba(239, 68, 68, 0.1);
-      --font-ar: 'Cairo', system-ui, sans-serif;
-      --font-en: 'Inter', system-ui, sans-serif;
+      --bg: #F6F4FA;
+      --card: #FFFFFF;
+      --card-hover: #FCFBFE;
+      --border: #E9E3F3;
+      --border-focus: #3F0082;
+      --primary: #3F0082;
+      --primary-dark: #2A0058;
+      --primary-hover: #4F00A4;
+      --primary-soft: #F2EEFB;
+      --secondary: #00D780;
+      --secondary-dark: #00B368;
+      --secondary-soft: #E8FBF2;
+      --text: #1A0A33;
+      --text-muted: #6B5E82;
+      --text-sub: #94A3B8;
+      --success: #00B368;
+      --success-bg: #E8FBF2;
+      --warning: #D97706;
+      --warning-bg: #FFFBEB;
+      --danger: #DC2626;
+      --danger-bg: #FEF2F2;
+      --font-ar: 'Cairo', system-ui, -apple-system, sans-serif;
+      --font-en: 'Inter', system-ui, -apple-system, sans-serif;
       --font-mono: 'JetBrains Mono', 'Consolas', monospace;
     }
 
@@ -1826,7 +2004,7 @@ const appHTML = `<!DOCTYPE html>
 
     body {
       background: var(--bg);
-      background-image: radial-gradient(circle at 50% 0%, rgba(37, 99, 235, 0.12) 0%, transparent 60%);
+      background-image: radial-gradient(1000px 450px at 50% 0%, rgba(63, 0, 130, 0.05) 0%, transparent 100%);
       color: var(--text);
       font-family: var(--font-ar);
       min-height: 100vh;
@@ -1841,16 +2019,17 @@ const appHTML = `<!DOCTYPE html>
 
     /* Top Navigation Bar */
     .topbar {
-      background: rgba(15, 23, 42, 0.85);
+      background: rgba(255, 255, 255, 0.94);
       backdrop-filter: blur(16px);
       border-bottom: 1px solid var(--border);
-      padding: 12px 24px;
+      padding: 12px 28px;
       display: flex;
       justify-content: space-between;
       align-items: center;
       position: sticky;
       top: 0;
       z-index: 50;
+      box-shadow: 0 1px 6px rgba(63, 0, 130, 0.03);
     }
 
     .brand {
@@ -1860,21 +2039,30 @@ const appHTML = `<!DOCTYPE html>
     }
 
     .brand-icon {
-      width: 38px;
-      height: 38px;
-      background: linear-gradient(135deg, #2563eb, #0ea5e9);
-      border-radius: 10px;
+      width: 42px;
+      height: 42px;
+      background: #FFFFFF;
+      border: 1px solid var(--border);
+      border-radius: 12px;
       display: flex;
       align-items: center;
       justify-content: center;
-      color: white;
-      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+      box-shadow: 0 2px 8px rgba(63, 0, 130, 0.06);
+      padding: 4px;
+      overflow: hidden;
+    }
+
+    .brand-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
     }
 
     .brand-title {
       font-size: 15px;
-      font-weight: 700;
-      color: var(--text);
+      font-weight: 800;
+      color: var(--primary);
       letter-spacing: -0.2px;
     }
 
@@ -1884,15 +2072,18 @@ const appHTML = `<!DOCTYPE html>
       display: flex;
       align-items: center;
       gap: 6px;
+      margin-top: 1px;
     }
 
     .brand-sub .version {
-      background: rgba(255, 255, 255, 0.08);
-      padding: 1px 6px;
+      background: var(--primary-soft);
+      border: 1px solid #DDD5EA;
+      padding: 1px 7px;
       border-radius: 4px;
       font-size: 10px;
-      font-weight: 600;
-      color: #93c5fd;
+      font-weight: 700;
+      color: var(--primary);
+      font-family: var(--font-en);
     }
 
     .topbar-right {
@@ -1905,38 +2096,38 @@ const appHTML = `<!DOCTYPE html>
       display: flex;
       align-items: center;
       gap: 8px;
-      background: rgba(16, 185, 129, 0.08);
-      border: 1px solid rgba(16, 185, 129, 0.25);
-      padding: 6px 12px;
+      background: var(--secondary-soft);
+      border: 1px solid #A7F3D0;
+      padding: 6px 14px;
       border-radius: 20px;
       font-size: 12px;
-      font-weight: 600;
-      color: #34d399;
+      font-weight: 700;
+      color: #065F46;
     }
 
     .pulse-dot {
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: #10b981;
-      box-shadow: 0 0 8px #10b981;
+      background: var(--secondary-dark);
+      box-shadow: 0 0 8px var(--secondary);
       animation: pulse-ring 2s infinite;
     }
 
     @keyframes pulse-ring {
-      0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
-      70% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+      0% { box-shadow: 0 0 0 0 rgba(0, 215, 128, 0.7); }
+      70% { box-shadow: 0 0 0 8px rgba(0, 215, 128, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(0, 215, 128, 0); }
     }
 
     .btn-lang {
-      background: rgba(255, 255, 255, 0.05);
+      background: #FFFFFF;
       border: 1px solid var(--border);
-      color: var(--text);
-      padding: 6px 12px;
+      color: var(--primary);
+      padding: 6px 14px;
       border-radius: 8px;
       font-size: 12px;
-      font-weight: 600;
+      font-weight: 700;
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -1945,14 +2136,14 @@ const appHTML = `<!DOCTYPE html>
     }
 
     .btn-lang:hover {
-      background: rgba(255, 255, 255, 0.1);
-      border-color: rgba(255, 255, 255, 0.2);
+      background: var(--primary-soft);
+      border-color: var(--primary);
     }
 
     /* Main Container */
     .main {
-      padding: 20px 24px;
-      max-width: 1020px;
+      padding: 22px 28px;
+      max-width: 1040px;
       margin: 0 auto;
       width: 100%;
       display: flex;
@@ -1965,7 +2156,7 @@ const appHTML = `<!DOCTYPE html>
     .status-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 12px;
+      gap: 14px;
     }
 
     @media (max-width: 720px) {
@@ -1976,14 +2167,18 @@ const appHTML = `<!DOCTYPE html>
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 14px 16px;
+      padding: 14px 18px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      transition: border-color 0.2s;
+      box-shadow: 0 2px 8px rgba(63, 0, 130, 0.03);
+      transition: all 0.2s;
     }
 
-    .status-card:hover { border-color: rgba(148, 163, 184, 0.25); }
+    .status-card:hover {
+      border-color: #DDD5EA;
+      box-shadow: 0 4px 14px rgba(63, 0, 130, 0.06);
+    }
 
     .status-info {
       display: flex;
@@ -1992,54 +2187,56 @@ const appHTML = `<!DOCTYPE html>
     }
 
     .status-icon-box {
-      width: 36px;
-      height: 36px;
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid var(--border);
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      background: var(--primary-soft);
+      border: 1px solid #DDD5EA;
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #94a3b8;
+      color: var(--primary);
     }
 
     .status-title {
       font-size: 13px;
-      font-weight: 600;
+      font-weight: 700;
       color: var(--text);
     }
 
     .status-sub {
       font-size: 11px;
-      color: var(--text-sub);
+      color: var(--text-muted);
+      margin-top: 1px;
+      font-family: var(--font-en);
     }
 
     .badge {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 10px;
-      border-radius: 6px;
+      padding: 5px 12px;
+      border-radius: 20px;
       font-size: 11px;
-      font-weight: 600;
+      font-weight: 700;
     }
 
     .badge-ok {
       background: var(--success-bg);
-      color: #34d399;
-      border: 1px solid rgba(16, 185, 129, 0.2);
+      color: #065F46;
+      border: 1px solid #A7F3D0;
     }
 
     .badge-err {
       background: var(--danger-bg);
-      color: #f87171;
-      border: 1px solid rgba(239, 68, 68, 0.2);
+      color: var(--danger);
+      border: 1px solid #FECACA;
     }
 
     .badge-wait {
-      background: rgba(59, 130, 246, 0.1);
-      color: #60a5fa;
-      border: 1px solid rgba(59, 130, 246, 0.2);
+      background: var(--primary-soft);
+      color: var(--primary);
+      border: 1px solid #DDD5EA;
     }
 
     .badge-dot {
@@ -2048,16 +2245,17 @@ const appHTML = `<!DOCTYPE html>
       border-radius: 50%;
     }
 
-    .badge-ok .badge-dot { background: #10b981; }
-    .badge-err .badge-dot { background: #ef4444; }
-    .badge-wait .badge-dot { background: #3b82f6; }
+    .badge-ok .badge-dot { background: var(--secondary-dark); }
+    .badge-err .badge-dot { background: var(--danger); }
+    .badge-wait .badge-dot { background: var(--primary); }
 
     /* Surface Card */
     .card {
       background: var(--card);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 18px 20px;
+      border-radius: 14px;
+      padding: 20px 22px;
+      box-shadow: 0 3px 12px rgba(63, 0, 130, 0.03);
     }
 
     .card-header {
@@ -2074,20 +2272,21 @@ const appHTML = `<!DOCTYPE html>
     }
 
     .card-icon {
-      color: #60a5fa;
+      color: var(--primary);
       display: flex;
       align-items: center;
     }
 
     .card-title {
       font-size: 14px;
-      font-weight: 700;
+      font-weight: 800;
       color: var(--text);
     }
 
     .card-subtitle {
       font-size: 11px;
-      color: var(--text-sub);
+      color: var(--text-muted);
+      margin-top: 1px;
     }
 
     /* Form Fields */
@@ -2111,8 +2310,8 @@ const appHTML = `<!DOCTYPE html>
 
     .form-label {
       font-size: 12px;
-      font-weight: 600;
-      color: var(--text-muted);
+      font-weight: 700;
+      color: #3F2B5B;
       display: flex;
       align-items: center;
       gap: 6px;
@@ -2126,7 +2325,7 @@ const appHTML = `<!DOCTYPE html>
 
     .input-icon {
       position: absolute;
-      color: #64748b;
+      color: var(--text-muted);
       display: flex;
       align-items: center;
       pointer-events: none;
@@ -2139,7 +2338,7 @@ const appHTML = `<!DOCTYPE html>
       position: absolute;
       background: none;
       border: none;
-      color: #64748b;
+      color: var(--text-muted);
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -2147,16 +2346,16 @@ const appHTML = `<!DOCTYPE html>
       transition: color 0.15s;
     }
 
-    .input-toggle:hover { color: var(--text); }
+    .input-toggle:hover { color: var(--primary); }
 
     [dir="rtl"] .input-toggle { left: 12px; }
     [dir="ltr"] .input-toggle { right: 12px; }
 
     .form-input {
       width: 100%;
-      background: rgba(0, 0, 0, 0.35);
-      border: 1px solid var(--border);
-      color: white;
+      background: #FBF9FE;
+      border: 1px solid #DDD5EA;
+      color: var(--text);
       padding: 10px 14px;
       border-radius: 8px;
       font-size: 13px;
@@ -2172,16 +2371,16 @@ const appHTML = `<!DOCTYPE html>
     [dir="ltr"] .form-input.has-toggle { padding-right: 38px; }
 
     .form-input:focus {
-      border-color: #3b82f6;
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
-      background: rgba(0, 0, 0, 0.5);
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(63, 0, 130, 0.12);
+      background: #FFFFFF;
     }
 
     /* Pacing Selector */
     .pace-container {
       margin-top: 14px;
-      background: rgba(37, 99, 235, 0.04);
-      border: 1px solid rgba(37, 99, 235, 0.18);
+      background: var(--primary-soft);
+      border: 1px solid #DDD5EA;
       border-radius: 10px;
       padding: 12px 16px;
       display: flex;
@@ -2199,8 +2398,8 @@ const appHTML = `<!DOCTYPE html>
 
     .pace-text-title {
       font-size: 12px;
-      font-weight: 700;
-      color: #93c5fd;
+      font-weight: 800;
+      color: var(--primary);
     }
 
     .pace-text-sub {
@@ -2209,24 +2408,28 @@ const appHTML = `<!DOCTYPE html>
     }
 
     .pace-select {
-      background: #1e293b;
-      color: white;
-      border: 1px solid var(--border);
+      background: #FFFFFF;
+      color: var(--text);
+      border: 1px solid #DDD5EA;
       padding: 7px 12px;
       border-radius: 8px;
       font-size: 12px;
       font-family: inherit;
       outline: none;
       cursor: pointer;
+      font-weight: 600;
     }
 
-    .pace-select:focus { border-color: #3b82f6; }
+    .pace-select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(63, 0, 130, 0.15);
+    }
 
     /* Auto-Start Switch Box */
     .autostart-container {
       margin-top: 12px;
-      background: rgba(16, 185, 129, 0.04);
-      border: 1px solid rgba(16, 185, 129, 0.18);
+      background: var(--secondary-soft);
+      border: 1px solid #A7F3D0;
       border-radius: 10px;
       padding: 12px 16px;
       display: flex;
@@ -2244,13 +2447,13 @@ const appHTML = `<!DOCTYPE html>
 
     .autostart-title {
       font-size: 13px;
-      font-weight: 700;
-      color: #34d399;
+      font-weight: 800;
+      color: #065F46;
     }
 
     .autostart-sub {
       font-size: 11px;
-      color: var(--text-muted);
+      color: #047857;
       margin-top: 2px;
     }
 
@@ -2273,7 +2476,7 @@ const appHTML = `<!DOCTYPE html>
       position: absolute;
       cursor: pointer;
       top: 0; left: 0; right: 0; bottom: 0;
-      background-color: #334155;
+      background-color: #CBD5E1;
       transition: .25s ease-in-out;
       border-radius: 24px;
     }
@@ -2288,11 +2491,11 @@ const appHTML = `<!DOCTYPE html>
       background-color: white;
       transition: .25s ease-in-out;
       border-radius: 50%;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
     }
 
     input:checked + .slider {
-      background-color: #10b981;
+      background-color: var(--secondary-dark);
     }
 
     input:checked + .slider:before {
@@ -2315,7 +2518,7 @@ const appHTML = `<!DOCTYPE html>
       padding: 9px 18px;
       border-radius: 8px;
       font-size: 13px;
-      font-weight: 600;
+      font-weight: 700;
       cursor: pointer;
       border: none;
       display: inline-flex;
@@ -2326,52 +2529,52 @@ const appHTML = `<!DOCTYPE html>
     }
 
     .btn-primary {
-      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      background: linear-gradient(135deg, #3F0082, #2A0058);
       color: white;
-      box-shadow: 0 2px 10px rgba(37, 99, 235, 0.35);
+      box-shadow: 0 3px 10px rgba(63, 0, 130, 0.25);
     }
 
     .btn-primary:hover {
-      background: linear-gradient(135deg, #1d4ed8, #1e40af);
-      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.45);
+      background: linear-gradient(135deg, #4F00A4, #370073);
+      box-shadow: 0 5px 14px rgba(63, 0, 130, 0.35);
     }
 
     .btn-primary:active { transform: translateY(1px); }
 
     .btn-secondary {
-      background: #1e293b;
-      color: var(--text);
-      border: 1px solid var(--border);
+      background: #FFFFFF;
+      color: var(--primary);
+      border: 1px solid #DDD5EA;
     }
 
     .btn-secondary:hover {
-      background: #283548;
-      border-color: rgba(255, 255, 255, 0.2);
+      background: var(--primary-soft);
+      border-color: var(--primary);
     }
 
     .btn-warning {
-      background: rgba(245, 158, 11, 0.15);
-      color: #fbbf24;
-      border: 1px solid rgba(245, 158, 11, 0.3);
+      background: var(--warning-bg);
+      color: var(--warning);
+      border: 1px solid #FDE68A;
     }
 
-    .btn-warning:hover { background: rgba(245, 158, 11, 0.25); }
+    .btn-warning:hover { background: #FEF3C7; }
 
     .btn-danger {
-      background: rgba(239, 68, 68, 0.12);
-      color: #f87171;
-      border: 1px solid rgba(239, 68, 68, 0.25);
+      background: var(--danger-bg);
+      color: var(--danger);
+      border: 1px solid #FECACA;
     }
 
     .btn-danger:hover {
-      background: rgba(239, 68, 68, 0.22);
-      color: #fca5a5;
+      background: #FEE2E2;
+      color: #B91C1C;
     }
 
     /* Progress & Metrics */
     .progress-wrap {
-      background: rgba(0, 0, 0, 0.35);
-      border-radius: 8px;
+      background: #EDE8F5;
+      border-radius: 99px;
       height: 8px;
       overflow: hidden;
       margin: 12px 0 16px 0;
@@ -2381,10 +2584,10 @@ const appHTML = `<!DOCTYPE html>
 
     .progress-bar {
       height: 100%;
-      background: linear-gradient(90deg, #2563eb, #38bdf8);
+      background: linear-gradient(90deg, #3F0082, #00D780);
       width: 0%;
       transition: width 0.4s ease;
-      border-radius: 8px;
+      border-radius: 99px;
     }
 
     .stats-row {
@@ -2402,14 +2605,21 @@ const appHTML = `<!DOCTYPE html>
     }
 
     .stat-card {
-      background: rgba(0, 0, 0, 0.25);
-      border: 1px solid var(--border);
+      background: #FBF9FE;
+      border: 1px solid #EBE5F5;
       border-radius: 10px;
       padding: 12px 14px;
       display: flex;
       flex-direction: column;
       gap: 4px;
       position: relative;
+      transition: all 0.15s;
+    }
+
+    .stat-card:hover {
+      background: #FFFFFF;
+      border-color: #DDD5EA;
+      box-shadow: 0 2px 8px rgba(63, 0, 130, 0.05);
     }
 
     .stat-card-header {
@@ -2420,39 +2630,40 @@ const appHTML = `<!DOCTYPE html>
 
     .stat-card-title {
       font-size: 11px;
-      font-weight: 600;
-      color: var(--text-muted);
+      font-weight: 700;
+      color: #4A3E60;
     }
 
     .stat-card-icon {
-      color: #64748b;
+      color: var(--primary);
     }
 
     .stat-card-val {
       font-size: 20px;
-      font-weight: 700;
-      color: white;
+      font-weight: 800;
+      color: var(--text);
       font-family: var(--font-en);
       margin-top: 2px;
     }
 
     .stat-card-denom {
-      color: var(--text-sub);
+      color: var(--text-muted);
       font-size: 13px;
-      font-weight: 500;
+      font-weight: 600;
     }
 
     /* Terminal Log Window */
     .terminal-window {
-      background: #040711;
-      border: 1px solid var(--border);
-      border-radius: 10px;
+      background: #120E1E;
+      border: 1px solid #28203D;
+      border-radius: 12px;
       overflow: hidden;
+      box-shadow: 0 4px 16px rgba(18, 14, 30, 0.12);
     }
 
     .terminal-header {
-      background: #0b1120;
-      border-bottom: 1px solid var(--border);
+      background: #1A152B;
+      border-bottom: 1px solid #28203D;
       padding: 8px 14px;
       display: flex;
       align-items: center;
@@ -2470,17 +2681,18 @@ const appHTML = `<!DOCTYPE html>
       border-radius: 50%;
     }
 
-    .dot-close { background: #ef4444; }
-    .dot-min { background: #f59e0b; }
-    .dot-max { background: #10b981; }
+    .dot-close { background: #EF4444; }
+    .dot-min { background: #F59E0B; }
+    .dot-max { background: #10B981; }
 
     .terminal-title {
       font-size: 11px;
       font-family: var(--font-mono);
-      color: var(--text-muted);
+      color: #DDD6FE;
       display: flex;
       align-items: center;
       gap: 6px;
+      font-weight: 600;
     }
 
     .terminal-actions {
@@ -2490,10 +2702,10 @@ const appHTML = `<!DOCTYPE html>
     }
 
     .btn-copy {
-      background: transparent;
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      color: var(--text-muted);
-      padding: 3px 8px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      color: #DDD6FE;
+      padding: 3px 9px;
       border-radius: 4px;
       font-size: 11px;
       font-family: inherit;
@@ -2505,15 +2717,15 @@ const appHTML = `<!DOCTYPE html>
     }
 
     .btn-copy:hover {
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--text);
+      background: rgba(255, 255, 255, 0.16);
+      color: #FFFFFF;
     }
 
     .terminal-body {
       padding: 12px 14px;
       font-family: var(--font-mono);
       font-size: 12px;
-      color: #94a3b8;
+      color: #E2E8F0;
       height: 170px;
       overflow-y: auto;
       line-height: 1.6;
@@ -2522,7 +2734,7 @@ const appHTML = `<!DOCTYPE html>
     }
 
     .terminal-body::-webkit-scrollbar { width: 6px; }
-    .terminal-body::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+    .terminal-body::-webkit-scrollbar-thumb { background: #28203D; border-radius: 3px; }
 
     /* Toast Notification Banner */
     .toast {
@@ -2530,17 +2742,17 @@ const appHTML = `<!DOCTYPE html>
       bottom: 24px;
       left: 50%;
       transform: translateX(-50%) translateY(100px);
-      background: #1e293b;
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 10px 20px;
+      background: #1A0A33;
+      border: 1px solid #3F0082;
+      color: #FFFFFF;
+      padding: 10px 22px;
       border-radius: 10px;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
       display: flex;
       align-items: center;
       gap: 10px;
       font-size: 13px;
-      font-weight: 600;
+      font-weight: 700;
       opacity: 0;
       pointer-events: none;
       transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
@@ -2553,15 +2765,15 @@ const appHTML = `<!DOCTYPE html>
       pointer-events: auto;
     }
 
-    .toast-success { border-color: rgba(16, 185, 129, 0.4); color: #34d399; }
-    .toast-error { border-color: rgba(239, 68, 68, 0.4); color: #f87171; }
-    .toast-info { border-color: rgba(59, 130, 246, 0.4); color: #60a5fa; }
+    .toast-success { border-color: #00D780; color: #6EE7B7; }
+    .toast-error { border-color: #EF4444; color: #FCA5A5; }
+    .toast-info { border-color: #A78BFA; color: #DDD6FE; }
 
     /* Confirmation Modal */
     .modal-backdrop {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0, 0, 0, 0.7);
+      background: rgba(26, 10, 51, 0.6);
       backdrop-filter: blur(4px);
       display: flex;
       align-items: center;
@@ -2578,13 +2790,13 @@ const appHTML = `<!DOCTYPE html>
     }
 
     .modal {
-      background: #0f172a;
+      background: #FFFFFF;
       border: 1px solid var(--border);
       border-radius: 14px;
       width: 90%;
       max-width: 440px;
       padding: 24px;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+      box-shadow: 0 20px 40px rgba(63, 0, 130, 0.15);
       transform: scale(0.95);
       transition: transform 0.2s;
     }
@@ -2593,15 +2805,15 @@ const appHTML = `<!DOCTYPE html>
 
     .modal-title {
       font-size: 16px;
-      font-weight: 700;
-      color: white;
+      font-weight: 800;
+      color: var(--text);
       margin-bottom: 8px;
     }
 
     .modal-desc {
       font-size: 13px;
       color: var(--text-muted);
-      line-height: 1.5;
+      line-height: 1.6;
       margin-bottom: 20px;
     }
 
@@ -2617,11 +2829,7 @@ const appHTML = `<!DOCTYPE html>
   <div class="topbar">
     <div class="brand">
       <div class="brand-icon">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-          <path d="M2 17l10 5 10-5"/>
-          <path d="M2 12l10 5 10-5"/>
-        </svg>
+        <img src="/logo.png" alt="XPharma" />
       </div>
       <div>
         <div class="brand-title" id="t-brand">وكيل مزامنة مستودع الأدوية</div>
@@ -2738,12 +2946,12 @@ const appHTML = `<!DOCTYPE html>
               <svg id="eyeIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>
           </div>
-          <div style="margin-top:6px; font-size:11px; color:#94a3b8; display:flex; align-items:center; gap:6px;">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+          <div style="margin-top:6px; font-size:11px; color:#6B5E82; display:flex; align-items:center; gap:6px;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3F0082" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
             <span id="t-lbl-keyhint">عند تغيير هذا المفتاح، سيقوم البرنامج تلقائياً بالربط بالمستودع الجديد وتصفير المؤشرات لرفع كافة السجلات من البداية.</span>
           </div>
-          <div id="keyChangeNotice" style="display:none; margin-top:8px; padding:8px 12px; background:rgba(37,99,235,0.12); border:1px solid rgba(59,130,246,0.3); border-radius:6px; font-size:12px; color:#93c5fd; align-items:center; gap:8px;">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <div id="keyChangeNotice" style="display:none; margin-top:8px; padding:8px 12px; background:#F2EEFB; border:1px solid #DDD5EA; border-radius:6px; font-size:12px; color:#3F0082; align-items:center; gap:8px;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#3F0082" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
             <span id="t-lbl-keychange">تم تغيير المفتاح: سيتم تصفير المؤشرات ورفع البيانات بالكامل للمستودع الجديد فور الحفظ.</span>
           </div>
         </div>
@@ -2752,7 +2960,7 @@ const appHTML = `<!DOCTYPE html>
       <!-- Sync Pacing Mode -->
       <div class="pace-container">
         <div class="pace-info">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="1" x2="7" y1="14" y2="14"/><line x1="9" x2="15" y1="8" y2="8"/><line x1="17" x2="23" y1="16" y2="16"/></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3F0082" stroke-width="2"><line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="1" x2="7" y1="14" y2="14"/><line x1="9" x2="15" y1="8" y2="8"/><line x1="17" x2="23" y1="16" y2="16"/></svg>
           <div>
             <div class="pace-text-title" id="t-pace-title">معدل تدفق المزامنة (Throttling Mode)</div>
             <div class="pace-text-sub" id="t-pace-desc">نمط هادئ وخفيف يحمي أداء وسرعة أجهزة المبيعات بالمستودع</div>
@@ -2768,7 +2976,7 @@ const appHTML = `<!DOCTYPE html>
       <!-- Auto-Start with Windows -->
       <div class="autostart-container">
         <div class="autostart-info">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#00B368" stroke-width="2"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
           <div>
             <div class="autostart-title" id="t-autostart-title">التشغيل التلقائي مع إقلاع النظام (Windows Auto-Start)</div>
             <div class="autostart-sub" id="t-autostart-desc">يبدأ البرنامج تلقائياً في الخلفية عند إعادة تشغيل الكمبيوتر، ويستمر في التحديث كل دقيقة.</div>
@@ -2855,7 +3063,7 @@ const appHTML = `<!DOCTYPE html>
           <div class="stat-card-header">
             <span class="stat-card-title" id="t-st-returns">مرتجع المبيعات</span>
             <div class="stat-card-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#D97706" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
             </div>
           </div>
           <div class="stat-card-val"><span id="cntReturns">0</span> <span class="stat-card-denom">/ <span id="totReturns">0</span></span></div>
@@ -2866,7 +3074,7 @@ const appHTML = `<!DOCTYPE html>
           <div class="stat-card-header">
             <span class="stat-card-title" id="t-st-ledger">كشف الحساب</span>
             <div class="stat-card-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3F0082" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
             </div>
           </div>
           <div class="stat-card-val" id="cntLedger">0</div>
@@ -2877,7 +3085,7 @@ const appHTML = `<!DOCTYPE html>
           <div class="stat-card-header">
             <span class="stat-card-title" id="t-st-custs">دليل العملاء</span>
             <div class="stat-card-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00B368" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             </div>
           </div>
           <div class="stat-card-val" id="cntCusts">0</div>
@@ -2888,10 +3096,10 @@ const appHTML = `<!DOCTYPE html>
           <div class="stat-card-header">
             <span class="stat-card-title" id="t-st-status">حالة المحرك</span>
             <div class="stat-card-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00B368" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
             </div>
           </div>
-          <div class="stat-card-val" id="stVal" style="font-size: 13px; color: #94a3b8; margin-top: 6px;">جاهز لبدء المزامنة</div>
+          <div class="stat-card-val" id="stVal" style="font-size: 13px; color: var(--text-muted); margin-top: 6px;">جاهز لبدء المزامنة</div>
         </div>
       </div>
     </div>
@@ -3259,7 +3467,7 @@ const appHTML = `<!DOCTYPE html>
 
         if (data.status === 'syncing') {
           stVal.innerText = currentLang === 'ar' ? 'جاري الرفع والمزامنة...' : 'Syncing in Progress...';
-          stVal.style.color = '#38bdf8';
+          stVal.style.color = '#00B368';
           // Always show Start button, but disabled while syncing
           btnStart.style.display = 'inline-flex';
           btnStart.disabled = true;
@@ -3269,7 +3477,7 @@ const appHTML = `<!DOCTYPE html>
           btnPause.style.display = 'inline-flex';
         } else if (data.status === 'paused') {
           stVal.innerText = currentLang === 'ar' ? 'متوقف مؤقتاً' : 'Paused';
-          stVal.style.color = '#f59e0b';
+          stVal.style.color = '#D97706';
           btnStart.style.display = 'inline-flex';
           btnStart.disabled = false;
           btnStart.style.opacity = '1';
@@ -3278,7 +3486,7 @@ const appHTML = `<!DOCTYPE html>
           btnPause.style.display = 'none';
         } else if (data.status === 'success') {
           stVal.innerText = currentLang === 'ar' ? 'مكتمل - مراقبة مستمرة' : 'Completed (Monitoring)';
-          stVal.style.color = '#34d399';
+          stVal.style.color = '#00B368';
           btnStart.style.display = 'inline-flex';
           btnStart.disabled = false;
           btnStart.style.opacity = '1';
@@ -3287,7 +3495,7 @@ const appHTML = `<!DOCTYPE html>
           btnPause.style.display = 'none';
         } else if (data.status === 'error') {
           stVal.innerText = currentLang === 'ar' ? 'تنبيه في الاتصال' : 'Connection Error';
-          stVal.style.color = '#ef4444';
+          stVal.style.color = '#DC2626';
           btnStart.style.display = 'inline-flex';
           btnStart.disabled = false;
           btnStart.style.opacity = '1';
@@ -3297,7 +3505,7 @@ const appHTML = `<!DOCTYPE html>
         } else {
           // Status is 'idle'
           stVal.innerText = currentLang === 'ar' ? 'جاهز لبدء المزامنة' : 'Ready to Start';
-          stVal.style.color = '#94a3b8';
+          stVal.style.color = '#6B5E82';
           btnStart.style.display = 'inline-flex';
           btnStart.disabled = false;
           btnStart.style.opacity = '1';
@@ -3424,6 +3632,7 @@ const appHTML = `<!DOCTYPE html>
 // -----------------------------------------------------------------------------
 
 func main() {
+	hideConsoleWindow()
 	initWindowsConsole()
 
 	noWindow := flag.Bool("no-window", false, "Do not auto-open the GUI window")
@@ -3486,8 +3695,6 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	select {
-	case sig := <-sigChan:
-		log.Printf("[EXIT] Stop signal received (%v). Exiting cleanly...", sig)
-	}
+	sig := <-sigChan
+	log.Printf("[EXIT] Stop signal received (%v). Exiting cleanly...", sig)
 }

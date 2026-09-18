@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -16,6 +14,8 @@ import (
 	"xpharma-backend/pkg/db"
 	"xpharma-backend/pkg/ingestion"
 	"xpharma-backend/pkg/query"
+	"xpharma-backend/pkg/subscription"
+	"xpharma-backend/pkg/warehouse"
 )
 
 func main() {
@@ -41,13 +41,17 @@ func main() {
 	}
 	defer router.Close()
 
+	// Initialize Domain Services (Microservices Modules)
 	tokenService := auth.NewTokenService(jwtSecret)
+	authHandler := auth.NewAuthHandler(router, tokenService)
+	warehouseService := warehouse.NewWarehouseService(router, tokenService)
+	subscriptionService := subscription.NewSubscriptionService(router)
 	ingestionService := ingestion.NewIngestionService(router)
 	queryService := query.NewQueryService(router)
 
 	r := gin.Default()
 
-	// CORS Middleware
+	// Global CORS Middleware
 	r.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
@@ -61,7 +65,7 @@ func main() {
 		c.Next()
 	})
 
-	// Health Check
+	// 1. Health Check
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"status":  "healthy",
@@ -70,13 +74,13 @@ func main() {
 		})
 	})
 
-	// Sync Ingestion API (for Windows Agent)
+	// 2. Sync Ingestion Module (Windows Agent)
 	syncGroup := r.Group("/v1/sync")
 	{
 		syncGroup.POST("/ingest", ingestionService.HandleIngest)
 	}
 
-	// Mobile Pharmacy Queries (Protected by JWT)
+	// 3. Query Service Module (Mobile Pharmacy Protected Queries)
 	pharmaGroup := r.Group("/v1/pharmacy")
 	pharmaGroup.Use(tokenService.AuthMiddleware("pharmacist", "superadmin"))
 	{
@@ -84,680 +88,35 @@ func main() {
 		pharmaGroup.GET("/purchases", queryService.GetPurchases)
 		pharmaGroup.GET("/purchases/:id", queryService.GetInvoiceDetails)
 		pharmaGroup.GET("/returns", queryService.GetReturns)
+		pharmaGroup.GET("/returns/:id", queryService.GetReturnDetails)
 		pharmaGroup.GET("/receipts", queryService.GetReceipts)
 		pharmaGroup.GET("/statement", queryService.GetStatement)
 		pharmaGroup.GET("/products", queryService.GetRecentProducts)
 	}
 
-	// Public / Pharmacist Warehouse Listing
-	r.GET("/v1/warehouses", func(c *gin.Context) {
-		userID := c.Query("user_id")
+	// 4. Warehouse Module
+	warehouseGroup := r.Group("/v1/warehouses")
+	{
+		warehouseGroup.GET("", warehouseService.GetWarehouses)
+		warehouseGroup.POST("/request", warehouseService.RequestWarehouse)
+	}
 
-		query := `
-			SELECT 
-				t.id, 
-				t.name, 
-				t.slug, 
-				t.status,
-				COALESCE(t.address, '') AS address,
-				COALESCE(t.contact_phone, '') AS contact_phone,
-				COALESCE(t.logo_url, '') AS logo_url,
-				COALESCE(t.category, 'مخزن أدوية') AS category,
-				COALESCE(p.id::text, '') AS linked_pharmacy_id,
-				COALESCE(p.name, '') AS linked_pharmacy_name,
-				COALESCE(p.code, '') AS linked_pharmacy_code
-			FROM public.tenants t
-			LEFT JOIN public.pharmacies p ON p.tenant_id = t.id AND (p.linked_user_id = $1 AND $1 <> '')
-			WHERE t.status = 'active'
-			ORDER BY t.name ASC
-		`
-		rows, err := router.Pool().Query(c.Request.Context(), query, userID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		defer rows.Close()
-
-		var warehouses []map[string]interface{}
-		for rows.Next() {
-			var id, name, slug, status, address, contactPhone, logoURL, category, linkedPharmaID, linkedPharmaName, linkedPharmaCode string
-			if err := rows.Scan(&id, &name, &slug, &status, &address, &contactPhone, &logoURL, &category, &linkedPharmaID, &linkedPharmaName, &linkedPharmaCode); err != nil {
-				continue
-			}
-
-			isLinked := linkedPharmaID != ""
-			var pharmaToken string
-			if isLinked {
-				pharmaToken, _ = tokenService.GenerateToken(auth.Claims{
-					UserID:     userID,
-					TenantID:   id,
-					PharmacyID: linkedPharmaID,
-					PharmaCode: linkedPharmaCode,
-					Role:       "pharmacist",
-				}, 30*24*time.Hour)
-			}
-
-			warehouses = append(warehouses, map[string]interface{}{
-				"id":                   id,
-				"name":                 name,
-				"slug":                 slug,
-				"status":               status,
-				"address":              address,
-				"contact_phone":        contactPhone,
-				"logo_url":             logoURL,
-				"category":             category,
-				"is_linked":            isLinked,
-				"linked_pharmacy_id":   linkedPharmaID,
-				"linked_pharmacy_name": linkedPharmaName,
-				"linked_pharmacy_code": linkedPharmaCode,
-				"pharmacy_token":       pharmaToken,
-			})
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"success":    true,
-			"warehouses": warehouses,
-		})
-	})
-
-	// Pharmacist Request to Onboard an Unlisted Warehouse
-	r.POST("/v1/warehouses/request", func(c *gin.Context) {
-		var req struct {
-			WarehouseName  string `json:"warehouse_name" binding:"required"`
-			WarehousePhone string `json:"warehouse_phone" binding:"required"`
-			Notes          string `json:"notes"`
-			UserID         string `json:"user_id"`
-			UserEmail      string `json:"user_email"`
-			UserName       string `json:"user_name"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "اسم المخزن ورقم الهاتف مطلوبان"})
-			return
-		}
-
-		insertQuery := `
-			INSERT INTO public.warehouse_requests 
-				(warehouse_name, warehouse_phone, notes, requested_by_user_id, requested_by_email, requested_by_name)
-			VALUES ($1, $2, $3, $4, $5, $6)
-		`
-		_, err := router.Pool().Exec(c.Request.Context(), insertQuery,
-			strings.TrimSpace(req.WarehouseName),
-			strings.TrimSpace(req.WarehousePhone),
-			strings.TrimSpace(req.Notes),
-			req.UserID,
-			req.UserEmail,
-			req.UserName,
-		)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل حفظ الطلب، يرجى المحاولة لاحقاً"})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": "تم استلام طلب إضافة المخزن بنجاح",
-		})
-	})
-
-	// Mobile Auth / Linking
+	// 5. Auth & Device Module
 	authGroup := r.Group("/v1/auth")
 	{
-		authGroup.POST("/verify-pharmacy", func(c *gin.Context) {
-			var req struct {
-				TenantID     string `json:"tenant_id" binding:"required"`
-				PharmacyCode string `json:"pharmacy_code" binding:"required"`
-				Phone        string `json:"phone"`
-				UserID       string `json:"user_id"`
-				Email        string `json:"email"`
-			}
-			if err := c.ShouldBindJSON(&req); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "كود الصيدلية وبيانات المستودع مطلوبة"})
-				return
-			}
+		authGroup.POST("/verify-pharmacy", warehouseService.VerifyPharmacy)
+		authGroup.POST("/link-pharmacy", warehouseService.LinkPharmacy)
+		authGroup.POST("/google", authHandler.GoogleLogin)
+		authGroup.POST("/apple", authHandler.AppleLogin)
+		authGroup.POST("/check-device", authHandler.CheckDevice)
+		authGroup.POST("/reset-device", authHandler.ResetDevice)
+	}
 
-			code := strings.TrimSpace(req.PharmacyCode)
-			phone := strings.TrimSpace(req.Phone)
-
-			var pharmacyID, name, dbPhone string
-			var isActive bool
-			lookupQuery := `
-				SELECT id, name, COALESCE(phone, ''), is_active
-				FROM public.pharmacies
-				WHERE tenant_id = $1 AND code = $2
-				LIMIT 1
-			`
-			err := router.Pool().QueryRow(c.Request.Context(), lookupQuery, req.TenantID, code).Scan(&pharmacyID, &name, &dbPhone, &isActive)
-			if err != nil {
-				c.JSON(http.StatusNotFound, gin.H{"error": "كود الصيدلية غير مسجل في قاعدة هذا المستودع. يرجى التأكد من صحة الكود."})
-				return
-			}
-
-			if !isActive {
-				c.JSON(http.StatusForbidden, gin.H{"error": "حساب الصيدلية غير نشط في هذا المستودع"})
-				return
-			}
-
-			if phone != "" && dbPhone != "" {
-				cleanInputPhone := strings.ReplaceAll(strings.ReplaceAll(phone, " ", ""), "-", "")
-				cleanDBPhone := strings.ReplaceAll(strings.ReplaceAll(dbPhone, " ", ""), "-", "")
-				if !strings.Contains(cleanDBPhone, cleanInputPhone) && !strings.Contains(cleanInputPhone, cleanDBPhone) {
-					c.JSON(http.StatusUnauthorized, gin.H{"error": "رقم الهاتف غير مطابق لبيانات الصيدلية المسجلة لدى المستودع"})
-					return
-				}
-			}
-
-			linkedUID := req.UserID
-			if linkedUID == "" && req.Email != "" {
-				var foundUserID string
-				_ = router.Pool().QueryRow(c.Request.Context(), `SELECT id FROM public.users WHERE email = $1 LIMIT 1`, req.Email).Scan(&foundUserID)
-				if foundUserID != "" {
-					linkedUID = foundUserID
-				}
-			}
-
-			if linkedUID != "" {
-				updateQuery := `UPDATE public.pharmacies SET linked_user_id = $1, updated_at = NOW() WHERE id = $2`
-				_, _ = router.Pool().Exec(c.Request.Context(), updateQuery, linkedUID, pharmacyID)
-			}
-
-			token, err := tokenService.GenerateToken(auth.Claims{
-				UserID:     req.UserID,
-				Email:      req.Email,
-				TenantID:   req.TenantID,
-				PharmacyID: pharmacyID,
-				PharmaCode: code,
-				Role:       "pharmacist",
-			}, 30*24*time.Hour)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل توليد التوكن"})
-				return
-			}
-
-			c.JSON(http.StatusOK, gin.H{
-				"success":       true,
-				"token":         token,
-				"pharmacy_name": name,
-				"pharmacy_code": code,
-				"tenant_id":     req.TenantID,
-			})
-		})
-		authGroup.POST("/link-pharmacy", func(c *gin.Context) {
-			var req struct {
-				LinkCode string `json:"link_code" binding:"required"`
-				UserID   string `json:"user_id" binding:"required"`
-				Email    string `json:"email"`
-			}
-			if err := c.ShouldBindJSON(&req); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-				return
-			}
-
-			// Look up pharmacy by link code in central public schema
-			var pharmacyID, tenantID, code, name string
-			lookupQuery := `
-				SELECT id, tenant_id, code, name 
-				FROM public.pharmacies 
-				WHERE link_code = $1 AND is_active = true
-			`
-			err := router.Pool().QueryRow(c.Request.Context(), lookupQuery, req.LinkCode).Scan(&pharmacyID, &tenantID, &code, &name)
-			if err != nil {
-				c.JSON(http.StatusNotFound, gin.H{"error": "كود الربط غير صحيح أو الصيدلية غير مفعلة"})
-				return
-			}
-
-			// Update linked user
-			updateQuery := `UPDATE public.pharmacies SET linked_user_id = $1, updated_at = NOW() WHERE id = $2`
-			_, _ = router.Pool().Exec(c.Request.Context(), updateQuery, req.UserID, pharmacyID)
-
-			// Generate JWT Token
-			token, err := tokenService.GenerateToken(auth.Claims{
-				UserID:     req.UserID,
-				Email:      req.Email,
-				TenantID:   tenantID,
-				PharmacyID: pharmacyID,
-				PharmaCode: code,
-				Role:       "pharmacist",
-			}, 30*24*time.Hour)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل توليد التوكن"})
-				return
-			}
-
-			c.JSON(http.StatusOK, gin.H{
-				"success":       true,
-				"token":         token,
-				"pharmacy_name": name,
-				"pharmacy_code": code,
-				"tenant_id":     tenantID,
-			})
-		})
-
-		authGroup.POST("/google", func(c *gin.Context) {
-			var req struct {
-				IDToken    string `json:"id_token" binding:"required"`
-				DeviceID   string `json:"device_id"`
-				DeviceName string `json:"device_name"`
-			}
-			if err := c.ShouldBindJSON(&req); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-				return
-			}
-
-			googleClientID := os.Getenv("GOOGLE_CLIENT_ID")
-			if googleClientID == "" {
-				googleClientID = "691858081100-sc5nk157i5vjejhr52pgm8kkh1ofore6.apps.googleusercontent.com"
-			}
-
-			profile, err := auth.VerifyGoogleToken(req.IDToken, googleClientID)
-			if err != nil {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "فشل التحقق من حساب Google: " + err.Error()})
-				return
-			}
-
-			emailClean := strings.ToLower(strings.TrimSpace(profile.Email))
-			incomingDeviceID := strings.TrimSpace(req.DeviceID)
-			incomingDeviceName := strings.TrimSpace(req.DeviceName)
-
-			// 1. Check existing device binding & trial state for this email
-			var existingDeviceID, existingDeviceName string
-			var trialStartedAt time.Time
-			var subscriptionPlan int
-			_ = router.Pool().QueryRow(
-				c.Request.Context(),
-				`SELECT COALESCE(device_id, ''), COALESCE(device_name, ''), COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0)
-				 FROM public.users WHERE email = $1 LIMIT 1`,
-				emailClean,
-			).Scan(&existingDeviceID, &existingDeviceName, &trialStartedAt, &subscriptionPlan)
-
-			// 2. Enforce 1 Device Per Account Rule:
-			if existingDeviceID != "" && existingDeviceID != incomingDeviceID {
-				c.JSON(http.StatusConflict, gin.H{
-					"success":           false,
-					"code":              "DEVICE_MISMATCH",
-					"error":             "هذا الحساب مسجل ومفعل بالفعل على هاتف آخر. لا يمكن فتح الحساب على أكثر من جهاز في نفس الوقت. تواصل مع الدعم الفني إذا كان هاتفك القديم به مشكلة وترغب في نقل الحساب إلى جهازك الجديد.",
-					"registered_device": existingDeviceName,
-				})
-				return
-			}
-
-			role := "user"
-			superAdminEmail := os.Getenv("SUPER_ADMIN_EMAIL")
-			if superAdminEmail == "" {
-				superAdminEmail = "kerd2sy@gmail.com"
-			}
-
-			if emailClean == strings.ToLower(strings.TrimSpace(superAdminEmail)) {
-				role = "superadmin"
-			}
-
-			// Store / Update Google user in public.users table
-			rawJSON, _ := json.Marshal(profile)
-			emailVerified := profile.EmailVerified == "true"
-			var dbUserID, dbRole string
-			var isActive bool
-
-			upsertGoogleUserQuery := `
-				INSERT INTO public.users (
-					google_id, email, email_verified, name, avatar_url, provider, role, raw_profile, device_id, device_name, trial_started_at, last_login_at, updated_at
-				) VALUES (
-					$1, $2, $3, $4, $5, 'google', $6, $7, $8, $9, NOW(), NOW(), NOW()
-				)
-				ON CONFLICT (email) DO UPDATE SET
-					google_id = EXCLUDED.google_id,
-					name = EXCLUDED.name,
-					avatar_url = EXCLUDED.avatar_url,
-					email_verified = EXCLUDED.email_verified,
-					raw_profile = EXCLUDED.raw_profile,
-					device_id = COALESCE(public.users.device_id, EXCLUDED.device_id),
-					device_name = COALESCE(public.users.device_name, EXCLUDED.device_name),
-					last_login_at = NOW(),
-					updated_at = NOW()
-				RETURNING id, role, is_active, COALESCE(device_id, ''), COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0);
-			`
-			err = router.Pool().QueryRow(
-				c.Request.Context(),
-				upsertGoogleUserQuery,
-				profile.Sub,
-				emailClean,
-				emailVerified,
-				profile.Name,
-				profile.Picture,
-				role,
-				rawJSON,
-				incomingDeviceID,
-				incomingDeviceName,
-			).Scan(&dbUserID, &dbRole, &isActive, &existingDeviceID, &trialStartedAt, &subscriptionPlan)
-
-			if err != nil {
-				log.Printf("Warning: Failed to persist google user in database: %v", err)
-				dbUserID = profile.Sub
-				dbRole = role
-				isActive = true
-			}
-
-			if !isActive {
-				c.JSON(http.StatusForbidden, gin.H{"error": "تم تعطيل هذا الحساب. يرجى مراجعة إدارة المنصة"})
-				return
-			}
-
-			// Bind device if user existed previously without a bound device
-			if existingDeviceID == "" && incomingDeviceID != "" {
-				_, _ = router.Pool().Exec(
-					c.Request.Context(),
-					`UPDATE public.users SET device_id = $1, device_name = $2, updated_at = NOW() WHERE email = $3`,
-					incomingDeviceID, incomingDeviceName, emailClean,
-				)
-				existingDeviceID = incomingDeviceID
-			}
-
-			// Calculate 7-day trial per email
-			trialDaysPassed := int(time.Since(trialStartedAt).Hours() / 24)
-			trialDaysLeft := 7 - trialDaysPassed
-			if trialDaysLeft < 0 {
-				trialDaysLeft = 0
-			}
-			isTrialExpired := trialDaysPassed >= 7 && subscriptionPlan == 0
-
-			// Check if this user is linked to any pharmacy in central registry
-			var pharmacyID, tenantID, pharmaCode string
-			_ = router.Pool().QueryRow(
-				c.Request.Context(),
-				`SELECT id, tenant_id, code FROM public.pharmacies WHERE linked_user_id = $1 OR linked_user_id = $2 LIMIT 1`,
-				dbUserID, profile.Sub,
-			).Scan(&pharmacyID, &tenantID, &pharmaCode)
-
-			token, err := tokenService.GenerateToken(auth.Claims{
-				UserID:     dbUserID,
-				Email:      profile.Email,
-				Role:       dbRole,
-				TenantID:   tenantID,
-				PharmacyID: pharmacyID,
-				PharmaCode: pharmaCode,
-			}, 30*24*time.Hour)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل إنشاء الجلسة"})
-				return
-			}
-
-			c.JSON(http.StatusOK, gin.H{
-				"success":           true,
-				"token":             token,
-				"trial_days_left":   trialDaysLeft,
-				"is_trial_expired":  isTrialExpired,
-				"subscription_plan": subscriptionPlan,
-				"device_id":         existingDeviceID,
-				"user": gin.H{
-					"id":                dbUserID,
-					"email":             profile.Email,
-					"name":              profile.Name,
-					"photo":             profile.Picture,
-					"role":              dbRole,
-					"provider":          "google",
-					"tenant_id":         tenantID,
-					"pharmacy_id":       pharmacyID,
-					"device_id":         existingDeviceID,
-					"trial_days_left":   trialDaysLeft,
-					"is_trial_expired":  isTrialExpired,
-					"subscription_plan": subscriptionPlan,
-				},
-				"profile": profile,
-				"role":    dbRole,
-			})
-		})
-
-		authGroup.POST("/apple", func(c *gin.Context) {
-			var req struct {
-				IdentityToken string `json:"identity_token" binding:"required"`
-				UserID        string `json:"user_id"`
-				Email         string `json:"email"`
-				Name          string `json:"name"`
-				DeviceID      string `json:"device_id"`
-				DeviceName    string `json:"device_name"`
-			}
-			if err := c.ShouldBindJSON(&req); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-				return
-			}
-
-			appleEmail := strings.ToLower(strings.TrimSpace(req.Email))
-			if appleEmail == "" {
-				appleEmail = req.UserID + "@apple.id"
-			}
-			userName := req.Name
-			if userName == "" {
-				userName = "مستخدم Apple"
-			}
-
-			incomingDeviceID := strings.TrimSpace(req.DeviceID)
-			incomingDeviceName := strings.TrimSpace(req.DeviceName)
-
-			// 1. Check existing device binding & trial state for this email
-			var existingDeviceID, existingDeviceName string
-			var trialStartedAt time.Time
-			var subscriptionPlan int
-			_ = router.Pool().QueryRow(
-				c.Request.Context(),
-				`SELECT COALESCE(device_id, ''), COALESCE(device_name, ''), COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0)
-				 FROM public.users WHERE email = $1 LIMIT 1`,
-				appleEmail,
-			).Scan(&existingDeviceID, &existingDeviceName, &trialStartedAt, &subscriptionPlan)
-
-			// 2. Enforce 1 Device Per Account Rule:
-			if existingDeviceID != "" && existingDeviceID != incomingDeviceID {
-				c.JSON(http.StatusConflict, gin.H{
-					"success":           false,
-					"code":              "DEVICE_MISMATCH",
-					"error":             "هذا الحساب مسجل ومفعل بالفعل على هاتف آخر. لا يمكن فتح الحساب على أكثر من جهاز في نفس الوقت. تواصل مع الدعم الفني إذا كان هاتفك القديم به مشكلة وترغب في نقل الحساب إلى جهازك الجديد.",
-					"registered_device": existingDeviceName,
-				})
-				return
-			}
-
-			role := "user"
-			rawJSON, _ := json.Marshal(req)
-			var dbUserID, dbRole string
-			var isActive bool
-
-			upsertAppleUserQuery := `
-				INSERT INTO public.users (
-					apple_id, email, email_verified, name, provider, role, raw_profile, device_id, device_name, trial_started_at, last_login_at, updated_at
-				) VALUES (
-					$1, $2, true, $3, 'apple', $4, $5, $6, $7, NOW(), NOW(), NOW()
-				)
-				ON CONFLICT (email) DO UPDATE SET
-					apple_id = COALESCE(EXCLUDED.apple_id, public.users.apple_id),
-					name = CASE WHEN EXCLUDED.name <> 'مستخدم Apple' THEN EXCLUDED.name ELSE public.users.name END,
-					raw_profile = EXCLUDED.raw_profile,
-					device_id = COALESCE(public.users.device_id, EXCLUDED.device_id),
-					device_name = COALESCE(public.users.device_name, EXCLUDED.device_name),
-					last_login_at = NOW(),
-					updated_at = NOW()
-				RETURNING id, role, is_active, COALESCE(device_id, ''), COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0);
-			`
-			err := router.Pool().QueryRow(
-				c.Request.Context(),
-				upsertAppleUserQuery,
-				req.UserID,
-				appleEmail,
-				userName,
-				role,
-				rawJSON,
-				incomingDeviceID,
-				incomingDeviceName,
-			).Scan(&dbUserID, &dbRole, &isActive, &existingDeviceID, &trialStartedAt, &subscriptionPlan)
-
-			if err != nil {
-				log.Printf("Warning: Failed to persist apple user in database: %v", err)
-				dbUserID = req.UserID
-				dbRole = role
-				isActive = true
-			}
-
-			if !isActive {
-				c.JSON(http.StatusForbidden, gin.H{"error": "تم تعطيل هذا الحساب. يرجى مراجعة إدارة المنصة"})
-				return
-			}
-
-			if existingDeviceID == "" && incomingDeviceID != "" {
-				_, _ = router.Pool().Exec(
-					c.Request.Context(),
-					`UPDATE public.users SET device_id = $1, device_name = $2, updated_at = NOW() WHERE email = $3`,
-					incomingDeviceID, incomingDeviceName, appleEmail,
-				)
-				existingDeviceID = incomingDeviceID
-			}
-
-			trialDaysPassed := int(time.Since(trialStartedAt).Hours() / 24)
-			trialDaysLeft := 7 - trialDaysPassed
-			if trialDaysLeft < 0 {
-				trialDaysLeft = 0
-			}
-			isTrialExpired := trialDaysPassed >= 7 && subscriptionPlan == 0
-
-			var pharmacyID, tenantID, pharmaCode string
-			_ = router.Pool().QueryRow(
-				c.Request.Context(),
-				`SELECT id, tenant_id, code FROM public.pharmacies WHERE linked_user_id = $1 OR linked_user_id = $2 LIMIT 1`,
-				dbUserID, req.UserID,
-			).Scan(&pharmacyID, &tenantID, &pharmaCode)
-
-			token, err := tokenService.GenerateToken(auth.Claims{
-				UserID:     dbUserID,
-				Email:      appleEmail,
-				Role:       dbRole,
-				TenantID:   tenantID,
-				PharmacyID: pharmacyID,
-				PharmaCode: pharmaCode,
-			}, 30*24*time.Hour)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل إنشاء الجلسة"})
-				return
-			}
-
-			c.JSON(http.StatusOK, gin.H{
-				"success":           true,
-				"token":             token,
-				"trial_days_left":   trialDaysLeft,
-				"is_trial_expired":  isTrialExpired,
-				"subscription_plan": subscriptionPlan,
-				"device_id":         existingDeviceID,
-				"user": gin.H{
-					"id":                dbUserID,
-					"email":             appleEmail,
-					"name":              userName,
-					"role":              dbRole,
-					"provider":          "apple",
-					"tenant_id":         tenantID,
-					"pharmacy_id":       pharmacyID,
-					"device_id":         existingDeviceID,
-					"trial_days_left":   trialDaysLeft,
-					"is_trial_expired":  isTrialExpired,
-					"subscription_plan": subscriptionPlan,
-				},
-				"role": dbRole,
-			})
-		})
-
-		// Check Device Binding and Trial for an active session
-		authGroup.POST("/check-device", func(c *gin.Context) {
-			var req struct {
-				Email      string `json:"email" binding:"required"`
-				DeviceID   string `json:"device_id" binding:"required"`
-				DeviceName string `json:"device_name"`
-			}
-			if err := c.ShouldBindJSON(&req); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "بيانات التحقق غير مكتملة"})
-				return
-			}
-
-			emailClean := strings.ToLower(strings.TrimSpace(req.Email))
-			incomingDeviceID := strings.TrimSpace(req.DeviceID)
-			incomingDeviceName := strings.TrimSpace(req.DeviceName)
-
-			var existingDeviceID, existingDeviceName string
-			var trialStartedAt time.Time
-			var subscriptionPlan int
-			err := router.Pool().QueryRow(
-				c.Request.Context(),
-				`SELECT COALESCE(device_id, ''), COALESCE(device_name, ''), COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0)
-				 FROM public.users WHERE email = $1 LIMIT 1`,
-				emailClean,
-			).Scan(&existingDeviceID, &existingDeviceName, &trialStartedAt, &subscriptionPlan)
-
-			if err != nil {
-				// User record not yet created in central DB
-				c.JSON(http.StatusOK, gin.H{
-					"success":           true,
-					"bound":             false,
-					"trial_days_left":   7,
-					"is_trial_expired":  false,
-					"subscription_plan": 0,
-				})
-				return
-			}
-
-			// Check mismatch
-			if existingDeviceID != "" && existingDeviceID != incomingDeviceID {
-				c.JSON(http.StatusConflict, gin.H{
-					"success":           false,
-					"code":              "DEVICE_MISMATCH",
-					"error":             "هذا الحساب مسجل ومفعل بالفعل على هاتف آخر. لا يمكن فتح الحساب على أكثر من جهاز في نفس الوقت. تواصل مع الدعم الفني إذا كان هاتفك القديم به مشكلة وترغب في نقل الحساب إلى جهازك الجديد.",
-					"registered_device": existingDeviceName,
-				})
-				return
-			}
-
-			// If empty, bind it
-			if existingDeviceID == "" && incomingDeviceID != "" {
-				_, _ = router.Pool().Exec(
-					c.Request.Context(),
-					`UPDATE public.users SET device_id = $1, device_name = $2, updated_at = NOW() WHERE email = $3`,
-					incomingDeviceID, incomingDeviceName, emailClean,
-				)
-				existingDeviceID = incomingDeviceID
-			}
-
-			trialDaysPassed := int(time.Since(trialStartedAt).Hours() / 24)
-			trialDaysLeft := 7 - trialDaysPassed
-			if trialDaysLeft < 0 {
-				trialDaysLeft = 0
-			}
-			isTrialExpired := trialDaysPassed >= 7 && subscriptionPlan == 0
-
-			c.JSON(http.StatusOK, gin.H{
-				"success":           true,
-				"device_id":         existingDeviceID,
-				"trial_days_left":   trialDaysLeft,
-				"is_trial_expired":  isTrialExpired,
-				"subscription_plan": subscriptionPlan,
-			})
-		})
-
-		// Reset/Unbind Device for a user (Support / Transfer)
-		authGroup.POST("/reset-device", func(c *gin.Context) {
-			var req struct {
-				Email string `json:"email" binding:"required"`
-			}
-			if err := c.ShouldBindJSON(&req); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "البريد الإلكتروني مطلوب"})
-				return
-			}
-
-			_, err := router.Pool().Exec(
-				c.Request.Context(),
-				`UPDATE public.users SET device_id = NULL, device_name = NULL, updated_at = NOW() WHERE email = $1`,
-				strings.ToLower(strings.TrimSpace(req.Email)),
-			)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل فك ربط الجهاز"})
-				return
-			}
-
-			c.JSON(http.StatusOK, gin.H{
-				"success": true,
-				"message": "تم فك ربط الجهاز بنجاح. يمكن للصيدلي الآن تسجيل الدخول وتفعيل الحساب على هاتفه الجديد فوراً.",
-			})
-		})
+	// 6. Subscription Module
+	subGroup := r.Group("/v1/subscription")
+	{
+		subGroup.GET("/status", subscriptionService.GetStatus)
+		subGroup.POST("/register-pharmacy", subscriptionService.RegisterPharmacy)
 	}
 
 	srv := &http.Server{

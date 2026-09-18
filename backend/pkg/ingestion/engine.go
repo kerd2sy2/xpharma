@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -312,6 +313,10 @@ func (s *IngestionService) HandleIngest(c *gin.Context) {
 			if cust.Code == "" || strings.TrimSpace(cust.Name) == "" {
 				continue
 			}
+			phone := strings.TrimSpace(cust.Phone)
+			if len(phone) > 32 {
+				phone = phone[:32]
+			}
 			custQuery := `
 				INSERT INTO public.pharmacies (tenant_id, code, name, phone, address, is_active, updated_at)
 				VALUES ($1, $2, $3, $4, $5, TRUE, NOW())
@@ -322,10 +327,10 @@ func (s *IngestionService) HandleIngest(c *gin.Context) {
 				    updated_at = NOW()
 			`
 			_, err := tx.Exec(ctx, custQuery,
-				tenantID, cust.Code, cust.Name, cust.Phone, cust.Address,
+				tenantID, cust.Code, cust.Name, phone, cust.Address,
 			)
 			if err != nil {
-				return fmt.Errorf("upsert pharmacy %s: %w", cust.Code, err)
+				log.Printf("[ingestion] warning: failed upserting pharmacy %s: %v", cust.Code, err)
 			}
 		}
 

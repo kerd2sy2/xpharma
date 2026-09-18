@@ -3,7 +3,12 @@ import {
   ActivityIndicator,
   Animated,
   BackHandler,
+  FlatList,
+  Modal,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   PanResponder,
+  Platform,
   RefreshControl,
   ScrollView,
   StatusBar,
@@ -22,6 +27,7 @@ import {
   fetchPharmacyBalance,
   fetchPharmacyPurchases,
   fetchInvoiceDetails,
+  fetchReturnDetails,
   fetchPharmacyReceipts,
   fetchPharmacyReturns,
   fetchPharmacyStatement,
@@ -95,9 +101,23 @@ export default function WarehousePortalScreen({
   const [selectedInvoice, setSelectedInvoice] = useState<InvoiceItem | null>(null);
   const [invoiceLines, setInvoiceLines] = useState<InvoiceLineItem[]>([]);
   const [loadingInvoiceLines, setLoadingInvoiceLines] = useState(false);
+  const [showInvoiceInfoModal, setShowInvoiceInfoModal] = useState(false);
   const [returns, setReturns] = useState<ReturnItem[]>([]);
+  const [selectedReturn, setSelectedReturn] = useState<ReturnItem | null>(null);
+  const [returnLines, setReturnLines] = useState<InvoiceLineItem[]>([]);
+  const [loadingReturnLines, setLoadingReturnLines] = useState(false);
+  const [showReturnInfoModal, setShowReturnInfoModal] = useState(false);
   const [receipts, setReceipts] = useState<ReceiptItem[]>([]);
   const [statement, setStatement] = useState<StatementItem[]>([]);
+
+  // Pagination & infinite scroll states
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
+  const offsetsRef = useRef({ purchases: 0, returns: 0, receipts: 0, statement: 0 });
+  const [hasMoreInvoices, setHasMoreInvoices] = useState(true);
+  const [hasMoreReturns, setHasMoreReturns] = useState(true);
+  const [hasMoreReceipts, setHasMoreReceipts] = useState(true);
+  const [hasMoreStatement, setHasMoreStatement] = useState(true);
 
   const colors = {
     bg: '#F9F7FD',
@@ -122,6 +142,15 @@ export default function WarehousePortalScreen({
   // Handle Android hardware/gesture back button: step back hierarchically
   useEffect(() => {
     const onBackPress = () => {
+      // 0. If invoice/return info modal is open, close it
+      if (showInvoiceInfoModal) {
+        setShowInvoiceInfoModal(false);
+        return true;
+      }
+      if (showReturnInfoModal) {
+        setShowReturnInfoModal(false);
+        return true;
+      }
       // 1. If subscription modal is open and trial not strictly expired, close it
       if (showSubscriptionModal && !isTrialExpired) {
         setShowSubscriptionModal(false);
@@ -138,6 +167,12 @@ export default function WarehousePortalScreen({
         setInvoiceLines([]);
         return true;
       }
+      // 3b. If viewing return details inside returns, return to returns list
+      if (selectedReturn) {
+        setSelectedReturn(null);
+        setReturnLines([]);
+        return true;
+      }
       // 4. If inside a section (purchases/returns/etc.), go back to portal main view
       if (selectedSection) {
         setSelectedSection(null);
@@ -150,7 +185,7 @@ export default function WarehousePortalScreen({
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => subscription.remove();
-  }, [showSubscriptionModal, isTrialExpired, showAddModal, selectedInvoice, selectedSection, onBack]);
+  }, [showSubscriptionModal, isTrialExpired, showAddModal, selectedInvoice, selectedReturn, showInvoiceInfoModal, showReturnInfoModal, selectedSection, onBack]);
 
   // Initialize and load saved pharmacies for this warehouse
   useEffect(() => {
@@ -189,10 +224,10 @@ export default function WarehousePortalScreen({
     try {
       const [bal, invs, rets, recs, stmts] = await Promise.all([
         fetchPharmacyBalance(targetToken),
-        fetchPharmacyPurchases(targetToken),
-        fetchPharmacyReturns(targetToken),
-        fetchPharmacyReceipts(targetToken),
-        fetchPharmacyStatement(targetToken),
+        fetchPharmacyPurchases(targetToken, 20, 0),
+        fetchPharmacyReturns(targetToken, 20, 0),
+        fetchPharmacyReceipts(targetToken, 20, 0),
+        fetchPharmacyStatement(targetToken, 20, 0),
       ]);
 
       // Filter out items with value 0
@@ -214,11 +249,159 @@ export default function WarehousePortalScreen({
       setReturns(validReturns);
       setReceipts(validReceipts);
       setStatement(validStatement);
+
+      offsetsRef.current = {
+        purchases: (invs || []).length,
+        returns: (rets || []).length,
+        receipts: (recs || []).length,
+        statement: (stmts || []).length,
+      };
+
+      setHasMoreInvoices((invs || []).length >= 20);
+      setHasMoreReturns((rets || []).length >= 20);
+      setHasMoreReceipts((recs || []).length >= 20);
+      setHasMoreStatement((stmts || []).length >= 20);
     } catch (e) {
       console.error('Error loading pharmacy data:', e);
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  };
+
+  // Infinite scroll loader: loads 20 more items for current section smoothly
+  const loadMoreData = async () => {
+    if (loadingMoreRef.current || !selectedSection) return;
+
+    if (selectedSection === 'purchases') {
+      if (!hasMoreInvoices) return;
+      loadingMoreRef.current = true;
+      setLoadingMore(true);
+      try {
+        const offset = offsetsRef.current.purchases;
+        const nextBatch = await fetchPharmacyPurchases(currentToken, 20, offset);
+        offsetsRef.current.purchases += (nextBatch?.length || 0);
+
+        if (!nextBatch || nextBatch.length < 20) {
+          setHasMoreInvoices(false);
+        }
+        const validBatch = (nextBatch || []).filter(
+          (inv) => (inv.net_amount ?? inv.total_amount ?? 0) > 0
+        );
+        if (validBatch.length > 0) {
+          setInvoices((prev) => {
+            const existingIds = new Set(prev.map((i) => i.id || i.remote_id || i.invoice_number));
+            const uniqueNew = validBatch.filter(
+              (i) => !existingIds.has(i.id || i.remote_id || i.invoice_number)
+            );
+            return [...prev, ...uniqueNew];
+          });
+        }
+      } catch (err) {
+        console.error('Error loading more purchases:', err);
+      } finally {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
+    } else if (selectedSection === 'returns') {
+      if (!hasMoreReturns) return;
+      loadingMoreRef.current = true;
+      setLoadingMore(true);
+      try {
+        const offset = offsetsRef.current.returns;
+        const nextBatch = await fetchPharmacyReturns(currentToken, 20, offset);
+        offsetsRef.current.returns += (nextBatch?.length || 0);
+
+        if (!nextBatch || nextBatch.length < 20) {
+          setHasMoreReturns(false);
+        }
+        const validBatch = (nextBatch || []).filter(
+          (ret) => (ret.net_amount ?? ret.total_amount ?? 0) > 0
+        );
+        if (validBatch.length > 0) {
+          setReturns((prev) => {
+            const existingIds = new Set(prev.map((i) => i.id || i.remote_id || i.return_number));
+            const uniqueNew = validBatch.filter(
+              (i) => !existingIds.has(i.id || i.remote_id || i.return_number)
+            );
+            return [...prev, ...uniqueNew];
+          });
+        }
+      } catch (err) {
+        console.error('Error loading more returns:', err);
+      } finally {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
+    } else if (selectedSection === 'receipts') {
+      if (!hasMoreReceipts) return;
+      loadingMoreRef.current = true;
+      setLoadingMore(true);
+      try {
+        const offset = offsetsRef.current.receipts;
+        const nextBatch = await fetchPharmacyReceipts(currentToken, 20, offset);
+        offsetsRef.current.receipts += (nextBatch?.length || 0);
+
+        if (!nextBatch || nextBatch.length < 20) {
+          setHasMoreReceipts(false);
+        }
+        const validBatch = (nextBatch || []).filter((rec) => (rec.amount ?? 0) > 0);
+        if (validBatch.length > 0) {
+          setReceipts((prev) => {
+            const existingIds = new Set(prev.map((i) => i.id || i.remote_id || i.receipt_number));
+            const uniqueNew = validBatch.filter(
+              (i) => !existingIds.has(i.id || i.remote_id || i.receipt_number)
+            );
+            return [...prev, ...uniqueNew];
+          });
+        }
+      } catch (err) {
+        console.error('Error loading more receipts:', err);
+      } finally {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
+    } else if (selectedSection === 'statement') {
+      if (!hasMoreStatement) return;
+      loadingMoreRef.current = true;
+      setLoadingMore(true);
+      try {
+        const offset = offsetsRef.current.statement;
+        const nextBatch = await fetchPharmacyStatement(currentToken, 20, offset);
+        offsetsRef.current.statement += (nextBatch?.length || 0);
+
+        if (!nextBatch || nextBatch.length < 20) {
+          setHasMoreStatement(false);
+        }
+        const validBatch = (nextBatch || []).filter(
+          (stm) => (stm.debit ?? 0) > 0 || (stm.credit ?? 0) > 0
+        );
+        if (validBatch.length > 0) {
+          setStatement((prev) => {
+            const existingIds = new Set(
+              prev.map((i) => i.id || i.remote_id || `${i.doc_number}_${i.entry_date}`)
+            );
+            const uniqueNew = validBatch.filter(
+              (i) => !existingIds.has(i.id || i.remote_id || `${i.doc_number}_${i.entry_date}`)
+            );
+            return [...prev, ...uniqueNew];
+          });
+        }
+      } catch (err) {
+        console.error('Error loading more statement:', err);
+      } finally {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
+    }
+  };
+
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (loadingMoreRef.current) return;
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    const isCloseToBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - 120;
+    if (isCloseToBottom) {
+      loadMoreData();
     }
   };
 
@@ -234,6 +417,17 @@ export default function WarehousePortalScreen({
         const details = await fetchInvoiceDetails(currentToken, targetId);
         if (details.items && details.items.length > 0) {
           setInvoiceLines(details.items);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    if (selectedReturn) {
+      const targetId = selectedReturn.id || selectedReturn.remote_id || selectedReturn.return_number || '';
+      try {
+        const details = await fetchReturnDetails(currentToken, targetId);
+        if (details.items && details.items.length > 0) {
+          setReturnLines(details.items);
         }
       } catch (e) {
         console.error(e);
@@ -407,6 +601,44 @@ export default function WarehousePortalScreen({
     }
   };
 
+  const handleReturnPress = async (ret: ReturnItem) => {
+    setSelectedReturn(ret);
+    setLoadingReturnLines(true);
+    const targetId = ret.id || ret.remote_id || ret.return_number || '';
+    try {
+      const details = await fetchReturnDetails(currentToken, targetId);
+      if (details.items && details.items.length > 0) {
+        setReturnLines(details.items);
+      } else {
+        // Fallback: show the return entry item
+        setReturnLines([
+          {
+            id: 'ret-fb-1',
+            item_name: ret.reason || 'أدوية ومستحضرات مرتجعة للمخزن',
+            quantity: 1,
+            unit_price: ret.net_amount || ret.total_amount || 0,
+            discount_percent: 0,
+            total_price: ret.net_amount || ret.total_amount || 0,
+          },
+        ]);
+      }
+    } catch (e) {
+      console.error('Error fetching return lines:', e);
+      setReturnLines([
+        {
+          id: 'ret-fb-1',
+          item_name: ret.reason || 'أدوية ومستحضرات مرتجعة للمخزن',
+          quantity: 1,
+          unit_price: ret.net_amount || ret.total_amount || 0,
+          discount_percent: 0,
+          total_price: ret.net_amount || ret.total_amount || 0,
+        },
+      ]);
+    } finally {
+      setLoadingReturnLines(false);
+    }
+  };
+
   const insets = useSafeAreaInsets();
   const topInset = Math.max(insets.top, 24);
 
@@ -459,63 +691,43 @@ export default function WarehousePortalScreen({
   if (selectedSection) {
     const currentSection = sections.find((s) => s.key === selectedSection);
 
-    // 1. DEDICATED INVOICE DETAILS SCREEN (صفحة تفاصيل الفاتورة)
+    // 1. DEDICATED INVOICE DETAILS SCREEN (صفحة تفاصيل الفاتورة - مثل شاشة التطبيق القديم تماماً)
     if (selectedSection === 'purchases' && selectedInvoice) {
       return (
-        <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
-          <StatusBar barStyle="dark-content" backgroundColor={colors.bg} translucent={false} />
+        <View style={[styles.container, { backgroundColor: '#F8F9FB', paddingTop: topInset }]}>
+          <StatusBar barStyle="dark-content" backgroundColor="#F8F9FB" translucent={false} />
 
-          {/* Invoice Details Page Header */}
-          <View style={styles.topHeader}>
+          {/* Header Bar matching screenshot */}
+          <View style={styles.tabarakTopHeader}>
             <TouchableOpacity
-              style={styles.backBtnClean}
+              style={styles.tabarakHeaderIconBtn}
+              onPress={() => setShowInvoiceInfoModal(true)}
+              activeOpacity={0.6}
+            >
+              <Ionicons name="information-circle-outline" size={28} color="#1a2b6d" />
+            </TouchableOpacity>
+
+            <View style={styles.tabarakHeaderTitleBox}>
+              <Text style={styles.tabarakHeaderMainTitle}>فاتورة شراء</Text>
+              <View style={styles.tabarakHeaderActiveIndicator} />
+            </View>
+
+            <TouchableOpacity
+              style={styles.tabarakHeaderIconBtn}
               onPress={() => {
                 setSelectedInvoice(null);
                 setInvoiceLines([]);
               }}
               activeOpacity={0.6}
             >
-              <Ionicons name="arrow-forward" size={24} color={colors.text} />
+              <Ionicons name="chevron-forward" size={28} color="#1a2b6d" />
             </TouchableOpacity>
-            <Text style={[styles.topHeaderTitle, { color: colors.text }]}>
-              {`فاتورة رقم ${selectedInvoice.invoice_number || selectedInvoice.remote_id || ''}`}
-            </Text>
-            <View style={styles.topHeaderSpacer} />
           </View>
 
-          {/* Invoice Summary Header Card */}
-          <View style={[styles.invoiceMetaCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={styles.invoiceMetaRow}>
-              <View style={styles.invoiceMetaColRight}>
-                <Text style={[styles.invoiceMetaLabel, { color: colors.secondaryText }]}>تاريخ الفاتورة</Text>
-                <Text style={[styles.invoiceMetaValue, { color: colors.text }]}>
-                  {formatDate(selectedInvoice.invoice_date)}
-                </Text>
-              </View>
-              <View style={styles.invoiceMetaColLeft}>
-                <Text style={[styles.invoiceMetaLabel, { color: colors.secondaryText }]}>إجمالي الفاتورة</Text>
-                <Text style={[styles.invoiceMetaTotalValue, { color: colors.primary }]}>
-                  {formatCurrency(selectedInvoice.net_amount || selectedInvoice.total_amount)}
-                </Text>
-              </View>
-            </View>
-            <View style={[styles.invoiceMetaDivider, { backgroundColor: colors.border }]} />
-            <View style={styles.invoiceMetaBottom}>
-              <View style={[styles.invoiceStatusBadge, { backgroundColor: colors.primarySoft }]}>
-                <Text style={[styles.invoiceStatusText, { color: colors.primary }]}>
-                  {selectedInvoice.status || 'مسجلة'}
-                </Text>
-              </View>
-              <Text style={[styles.invoiceItemsCountText, { color: colors.secondaryText }]}>
-                {loadingInvoiceLines ? 'جاري تحميل الأصناف...' : `${invoiceLines.length} صنف`}
-              </Text>
-            </View>
-          </View>
-
-          {/* Line Items List (كرت الصنف مقسوم 2) */}
+          {/* Line Items List */}
           <ScrollView
             style={styles.scrollArea}
-            contentContainerStyle={styles.subPageScrollContent}
+            contentContainerStyle={styles.tabarakScrollContent}
             showsVerticalScrollIndicator={false}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
@@ -529,89 +741,484 @@ export default function WarehousePortalScreen({
                 </Text>
               </View>
             ) : invoiceLines.length === 0 ? (
-              <View style={[styles.simpleEmptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={[styles.simpleEmptyBox, { backgroundColor: '#FFFFFF', borderColor: '#E2E8F0' }]}>
                 <Ionicons name="receipt-outline" size={38} color={colors.secondaryText} />
                 <Text style={[styles.simpleEmptyText, { color: colors.secondaryText }]}>
                   لا توجد بنود مسجلة في هذه الفاتورة
                 </Text>
               </View>
             ) : (
-              invoiceLines.map((item, idx) => (
-                <View
-                  key={item.id || idx}
-                  style={[styles.itemCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                >
-                  {/* النصف الأول: اسم الصنف */}
-                  <View style={styles.itemCardTop}>
-                    <View style={styles.itemNameWrapper}>
-                      <Text style={[styles.itemNameText, { color: colors.text }]}>
+              invoiceLines.map((item, idx) => {
+                const qty = item.quantity ?? 1;
+                const price = item.unit_price ?? 0;
+                const discount = item.discount_percent ?? 0;
+                const total = item.total_price ?? (qty * price * (1 - discount / 100));
+
+                return (
+                  <View
+                    key={item.id || `inv-item-${idx}`}
+                    style={styles.tabarakItemCard}
+                  >
+                    {/* اسم الصنف */}
+                    <View style={styles.tabarakItemTop}>
+                      <Text style={styles.tabarakItemName} numberOfLines={2}>
                         {item.item_name}
                       </Text>
-                      {item.item_code ? (
-                        <Text style={[styles.itemCodeText, { color: colors.secondaryText }]}>
-                          كود: {item.item_code}
+                    </View>
+
+                    {/* خط فاصل رمادي خفيف */}
+                    <View style={styles.tabarakItemDivider} />
+
+                    {/* 4 أعمدة: الكمية | السعر | الخصم | الإجمالي */}
+                    <View style={styles.tabarakItemBottomRow}>
+                      {/* 1. الكمية */}
+                      <View style={styles.tabarakCol}>
+                        <Text style={styles.tabarakColLabel}>الكمية</Text>
+                        <Text style={styles.tabarakColValue}>
+                          {qty}
+                          {item.bonus_quantity && item.bonus_quantity > 0 ? (
+                            <Text style={{ color: '#10B981', fontSize: 11 }}> +{item.bonus_quantity}</Text>
+                          ) : null}
                         </Text>
-                      ) : null}
-                    </View>
-                    <View style={[styles.itemIndexBadge, { backgroundColor: colors.cardBack }]}>
-                      <Text style={[styles.itemIndexText, { color: colors.primary }]}>
-                        #{idx + 1}
-                      </Text>
+                      </View>
+
+                      {/* 2. السعر */}
+                      <View style={styles.tabarakCol}>
+                        <Text style={styles.tabarakColLabel}>السعر</Text>
+                        <Text style={styles.tabarakColValue}>
+                          {price.toFixed(2)}
+                        </Text>
+                      </View>
+
+                      {/* 3. الخصم */}
+                      <View style={styles.tabarakCol}>
+                        <Text style={[styles.tabarakColLabel, { color: '#EF4444' }]}>الخصم</Text>
+                        <Text style={[styles.tabarakColValue, { color: '#EF4444' }]}>
+                          {discount > 0 ? `${Math.round(discount)}%` : '0%'}
+                        </Text>
+                      </View>
+
+                      {/* 4. الإجمالي */}
+                      <View style={styles.tabarakCol}>
+                        <Text style={[styles.tabarakColLabel, { color: '#2563EB' }]}>الإجمالي</Text>
+                        <Text style={[styles.tabarakColValue, { color: '#2563EB', fontWeight: '800' }]}>
+                          {total.toFixed(2)}
+                        </Text>
+                      </View>
                     </View>
                   </View>
-
-                  {/* خط فاصل بين النصفين */}
-                  <View style={[styles.itemCardDivider, { backgroundColor: colors.border }]} />
-
-                  {/* النصف الثاني: الكمية - سعر الصنف - الخصم - الإجمالي بعد الخصم */}
-                  <View style={styles.itemCardBottom}>
-                    {/* 1. الكمية */}
-                    <View style={styles.itemMetricCol}>
-                      <Text style={[styles.itemMetricLabel, { color: colors.secondaryText }]}>الكمية</Text>
-                      <Text style={[styles.itemMetricValue, { color: colors.text }]}>
-                        {item.quantity}
-                        {item.bonus_quantity && item.bonus_quantity > 0 ? (
-                          <Text style={{ color: colors.success, fontSize: 10 }}> +{item.bonus_quantity}</Text>
-                        ) : null}
-                      </Text>
-                    </View>
-
-                    {/* 2. سعر الصنف */}
-                    <View style={styles.itemMetricCol}>
-                      <Text style={[styles.itemMetricLabel, { color: colors.secondaryText }]}>سعر الصنف</Text>
-                      <Text style={[styles.itemMetricValue, { color: colors.text }]}>
-                        {formatCurrency(item.unit_price)}
-                      </Text>
-                    </View>
-
-                    {/* 3. الخصم */}
-                    <View style={styles.itemMetricCol}>
-                      <Text style={[styles.itemMetricLabel, { color: colors.secondaryText }]}>الخصم</Text>
-                      <Text
-                        style={[
-                          styles.itemMetricValue,
-                          { color: item.discount_percent > 0 ? colors.warning : colors.secondaryText },
-                        ]}
-                      >
-                        {item.discount_percent > 0 ? `${item.discount_percent}%` : '0%'}
-                      </Text>
-                    </View>
-
-                    {/* 4. الإجمالي بعد الخصم */}
-                    <View style={[styles.itemMetricCol, styles.itemMetricColTotal]}>
-                      <Text style={[styles.itemMetricLabel, { color: colors.secondaryText }]}>الإجمالي بعد الخصم</Text>
-                      <Text style={[styles.itemMetricValueTotal, { color: colors.primary }]}>
-                        {formatCurrency(item.total_price)}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              ))
+                );
+              })
             )}
           </ScrollView>
+
+          {/* Modal Info for Invoice Header */}
+          <Modal
+            visible={showInvoiceInfoModal}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowInvoiceInfoModal(false)}
+          >
+            <TouchableOpacity
+              style={styles.modalBackdrop}
+              activeOpacity={1}
+              onPress={() => setShowInvoiceInfoModal(false)}
+            >
+              <TouchableOpacity
+                style={[styles.modalCard, { backgroundColor: '#FFFFFF' }]}
+                activeOpacity={1}
+              >
+                <View style={styles.modalHeaderRow}>
+                  <TouchableOpacity onPress={() => setShowInvoiceInfoModal(false)}>
+                    <Ionicons name="close-circle-outline" size={26} color={colors.secondaryText} />
+                  </TouchableOpacity>
+                  <Text style={[styles.modalTitle, { color: colors.text }]}>تفاصيل الفاتورة</Text>
+                </View>
+
+                <View style={styles.modalBody}>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>رقم الفاتورة</Text>
+                    <Text style={[styles.infoValue, { color: colors.text }]}>
+                      {selectedInvoice.invoice_number || selectedInvoice.remote_id}
+                    </Text>
+                  </View>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>تاريخ الفاتورة</Text>
+                    <Text style={[styles.infoValue, { color: colors.text }]}>
+                      {formatDate(selectedInvoice.invoice_date)}
+                    </Text>
+                  </View>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>إجمالي الفاتورة</Text>
+                    <Text style={[styles.infoValue, { color: colors.primary }]}>
+                      {formatCurrency(selectedInvoice.total_amount || selectedInvoice.net_amount)}
+                    </Text>
+                  </View>
+                  {selectedInvoice.discount_amount ? (
+                    <View style={styles.infoRow}>
+                      <Text style={styles.infoLabel}>الخصم</Text>
+                      <Text style={[styles.infoValue, { color: '#EF4444' }]}>
+                        {formatCurrency(selectedInvoice.discount_amount)}
+                      </Text>
+                    </View>
+                  ) : null}
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>الصافي</Text>
+                    <Text style={[styles.infoValue, { color: colors.text }]}>
+                      {formatCurrency(selectedInvoice.net_amount || selectedInvoice.total_amount)}
+                    </Text>
+                  </View>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>حالة الفاتورة</Text>
+                    <Text style={[styles.infoValue, { color: colors.success }]}>
+                      {selectedInvoice.status || 'مسجلة'}
+                    </Text>
+                  </View>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>عدد الأصناف</Text>
+                    <Text style={[styles.infoValue, { color: colors.text }]}>
+                      {invoiceLines.length} صنف
+                    </Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.modalCloseBtn, { backgroundColor: colors.primary }]}
+                  onPress={() => setShowInvoiceInfoModal(false)}
+                >
+                  <Text style={styles.modalCloseBtnText}>إغلاق</Text>
+                </TouchableOpacity>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </Modal>
         </View>
       );
     }
+
+    // 2. DEDICATED RETURN DETAILS SCREEN (صفحة تفاصيل فاتورة المرتجع)
+    if (selectedSection === 'returns' && selectedReturn) {
+      return (
+        <View style={[styles.container, { backgroundColor: '#F8F9FB', paddingTop: topInset }]}>
+          <StatusBar barStyle="dark-content" backgroundColor="#F8F9FB" translucent={false} />
+
+          {/* Header Bar */}
+          <View style={styles.tabarakTopHeader}>
+            <TouchableOpacity
+              style={styles.tabarakHeaderIconBtn}
+              onPress={() => setShowReturnInfoModal(true)}
+              activeOpacity={0.6}
+            >
+              <Ionicons name="information-circle-outline" size={28} color="#1a2b6d" />
+            </TouchableOpacity>
+
+            <View style={styles.tabarakHeaderTitleBox}>
+              <Text style={styles.tabarakHeaderMainTitle}>فاتورة مرتجع</Text>
+              <View style={[styles.tabarakHeaderActiveIndicator, { backgroundColor: '#F59E0B' }]} />
+            </View>
+
+            <TouchableOpacity
+              style={styles.tabarakHeaderIconBtn}
+              onPress={() => {
+                setSelectedReturn(null);
+                setReturnLines([]);
+              }}
+              activeOpacity={0.6}
+            >
+              <Ionicons name="chevron-forward" size={28} color="#1a2b6d" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Line Items List */}
+          <ScrollView
+            style={styles.scrollArea}
+            contentContainerStyle={styles.tabarakScrollContent}
+            showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#F59E0B']} />
+            }
+          >
+            {loadingReturnLines ? (
+              <View style={styles.invoiceLoadingBox}>
+                <ActivityIndicator size="small" color="#F59E0B" />
+                <Text style={[styles.invoiceLoadingText, { color: colors.secondaryText }]}>
+                  جاري جلب تفاصيل الأصناف المرتجعة...
+                </Text>
+              </View>
+            ) : returnLines.length === 0 ? (
+              <View style={[styles.simpleEmptyBox, { backgroundColor: '#FFFFFF', borderColor: '#E2E8F0' }]}>
+                <Ionicons name="arrow-undo-outline" size={38} color={colors.secondaryText} />
+                <Text style={[styles.simpleEmptyText, { color: colors.secondaryText }]}>
+                  لا توجد بنود مسجلة في هذا المرتجع
+                </Text>
+              </View>
+            ) : (
+              returnLines.map((item, idx) => {
+                const qty = item.quantity ?? 1;
+                const price = item.unit_price ?? 0;
+                const discount = item.discount_percent ?? 0;
+                const total = item.total_price ?? (qty * price * (1 - discount / 100));
+
+                return (
+                  <View
+                    key={item.id || `ret-item-${idx}`}
+                    style={styles.tabarakItemCard}
+                  >
+                    {/* اسم الصنف */}
+                    <View style={styles.tabarakItemTop}>
+                      <Text style={styles.tabarakItemName} numberOfLines={2}>
+                        {item.item_name}
+                      </Text>
+                    </View>
+
+                    {/* خط فاصل رمادي خفيف */}
+                    <View style={styles.tabarakItemDivider} />
+
+                    {/* 4 أعمدة: الكمية | السعر | الخصم | الإجمالي */}
+                    <View style={styles.tabarakItemBottomRow}>
+                      {/* 1. الكمية */}
+                      <View style={styles.tabarakCol}>
+                        <Text style={styles.tabarakColLabel}>الكمية</Text>
+                        <Text style={styles.tabarakColValue}>
+                          {qty}
+                        </Text>
+                      </View>
+
+                      {/* 2. السعر */}
+                      <View style={styles.tabarakCol}>
+                        <Text style={styles.tabarakColLabel}>السعر</Text>
+                        <Text style={styles.tabarakColValue}>
+                          {price.toFixed(2)}
+                        </Text>
+                      </View>
+
+                      {/* 3. الخصم */}
+                      <View style={styles.tabarakCol}>
+                        <Text style={[styles.tabarakColLabel, { color: '#EF4444' }]}>الخصم</Text>
+                        <Text style={[styles.tabarakColValue, { color: '#EF4444' }]}>
+                          {discount > 0 ? `${Math.round(discount)}%` : '0%'}
+                        </Text>
+                      </View>
+
+                      {/* 4. الإجمالي */}
+                      <View style={styles.tabarakCol}>
+                        <Text style={[styles.tabarakColLabel, { color: '#F59E0B' }]}>الإجمالي</Text>
+                        <Text style={[styles.tabarakColValue, { color: '#F59E0B', fontWeight: '800' }]}>
+                          {total.toFixed(2)}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                );
+              })
+            )}
+          </ScrollView>
+
+          {/* Modal Info for Return Header */}
+          <Modal
+            visible={showReturnInfoModal}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowReturnInfoModal(false)}
+          >
+            <TouchableOpacity
+              style={styles.modalBackdrop}
+              activeOpacity={1}
+              onPress={() => setShowReturnInfoModal(false)}
+            >
+              <TouchableOpacity
+                style={[styles.modalCard, { backgroundColor: '#FFFFFF' }]}
+                activeOpacity={1}
+              >
+                <View style={styles.modalHeaderRow}>
+                  <TouchableOpacity onPress={() => setShowReturnInfoModal(false)}>
+                    <Ionicons name="close-circle-outline" size={26} color={colors.secondaryText} />
+                  </TouchableOpacity>
+                  <Text style={[styles.modalTitle, { color: colors.text }]}>تفاصيل المرتجع</Text>
+                </View>
+
+                <View style={styles.modalBody}>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>رقم المرتجع</Text>
+                    <Text style={[styles.infoValue, { color: colors.text }]}>
+                      {selectedReturn.return_number || selectedReturn.remote_id}
+                    </Text>
+                  </View>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>تاريخ المرتجع</Text>
+                    <Text style={[styles.infoValue, { color: colors.text }]}>
+                      {formatDate(selectedReturn.return_date)}
+                    </Text>
+                  </View>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>إجمالي المرتجع</Text>
+                    <Text style={[styles.infoValue, { color: '#F59E0B' }]}>
+                      {formatCurrency(selectedReturn.net_amount || selectedReturn.total_amount)}
+                    </Text>
+                  </View>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>حالة المرتجع</Text>
+                    <Text style={[styles.infoValue, { color: colors.success }]}>
+                      {selectedReturn.status || 'معتمد'}
+                    </Text>
+                  </View>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>عدد الأصناف</Text>
+                    <Text style={[styles.infoValue, { color: colors.text }]}>
+                      {returnLines.length} صنف
+                    </Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.modalCloseBtn, { backgroundColor: '#F59E0B' }]}
+                  onPress={() => setShowReturnInfoModal(false)}
+                >
+                  <Text style={styles.modalCloseBtnText}>إغلاق</Text>
+                </TouchableOpacity>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </Modal>
+        </View>
+      );
+    }
+
+    const renderPurchasesItem = ({ item: inv }: { item: InvoiceItem }) => (
+      <TouchableOpacity
+        key={inv.id || inv.remote_id}
+        activeOpacity={0.7}
+        onPress={() => handleInvoicePress(inv)}
+        style={[styles.simpleRowCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+      >
+        <View style={styles.rowCardRight}>
+          <View style={{ flexDirection: 'row-reverse', alignItems: 'center', gap: 6 }}>
+            <Text style={[styles.rowTitle, { color: colors.text }]}>
+              فاتورة #{inv.invoice_number || inv.remote_id}
+            </Text>
+            <Ionicons name="chevron-back" size={14} color={colors.secondaryText} />
+          </View>
+          <Text style={[styles.rowDate, { color: colors.secondaryText }]}>
+            {formatDate(inv.invoice_date)}
+          </Text>
+        </View>
+        <View style={styles.rowCardLeft}>
+          <Text style={[styles.rowAmount, { color: colors.primary }]}>
+            {formatCurrency(inv.total_amount || inv.net_amount)}
+          </Text>
+          {inv.status ? (
+            <Text style={[styles.rowStatusText, { color: colors.secondaryText }]}>
+              {inv.status}
+            </Text>
+          ) : null}
+        </View>
+      </TouchableOpacity>
+    );
+
+    const renderReturnsItem = ({ item: ret, index: idx }: { item: ReturnItem; index: number }) => (
+      <TouchableOpacity
+        key={ret.id || ret.remote_id}
+        activeOpacity={0.7}
+        onPress={() => handleReturnPress(ret)}
+        style={[styles.simpleRowCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+      >
+        <View style={styles.rowCardRight}>
+          <View style={{ flexDirection: 'row-reverse', alignItems: 'center', gap: 6 }}>
+            <Text style={[styles.rowTitle, { color: colors.text }]}>
+              مرتجع #{ret.return_number || ret.remote_id || idx + 1}
+            </Text>
+            <Ionicons name="chevron-back" size={14} color={colors.secondaryText} />
+          </View>
+          <Text style={[styles.rowDate, { color: colors.secondaryText }]}>
+            {formatDate(ret.return_date)}
+          </Text>
+        </View>
+        <View style={styles.rowCardLeft}>
+          <Text style={[styles.rowAmount, { color: colors.warning }]}>
+            {formatCurrency(ret.net_amount || ret.total_amount)}
+          </Text>
+          {ret.status ? (
+            <Text style={[styles.rowStatusText, { color: colors.secondaryText }]}>
+              {ret.status}
+            </Text>
+          ) : null}
+        </View>
+      </TouchableOpacity>
+    );
+
+    const renderReceiptsItem = ({ item: rec, index: idx }: { item: ReceiptItem; index: number }) => (
+      <View
+        key={rec.id || rec.remote_id}
+        style={[styles.simpleRowCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+      >
+        <View style={styles.rowCardRight}>
+          <Text style={[styles.rowTitle, { color: colors.text }]}>
+            إيصال #{rec.receipt_number || rec.remote_id || idx + 1}
+          </Text>
+          <Text style={[styles.rowDate, { color: colors.secondaryText }]}>
+            {formatDate(rec.receipt_date)}
+          </Text>
+        </View>
+        <View style={styles.rowCardLeft}>
+          <Text style={[styles.rowAmount, { color: colors.success }]}>
+            {formatCurrency(rec.amount)}
+          </Text>
+          <Text style={[styles.rowStatusText, { color: colors.secondaryText }]}>
+            {rec.payment_method || rec.notes || 'سداد نقدي'}
+          </Text>
+        </View>
+      </View>
+    );
+
+    const renderStatementItem = ({ item: stm }: { item: StatementItem }) => (
+      <View
+        key={stm.id || stm.remote_id}
+        style={[styles.simpleRowCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+      >
+        <View style={styles.rowCardRight}>
+          <Text style={[styles.rowTitle, { color: colors.text }]}>
+            {stm.doc_type || 'حركة'} #{stm.doc_number || stm.remote_id}
+          </Text>
+          <Text style={[styles.rowDate, { color: colors.secondaryText }]}>
+            {formatDate(stm.entry_date)}
+          </Text>
+          {stm.description ? (
+            <Text style={[styles.rowDescText, { color: colors.secondaryText }]} numberOfLines={1}>
+              {stm.description}
+            </Text>
+          ) : null}
+        </View>
+        <View style={styles.rowCardLeft}>
+          {stm.debit > 0 && (
+            <Text style={[styles.rowAmount, { color: colors.primary }]}>
+              +{formatCurrency(stm.debit)}
+            </Text>
+          )}
+          {stm.credit > 0 && (
+            <Text style={[styles.rowAmount, { color: colors.success }]}>
+              -{formatCurrency(stm.credit)}
+            </Text>
+          )}
+          <Text style={[styles.statementBalText, { color: colors.secondaryText }]}>
+            الرصيد: {formatCurrency(stm.balance)}
+          </Text>
+        </View>
+      </View>
+    );
+
+    const getSectionData = () => {
+      if (selectedSection === 'purchases') return invoices;
+      if (selectedSection === 'returns') return returns;
+      if (selectedSection === 'receipts') return receipts;
+      if (selectedSection === 'statement') return statement;
+      return [];
+    };
+
+    const renderSectionItem = ({ item, index }: { item: any; index: number }) => {
+      if (selectedSection === 'purchases') return renderPurchasesItem({ item });
+      if (selectedSection === 'returns') return renderReturnsItem({ item, index });
+      if (selectedSection === 'receipts') return renderReceiptsItem({ item, index });
+      if (selectedSection === 'statement') return renderStatementItem({ item });
+      return null;
+    };
 
     return (
       <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
@@ -623,6 +1230,7 @@ export default function WarehousePortalScreen({
             style={styles.backBtnClean}
             onPress={() => {
               setSelectedInvoice(null);
+              setSelectedReturn(null);
               setSelectedSection(null);
             }}
             activeOpacity={0.6}
@@ -635,193 +1243,76 @@ export default function WarehousePortalScreen({
           <View style={styles.topHeaderSpacer} />
         </View>
 
-        {/* Section Quick Summary Bar (شيل اجمالى الفواتير فى صفحة المشتريات) */}
-        {selectedSection !== 'purchases' && (
-          <View style={[styles.sectionSummaryBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={styles.summaryBarCol}>
-              <Text style={[styles.summaryBarDesc, { color: colors.secondaryText }]}>
-                {currentSection?.desc}
-              </Text>
-              {currentSection?.amount !== undefined && (
-                <Text style={[styles.summaryBarAmount, { color: currentSection.color }]}>
-                  {formatCurrency(currentSection.amount)}
-                </Text>
-              )}
-            </View>
-            <View style={[styles.summaryCountBadge, { backgroundColor: currentSection?.bgColor }]}>
-              <Text style={[styles.summaryCountText, { color: currentSection?.color }]}>
-                {currentSection?.count} سجل
-              </Text>
-            </View>
-          </View>
-        )}
-
-        {/* Section List Content */}
-        <ScrollView
-          style={styles.scrollArea}
+        {/* Section List Content using Virtualized FlatList for High Performance */}
+        <FlatList
+          data={getSectionData()}
+          renderItem={renderSectionItem}
+          keyExtractor={(item, index) =>
+            item.id || item.remote_id || item.invoice_number || item.return_number || item.receipt_number || String(index)
+          }
           contentContainerStyle={styles.subPageScrollContent}
           showsVerticalScrollIndicator={false}
+          initialNumToRender={20}
+          maxToRenderPerBatch={20}
+          windowSize={5}
+          onEndReached={loadMoreData}
+          onEndReachedThreshold={0.5}
+          removeClippedSubviews={Platform.OS === 'android'}
+          ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
           }
-        >
-          {/* PURCHASES LIST */}
-          {selectedSection === 'purchases' && (
-            invoices.length === 0 ? (
-              <View style={[styles.simpleEmptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Ionicons name="cart-outline" size={38} color={colors.secondaryText} />
-                <Text style={[styles.simpleEmptyText, { color: colors.secondaryText }]}>لا توجد فواتير مشتريات</Text>
-              </View>
-            ) : (
-              invoices.map((inv, idx) => (
-                <TouchableOpacity
-                  key={inv.id || idx}
-                  activeOpacity={0.7}
-                  onPress={() => handleInvoicePress(inv)}
-                  style={[styles.simpleRowCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                >
-                  <View style={styles.rowCardRight}>
-                    <View style={{ flexDirection: 'row-reverse', alignItems: 'center', gap: 6 }}>
-                      <Text style={[styles.rowTitle, { color: colors.text }]}>
-                        فاتورة #{inv.invoice_number || inv.remote_id}
-                      </Text>
-                      <Ionicons name="chevron-back" size={14} color={colors.secondaryText} />
-                    </View>
-                    <Text style={[styles.rowDate, { color: colors.secondaryText }]}>
-                      {formatDate(inv.invoice_date)}
-                    </Text>
-                  </View>
-                  <View style={styles.rowCardLeft}>
-                    <Text style={[styles.rowAmount, { color: colors.primary }]}>
-                      {formatCurrency(inv.net_amount || inv.total_amount)}
-                    </Text>
-                    {inv.status ? (
-                      <Text style={[styles.rowStatusText, { color: colors.secondaryText }]}>
-                        {inv.status}
-                      </Text>
-                    ) : null}
-                  </View>
-                </TouchableOpacity>
-              ))
-            )
-          )}
-
-          {/* RETURNS LIST */}
-          {selectedSection === 'returns' && (
-            returns.length === 0 ? (
-              <View style={[styles.simpleEmptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Ionicons name="arrow-undo-outline" size={38} color={colors.secondaryText} />
-                <Text style={[styles.simpleEmptyText, { color: colors.secondaryText }]}>لا توجد فواتير مرتجعات</Text>
-              </View>
-            ) : (
-              returns.map((ret, idx) => (
-                <View
-                  key={ret.id || idx}
-                  style={[styles.simpleRowCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                >
-                  <View style={styles.rowCardRight}>
-                    <Text style={[styles.rowTitle, { color: colors.text }]}>
-                      مرتجع #{ret.return_number || ret.remote_id || idx + 1}
-                    </Text>
-                    <Text style={[styles.rowDate, { color: colors.secondaryText }]}>
-                      {formatDate(ret.return_date)}
-                    </Text>
-                  </View>
-                  <View style={styles.rowCardLeft}>
-                    <Text style={[styles.rowAmount, { color: colors.warning }]}>
-                      {formatCurrency(ret.net_amount || ret.total_amount)}
-                    </Text>
-                    {ret.status ? (
-                      <Text style={[styles.rowStatusText, { color: colors.secondaryText }]}>
-                        {ret.status}
-                      </Text>
-                    ) : null}
-                  </View>
+          ListEmptyComponent={
+            <View style={[styles.simpleEmptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Ionicons
+                name={
+                  selectedSection === 'purchases'
+                    ? 'cart-outline'
+                    : selectedSection === 'returns'
+                    ? 'arrow-undo-outline'
+                    : selectedSection === 'receipts'
+                    ? 'cash-outline'
+                    : 'receipt-outline'
+                }
+                size={38}
+                color={colors.secondaryText}
+              />
+              <Text style={[styles.simpleEmptyText, { color: colors.secondaryText }]}>
+                {selectedSection === 'purchases'
+                  ? 'لا توجد فواتير مشتريات'
+                  : selectedSection === 'returns'
+                  ? 'لا توجد فواتير مرتجعات'
+                  : selectedSection === 'receipts'
+                  ? 'لا توجد حركات نقدية مسددة'
+                  : 'لا توجد حركات كشف حساب'}
+              </Text>
+            </View>
+          }
+          ListFooterComponent={
+            <>
+              {loadingMore && (
+                <View style={styles.loadingMoreBox}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                  <Text style={[styles.loadingMoreText, { color: colors.secondaryText }]}>
+                    جاري تحميل 20 سجل إضافي...
+                  </Text>
                 </View>
-              ))
-            )
-          )}
-
-          {/* RECEIPTS / CASH LIST */}
-          {selectedSection === 'receipts' && (
-            receipts.length === 0 ? (
-              <View style={[styles.simpleEmptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Ionicons name="cash-outline" size={38} color={colors.secondaryText} />
-                <Text style={[styles.simpleEmptyText, { color: colors.secondaryText }]}>لا توجد حركات نقدية مسددة</Text>
-              </View>
-            ) : (
-              receipts.map((rec, idx) => (
-                <View
-                  key={rec.id || idx}
-                  style={[styles.simpleRowCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                >
-                  <View style={styles.rowCardRight}>
-                    <Text style={[styles.rowTitle, { color: colors.text }]}>
-                      إيصال #{rec.receipt_number || rec.remote_id || idx + 1}
-                    </Text>
-                    <Text style={[styles.rowDate, { color: colors.secondaryText }]}>
-                      {formatDate(rec.receipt_date)}
+              )}
+              {!loadingMore &&
+                ((selectedSection === 'purchases' && !hasMoreInvoices && invoices.length >= 20) ||
+                  (selectedSection === 'returns' && !hasMoreReturns && returns.length >= 20) ||
+                  (selectedSection === 'receipts' && !hasMoreReceipts && receipts.length >= 20) ||
+                  (selectedSection === 'statement' && !hasMoreStatement && statement.length >= 20)) && (
+                  <View style={styles.endOfListBox}>
+                    <Text style={[styles.endOfListText, { color: colors.secondaryText }]}>
+                      ✓ تم تحميل جميع السجلات
                     </Text>
                   </View>
-                  <View style={styles.rowCardLeft}>
-                    <Text style={[styles.rowAmount, { color: colors.success }]}>
-                      {formatCurrency(rec.amount)}
-                    </Text>
-                    <Text style={[styles.rowStatusText, { color: colors.secondaryText }]}>
-                      {rec.payment_method || rec.notes || 'سداد نقدي'}
-                    </Text>
-                  </View>
-                </View>
-              ))
-            )
-          )}
-
-          {/* STATEMENT LIST */}
-          {selectedSection === 'statement' && (
-            statement.length === 0 ? (
-              <View style={[styles.simpleEmptyBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Ionicons name="receipt-outline" size={38} color={colors.secondaryText} />
-                <Text style={[styles.simpleEmptyText, { color: colors.secondaryText }]}>لا توجد حركات كشف حساب</Text>
-              </View>
-            ) : (
-              statement.map((stm, idx) => (
-                <View
-                  key={stm.id || idx}
-                  style={[styles.simpleRowCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                >
-                  <View style={styles.rowCardRight}>
-                    <Text style={[styles.rowTitle, { color: colors.text }]}>
-                      {stm.doc_type || 'حركة'} #{stm.doc_number || stm.remote_id}
-                    </Text>
-                    <Text style={[styles.rowDate, { color: colors.secondaryText }]}>
-                      {formatDate(stm.entry_date)}
-                    </Text>
-                    {stm.description ? (
-                      <Text style={[styles.rowDescText, { color: colors.secondaryText }]} numberOfLines={1}>
-                        {stm.description}
-                      </Text>
-                    ) : null}
-                  </View>
-                  <View style={styles.rowCardLeft}>
-                    {stm.debit > 0 && (
-                      <Text style={[styles.rowAmount, { color: colors.primary }]}>
-                        +{formatCurrency(stm.debit)}
-                      </Text>
-                    )}
-                    {stm.credit > 0 && (
-                      <Text style={[styles.rowAmount, { color: colors.success }]}>
-                        -{formatCurrency(stm.credit)}
-                      </Text>
-                    )}
-                    <Text style={[styles.statementBalText, { color: colors.secondaryText }]}>
-                      الرصيد: {formatCurrency(stm.balance)}
-                    </Text>
-                  </View>
-                </View>
-              ))
-            )
-          )}
-        </ScrollView>
+                )}
+              <View style={{ height: 30 }} />
+            </>
+          }
+        />
       </View>
     );
   }
@@ -1393,62 +1884,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // تفاصيل الفاتورة وبنود الأصناف
-  invoiceMetaCard: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    marginBottom: 8,
-    padding: 14,
-    borderRadius: 16,
-    borderWidth: 1,
-  },
-  invoiceMetaRow: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  invoiceMetaColRight: {
-    alignItems: 'flex-end',
-    gap: 3,
-  },
-  invoiceMetaColLeft: {
-    alignItems: 'flex-start',
-    gap: 3,
-  },
-  invoiceMetaLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  invoiceMetaValue: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  invoiceMetaTotalValue: {
-    fontSize: 16,
-    fontWeight: '900',
-  },
-  invoiceMetaDivider: {
-    height: 1,
-    marginVertical: 10,
-  },
-  invoiceMetaBottom: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  invoiceStatusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  invoiceStatusText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  invoiceItemsCountText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
   invoiceLoadingBox: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -1460,78 +1895,176 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // كرت الصنف (مقسوم 2: الاسم بالأعلى والمواصفات بالأسفل)
-  itemCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    overflow: 'hidden',
-    marginBottom: 10,
-  },
-  itemCardTop: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
+  // الشاشات الخاصة بتفاصيل الفاتورة مثل تطبيق تبارك
+  tabarakTopHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: '#F8F9FB',
   },
-  itemNameWrapper: {
-    flex: 1,
-    alignItems: 'flex-end',
-    gap: 2,
+  tabarakHeaderIconBtn: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  itemNameText: {
-    fontSize: 14,
-    fontWeight: '700',
-    textAlign: 'right',
+  tabarakHeaderTitleBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  itemCodeText: {
-    fontSize: 11,
-    fontWeight: '500',
-    textAlign: 'right',
-  },
-  itemIndexBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-    marginRight: 10,
-  },
-  itemIndexText: {
-    fontSize: 11,
+  tabarakHeaderMainTitle: {
+    fontSize: 18,
     fontWeight: '800',
+    color: '#1a2b6d',
   },
-  itemCardDivider: {
+  tabarakHeaderActiveIndicator: {
+    width: 32,
+    height: 3,
+    backgroundColor: '#F97316',
+    borderRadius: 2,
+    marginTop: 4,
+  },
+  tabarakScrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 40,
+  },
+  tabarakItemCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#EEF2F6',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  tabarakItemTop: {
+    width: '100%',
+    alignItems: 'flex-start',
+    marginBottom: 2,
+  },
+  tabarakItemName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F172A',
+    textAlign: 'right',
+    width: '100%',
+    lineHeight: 22,
+  },
+  tabarakItemDivider: {
     height: 1,
+    backgroundColor: '#F1F5F9',
+    marginVertical: 12,
     width: '100%',
   },
-  itemCardBottom: {
+  tabarakItemBottomRow: {
     flexDirection: 'row-reverse',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    backgroundColor: '#FAF8FC',
   },
-  itemMetricCol: {
+  tabarakCol: {
     flex: 1,
     alignItems: 'center',
-    gap: 2,
+    gap: 4,
   },
-  itemMetricColTotal: {
-    flex: 1.3,
-  },
-  itemMetricLabel: {
-    fontSize: 10,
+  tabarakColLabel: {
+    fontSize: 11,
     fontWeight: '600',
+    color: '#94A3B8',
     textAlign: 'center',
   },
-  itemMetricValue: {
-    fontSize: 12,
+  tabarakColValue: {
+    fontSize: 15,
     fontWeight: '700',
+    color: '#1E293B',
     textAlign: 'center',
   },
-  itemMetricValueTotal: {
+
+  // Modal styles
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 400,
+    borderRadius: 20,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  modalHeaderRow: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  modalBody: {
+    gap: 12,
+    marginBottom: 20,
+  },
+  infoRow: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  infoLabel: {
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  infoValue: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  modalCloseBtn: {
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCloseBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+
+  loadingMoreBox: {
+    paddingVertical: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  loadingMoreText: {
     fontSize: 12,
-    fontWeight: '900',
-    textAlign: 'center',
+    fontWeight: '600',
+  },
+  endOfListBox: {
+    paddingVertical: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  endOfListText: {
+    fontSize: 11,
+    fontWeight: '600',
   },
 });

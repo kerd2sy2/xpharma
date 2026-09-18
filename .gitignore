@@ -6,6 +6,7 @@
 *.dylib
 *.bin
 *-linux
+xpharma-server
 *.zip
 *.tsbuildinfo
 .next/
