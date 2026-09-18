@@ -15,11 +15,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Banner } from '@/services/banner';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const isTablet = SCREEN_WIDTH >= 768;
 const CARD_PADDING = 12;
 const CARD_WIDTH = SCREEN_WIDTH - CARD_PADDING * 2;
-const CARD_HEIGHT = isTablet ? 320 : 255;
+// Takes ~45% of screen height (~360-380px on phones, 480px on tablets)
+const CARD_HEIGHT = isTablet ? 480 : Math.min(Math.max(Math.round(SCREEN_HEIGHT * 0.44), 320), 400);
 
 interface PromoBannerCarouselProps {
   banners: Banner[];
@@ -110,10 +111,10 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
             {/* Subtle Gradient Overlay for Text Readability */}
             <LinearGradient
               colors={[
-                'rgba(15, 5, 30, 0.25)',
-                'rgba(15, 5, 30, 0.05)',
-                'rgba(15, 5, 30, 0.55)',
-                'rgba(15, 5, 30, 0.92)',
+                'rgba(15, 5, 30, 0.15)',
+                'transparent',
+                'rgba(15, 5, 30, 0.50)',
+                'rgba(15, 5, 30, 0.94)',
               ]}
               locations={[0, 0.35, 0.65, 1]}
               style={styles.gradientOverlay}
@@ -174,7 +175,7 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: 10,
+    marginBottom: 12,
   },
   listContent: {
     paddingHorizontal: CARD_PADDING,
@@ -183,18 +184,16 @@ const styles = StyleSheet.create({
   cardContainer: {
     width: CARD_WIDTH,
     height: CARD_HEIGHT,
-    borderRadius: 24,
+    borderRadius: 22,
     overflow: 'hidden',
     backgroundColor: '#1E1235',
     justifyContent: 'space-between',
-    paddingTop: 62, // Leaves breathing room for floating top header
-    paddingHorizontal: 16,
-    paddingBottom: 16,
+    padding: 16,
     shadowColor: '#3F0082',
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.22,
-    shadowRadius: 14,
-    elevation: 6,
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 5,
   },
   bannerImage: {
     position: 'absolute',
@@ -251,24 +250,24 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   titleText: {
-    fontSize: isTablet ? 20 : 17,
+    fontSize: isTablet ? 22 : 18,
     fontWeight: '900',
     color: '#FFFFFF',
     textAlign: 'right',
     textShadowColor: 'rgba(0, 0, 0, 0.65)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 4,
-    lineHeight: isTablet ? 26 : 22,
+    lineHeight: isTablet ? 28 : 24,
   },
   subtitleText: {
-    fontSize: isTablet ? 13.5 : 12.5,
+    fontSize: isTablet ? 14 : 13,
     fontWeight: '600',
     color: '#E0D8EE',
     textAlign: 'right',
     textShadowColor: 'rgba(0, 0, 0, 0.6)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
-    lineHeight: 17,
+    lineHeight: 18,
   },
   dotsContainer: {
     flexDirection: 'row',

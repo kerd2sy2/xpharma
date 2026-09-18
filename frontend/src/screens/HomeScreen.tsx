@@ -483,7 +483,7 @@ export default function HomeScreen() {
         showsHorizontalScrollIndicator={false}
         onScroll={(event) => {
           const y = event.nativeEvent.contentOffset.y;
-          const threshold = hasBanners ? (isTablet ? 340 : 270) : 60;
+          const threshold = hasBanners ? (isTablet ? 540 : 420) : 70;
           if (y >= threshold && !isStickyTabs) {
             setIsStickyTabs(true);
           } else if (y < threshold && isStickyTabs) {
@@ -500,9 +500,9 @@ export default function HomeScreen() {
           />
         }
         ListHeaderComponent={
-          <View style={[styles.listHeaderContainer, { paddingTop: topInset + 4 }]}>
-            {/* Top Bar inside Hero / Header: Avatar & Search on Left, X Logo on Right */}
-            <View style={hasBanners ? styles.headerTopRowFloating : styles.headerTopRowNormal}>
+          <View style={[styles.listHeaderContainer, { paddingTop: topInset + 8 }]}>
+            {/* Top Bar: Avatar & Search on Left, X Logo on Right */}
+            <View style={styles.headerTopRow}>
               {/* Left side: Avatar & Search Button */}
               <View style={styles.headerLeftRow}>
                 <TouchableOpacity
@@ -522,7 +522,7 @@ export default function HomeScreen() {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={styles.headerSearchBtn}
+                  style={[styles.headerSearchBtn, { backgroundColor: 'rgba(63, 0, 130, 0.08)' }]}
                   onPress={() => {
                     setIsSearchActive(true);
                     setTimeout(() => searchInputRef.current?.focus(), 150);
@@ -541,8 +541,8 @@ export default function HomeScreen() {
               >
                 <XLogo
                   ref={headerLogoRef}
-                  size={46}
-                  scale={1.75}
+                  size={48}
+                  scale={1.8}
                   speed={1.0}
                   autoPlay={false}
                   loop={false}
@@ -551,8 +551,8 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Immersive Promo Banner Carousel */}
-            {hasBanners && (
+            {/* Immersive Hero Promo Banner Carousel */}
+            {!isSearchActive && (
               <PromoBannerCarousel
                 banners={banners}
                 onWarehousePress={(slugOrId) => {
@@ -743,25 +743,13 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 100,
   },
-  headerTopRowFloating: {
-    position: 'absolute',
-    top: 4,
-    left: 0,
-    right: 0,
-    zIndex: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 22,
-    height: 50,
-  },
-  headerTopRowNormal: {
+  headerTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 18,
     height: 52,
-    marginBottom: 12,
+    marginBottom: 8,
   },
   brandRow: {
     flexDirection: 'row',
