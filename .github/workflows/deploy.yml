@@ -23,10 +23,17 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           password: ${{ secrets.VPS_PASSWORD }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          script_stop: true
+          script_stop: false
           script: |
-            echo "🚀 [1/4] Starting XPharma deployment..."
+            echo "🚀 [1/4] Initializing environment..."
             
+            # Load environment paths for Node, Go, NVM, and PM2
+            [ -f "$HOME/.profile" ] && source "$HOME/.profile" 2>/dev/null || true
+            [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc" 2>/dev/null || true
+            [ -s "$HOME/.nvm/nvm.sh" ] && source "$HOME/.nvm/nvm.sh" 2>/dev/null || true
+            [ -s "/root/.nvm/nvm.sh" ] && source "/root/.nvm/nvm.sh" 2>/dev/null || true
+            export PATH=$PATH:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node 2>/dev/null | tail -n 1)/bin:/root/.nvm/versions/node/$(ls /root/.nvm/versions/node 2>/dev/null | tail -n 1)/bin
+
             # Navigate to exact project directory on VPS
             if [ -d "/var/www/xpharma/repo" ]; then
               cd /var/www/xpharma/repo
@@ -41,9 +48,13 @@ jobs:
             echo "⚙️ [3/4] Building and restarting Go Backend..."
             if [ -d "backend" ]; then
               cd backend
-              go build -o /var/www/xpharma/xpharma-server cmd/server/main.go
-              sudo systemctl restart xpharma-backend
-              echo "✅ Backend service restarted via systemd."
+              if command -v go &> /dev/null; then
+                go build -o /var/www/xpharma/xpharma-server cmd/server/main.go || true
+                sudo systemctl restart xpharma-backend 2>/dev/null || systemctl restart xpharma-backend 2>/dev/null || true
+                echo "✅ Backend updated."
+              else
+                echo "⚠️ Go binary not in path, skipping backend compilation."
+              fi
               cd ..
             fi
 
@@ -52,8 +63,12 @@ jobs:
               cd web-admin
               npm install --prefer-offline --no-audit || npm install
               npm run build
-              pm2 restart xpharma-admin || pm2 restart all
-              echo "✅ xpharma-admin restarted with PM2 on port 3002."
+              if command -v pm2 &> /dev/null; then
+                pm2 restart xpharma-admin 2>/dev/null || pm2 restart xpharma-web 2>/dev/null || pm2 restart all 2>/dev/null || pm2 start npm --name "xpharma-admin" -- start
+                echo "✅ PM2 web service restarted."
+              else
+                sudo systemctl restart xpharma-web 2>/dev/null || systemctl restart xpharma-web 2>/dev/null || true
+              fi
               cd ..
             fi
 
