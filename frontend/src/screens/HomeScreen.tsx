@@ -546,7 +546,7 @@ export default function HomeScreen() {
                       }}
                       activeOpacity={0.7}
                     >
-                      <Ionicons name="search" size={20} color={colors.primary} />
+                      <Ionicons name="search" size={23} color="#FFFFFF" />
                     </TouchableOpacity>
                   </View>
 
@@ -587,14 +587,14 @@ export default function HomeScreen() {
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    style={[styles.headerSearchBtn, { backgroundColor: 'rgba(63, 0, 130, 0.08)' }]}
+                    style={styles.headerSearchBtn}
                     onPress={() => {
                       setIsSearchActive(true);
                       setTimeout(() => searchInputRef.current?.focus(), 150);
                     }}
                     activeOpacity={0.7}
                   >
-                    <Ionicons name="search" size={20} color={colors.primary} />
+                    <Ionicons name="search" size={23} color={colors.primary} />
                   </TouchableOpacity>
                 </View>
 
@@ -839,15 +839,9 @@ const styles = StyleSheet.create({
   headerSearchBtn: {
     width: 38,
     height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 3,
+    backgroundColor: 'transparent',
   },
   avatarButton: {
     position: 'relative',
