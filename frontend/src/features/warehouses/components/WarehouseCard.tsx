@@ -97,13 +97,13 @@ export const WarehouseCard = React.memo(({ item, onPress, width, marginBottom }:
 
       {/* 4. Card Content: App Icon on the Left, Name & Details on the Right */}
       <View style={styles.bannerContentRow}>
-        {/* Left side: Warehouse Image / Logo Squircle */}
-        <View style={styles.appIconSquircle}>
+        {/* Left side: Warehouse Image / Logo without white frame */}
+        <View style={styles.appIconContainer}>
           {logoUri ? (
             <Image source={{ uri: logoUri }} style={styles.appIconImg} resizeMode="contain" />
           ) : (
-            <View style={[styles.appIconFallback, { backgroundColor: visual.softBg }]}>
-              <MaterialCommunityIcons name={visual.iconName} size={32} color={visual.accentColor} />
+            <View style={[styles.appIconFallback, { backgroundColor: 'rgba(255, 255, 255, 0.12)' }]}>
+              <MaterialCommunityIcons name={visual.iconName} size={30} color="#FFFFFF" />
             </View>
           )}
         </View>
@@ -240,19 +240,13 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 2,
   },
-  appIconSquircle: {
-    width: 66,
-    height: 66,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
+  appIconContainer: {
+    width: 64,
+    height: 64,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.22,
-    shadowRadius: 6,
-    elevation: 4,
   },
   appIconImg: {
     width: '100%',
@@ -261,6 +255,7 @@ const styles = StyleSheet.create({
   appIconFallback: {
     width: '100%',
     height: '100%',
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
