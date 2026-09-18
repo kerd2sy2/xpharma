@@ -783,12 +783,13 @@ const styles = StyleSheet.create({
   brandRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginRight: -4,
   },
   brandText: {
     fontSize: 22,
     fontWeight: '900',
     letterSpacing: -0.5,
-    marginRight: 2,
+    marginRight: -8,
   },
   headerLeftRow: {
     flexDirection: 'row',
