@@ -782,16 +782,16 @@ const styles = StyleSheet.create({
   },
   brandRow: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     marginRight: -4,
-    paddingBottom: 6,
   },
   brandText: {
-    fontSize: 22,
+    fontSize: 34,
     fontWeight: '900',
-    letterSpacing: -0.5,
-    marginRight: -8,
-    marginBottom: 7,
+    letterSpacing: -0.8,
+    marginRight: -10,
+    lineHeight: 40,
+    includeFontPadding: false,
   },
   headerLeftRow: {
     flexDirection: 'row',
