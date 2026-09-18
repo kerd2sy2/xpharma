@@ -440,7 +440,7 @@ export default function HomeScreen() {
         columnWrapperStyle={isTablet ? styles.columnWrapper : undefined}
         contentContainerStyle={[
           styles.listContent,
-          { paddingTop: topInset + 60 + 20 },
+          { paddingTop: topInset + 54 },
         ]}
         showsVerticalScrollIndicator={false}
         showsHorizontalScrollIndicator={false}
@@ -449,7 +449,7 @@ export default function HomeScreen() {
             refreshing={refreshing}
             onRefresh={onRefresh}
             colors={[colors.primary]}
-            progressViewOffset={topInset + 60}
+            progressViewOffset={topInset + 54}
           />
         }
         ListHeaderComponent={
@@ -834,7 +834,7 @@ const styles = StyleSheet.create({
     borderColor: '#FFFFFF',
   },
   featherEdge: {
-    height: 38,
+    height: 8,
     width: '100%',
   },
   searchBarActiveContainer: {
