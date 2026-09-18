@@ -786,11 +786,11 @@ const styles = StyleSheet.create({
     marginRight: -4,
   },
   brandText: {
-    fontSize: 22.5,
+    fontSize: 27.5,
     fontWeight: '800',
-    letterSpacing: -0.3,
+    letterSpacing: -0.4,
     marginRight: -4,
-    transform: [{ translateY: 6.5 }],
+    transform: [{ translateY: 4.5 }],
   },
   headerLeftRow: {
     flexDirection: 'row',
