@@ -13,7 +13,7 @@ import {
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { Banner } from '@/services/banner';
+import { Banner, formatBannerImageUrl } from '@/services/banner';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -97,7 +97,7 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
           >
             {/* Edge-to-Edge Background Image with resizeMode="cover" */}
             <Image
-              source={{ uri: item.image_url }}
+              source={{ uri: formatBannerImageUrl(item.image_url) }}
               style={styles.bannerImage}
               contentFit="cover"
               transition={200}

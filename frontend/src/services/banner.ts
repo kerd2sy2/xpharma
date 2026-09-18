@@ -24,6 +24,16 @@ export const DEFAULT_FALLBACK_BANNER: Banner = {
   action_value: '',
 };
 
+export function formatBannerImageUrl(url: string | undefined): string {
+  if (!url) return '';
+  const trimmed = url.trim();
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed;
+  }
+  const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return `https://admin.xpharma.cloud${cleanPath}`;
+}
+
 export async function fetchBanners(): Promise<Banner[]> {
   try {
     const controller = new AbortController();
@@ -40,7 +50,10 @@ export async function fetchBanners(): Promise<Banner[]> {
     if (res.ok) {
       const data = await res.json();
       if (data.banners && Array.isArray(data.banners) && data.banners.length > 0) {
-        return data.banners;
+        return data.banners.map((b: Banner) => ({
+          ...b,
+          image_url: formatBannerImageUrl(b.image_url),
+        }));
       }
     }
   } catch (err) {
