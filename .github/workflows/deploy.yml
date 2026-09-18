@@ -23,37 +23,55 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           password: ${{ secrets.VPS_PASSWORD }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          script_stop: false
+          script_stop: true
           script: |
-            echo "🚀 [1/4] Initializing environment..."
+            echo "🚀 [1/4] Initializing environment on VPS..."
             
-            # Load environment paths for Node, Go, NVM, and PM2
+            # Load environment paths
             [ -f "$HOME/.profile" ] && source "$HOME/.profile" 2>/dev/null || true
             [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc" 2>/dev/null || true
             [ -s "$HOME/.nvm/nvm.sh" ] && source "$HOME/.nvm/nvm.sh" 2>/dev/null || true
             [ -s "/root/.nvm/nvm.sh" ] && source "/root/.nvm/nvm.sh" 2>/dev/null || true
             export PATH=$PATH:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node 2>/dev/null | tail -n 1)/bin:/root/.nvm/versions/node/$(ls /root/.nvm/versions/node 2>/dev/null | tail -n 1)/bin
 
-            # Navigate to exact project directory on VPS
-            if [ -d "/var/www/xpharma/repo" ]; then
-              cd /var/www/xpharma/repo
-            elif [ -d "/var/www/xpharma" ]; then
-              cd /var/www/xpharma
+            # Detect directory
+            TARGET_DIR=""
+            if [ -d "/var/www/xpharma/repo/web-admin" ]; then
+              TARGET_DIR="/var/www/xpharma/repo"
+            elif [ -d "/var/www/xpharma/web-admin" ]; then
+              TARGET_DIR="/var/www/xpharma"
+            elif [ -d "$HOME/xpharma/web-admin" ]; then
+              TARGET_DIR="$HOME/xpharma"
+            elif [ -d "/root/xpharma/web-admin" ]; then
+              TARGET_DIR="/root/xpharma"
+            else
+              FOUND_DIR=$(find /var/www /root /home -name "web-admin" -type d 2>/dev/null | head -n 1)
+              if [ -n "$FOUND_DIR" ]; then
+                TARGET_DIR=$(dirname "$FOUND_DIR")
+              fi
             fi
 
-            echo "📥 [2/4] Pulling latest code from GitHub (main)..."
+            echo "📂 Target directory found: $TARGET_DIR"
+            if [ -z "$TARGET_DIR" ] || [ ! -d "$TARGET_DIR" ]; then
+              echo "❌ Error: Could not find xpharma repository on VPS!"
+              exit 1
+            fi
+
+            cd "$TARGET_DIR"
+            echo "📍 Working directory: $(pwd)"
+
+            echo "📥 [2/4] Pulling latest updates from GitHub (main)..."
             git fetch origin main
             git reset --hard origin/main
+            echo "✅ Latest commit: $(git log -1 --oneline)"
 
-            echo "⚙️ [3/4] Building and restarting Go Backend..."
+            echo "⚙️ [3/4] Updating Go Backend..."
             if [ -d "backend" ]; then
               cd backend
               if command -v go &> /dev/null; then
-                go build -o /var/www/xpharma/xpharma-server cmd/server/main.go || true
+                go build -o /var/www/xpharma/xpharma-server cmd/server/main.go 2>/dev/null || true
                 sudo systemctl restart xpharma-backend 2>/dev/null || systemctl restart xpharma-backend 2>/dev/null || true
-                echo "✅ Backend updated."
-              else
-                echo "⚠️ Go binary not in path, skipping backend compilation."
+                echo "✅ Backend service refreshed."
               fi
               cd ..
             fi
@@ -61,11 +79,17 @@ jobs:
             echo "💻 [4/4] Building and updating Web Admin Dashboard (Next.js)..."
             if [ -d "web-admin" ]; then
               cd web-admin
+              echo "📦 Installing dependencies..."
               npm install --prefer-offline --no-audit || npm install
+              
+              echo "🔨 Running Next.js build..."
               npm run build
+              
+              echo "🔄 Restarting web process in PM2..."
               if command -v pm2 &> /dev/null; then
                 pm2 restart xpharma-admin 2>/dev/null || pm2 restart xpharma-web 2>/dev/null || pm2 restart all 2>/dev/null || pm2 start npm --name "xpharma-admin" -- start
-                echo "✅ PM2 web service restarted."
+                pm2 save 2>/dev/null || true
+                echo "✅ Web Admin restarted with PM2."
               else
                 sudo systemctl restart xpharma-web 2>/dev/null || systemctl restart xpharma-web 2>/dev/null || true
               fi
