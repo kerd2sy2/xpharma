@@ -84,6 +84,9 @@ export default function HomeScreen() {
   // Profile / Settings Modal State
   const [profileModalVisible, setProfileModalVisible] = useState(false);
 
+  // Sticky Category Tabs state on scroll
+  const [isStickyTabs, setIsStickyTabs] = useState(false);
+
   // Subscription & Trial Modal State
   const [subscriptionModalVisible, setSubscriptionModalVisible] = useState(false);
   const [subscriptionReason, setSubscriptionReason] = useState<string | undefined>();
@@ -425,6 +428,92 @@ export default function HomeScreen() {
     );
   }
 
+  const renderCategoryTabs = (isSticky = false) => (
+    <View style={[styles.tabsContainer, isSticky && styles.tabsStickyContainer]}>
+      <TouchableOpacity
+        style={[
+          styles.categoryTab,
+          selectedCategoryTab === 'pharma' && styles.categoryTabActive,
+        ]}
+        onPress={() => setSelectedCategoryTab('pharma')}
+        activeOpacity={0.8}
+      >
+        <Ionicons
+          name="medkit"
+          size={15}
+          color={selectedCategoryTab === 'pharma' ? '#FFFFFF' : colors.primary}
+          style={{ marginLeft: 6 }}
+        />
+        <Text
+          style={[
+            styles.categoryTabText,
+            selectedCategoryTab === 'pharma' && styles.categoryTabTextActive,
+          ]}
+        >
+          مخازن الأدوية
+        </Text>
+        <View
+          style={[
+            styles.tabCountBadge,
+            selectedCategoryTab === 'pharma'
+              ? styles.tabCountBadgeActive
+              : styles.tabCountBadgeInactive,
+          ]}
+        >
+          <Text
+            style={[
+              styles.tabCountText,
+              selectedCategoryTab === 'pharma' && styles.tabCountTextActive,
+            ]}
+          >
+            {pharmaCount}
+          </Text>
+        </View>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[
+          styles.categoryTab,
+          selectedCategoryTab === 'accessories' && styles.categoryTabActive,
+        ]}
+        onPress={() => setSelectedCategoryTab('accessories')}
+        activeOpacity={0.8}
+      >
+        <Ionicons
+          name="sparkles"
+          size={15}
+          color={selectedCategoryTab === 'accessories' ? '#FFFFFF' : colors.primary}
+          style={{ marginLeft: 6 }}
+        />
+        <Text
+          style={[
+            styles.categoryTabText,
+            selectedCategoryTab === 'accessories' && styles.categoryTabTextActive,
+          ]}
+        >
+          إكسسوارات ومستحضرات
+        </Text>
+        <View
+          style={[
+            styles.tabCountBadge,
+            selectedCategoryTab === 'accessories'
+              ? styles.tabCountBadgeActive
+              : styles.tabCountBadgeInactive,
+          ]}
+        >
+          <Text
+            style={[
+              styles.tabCountText,
+              selectedCategoryTab === 'accessories' && styles.tabCountTextActive,
+            ]}
+          >
+            {accessoriesCount}
+          </Text>
+        </View>
+      </TouchableOpacity>
+    </View>
+  );
+
   const topInset = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 0);
 
   return (
@@ -444,6 +533,16 @@ export default function HomeScreen() {
         ]}
         showsVerticalScrollIndicator={false}
         showsHorizontalScrollIndicator={false}
+        onScroll={(event) => {
+          const y = event.nativeEvent.contentOffset.y;
+          const threshold = isTablet ? 230 : 180;
+          if (y >= threshold && !isStickyTabs) {
+            setIsStickyTabs(true);
+          } else if (y < threshold && isStickyTabs) {
+            setIsStickyTabs(false);
+          }
+        }}
+        scrollEventThrottle={16}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -468,89 +567,7 @@ export default function HomeScreen() {
             )}
 
             {/* Google Play Style Category Tabs */}
-            <View style={styles.tabsContainer}>
-              <TouchableOpacity
-                style={[
-                  styles.categoryTab,
-                  selectedCategoryTab === 'pharma' && styles.categoryTabActive,
-                ]}
-                onPress={() => setSelectedCategoryTab('pharma')}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name="medkit"
-                  size={15}
-                  color={selectedCategoryTab === 'pharma' ? '#FFFFFF' : colors.primary}
-                  style={{ marginLeft: 6 }}
-                />
-                <Text
-                  style={[
-                    styles.categoryTabText,
-                    selectedCategoryTab === 'pharma' && styles.categoryTabTextActive,
-                  ]}
-                >
-                  مخازن الأدوية
-                </Text>
-                <View
-                  style={[
-                    styles.tabCountBadge,
-                    selectedCategoryTab === 'pharma'
-                      ? styles.tabCountBadgeActive
-                      : styles.tabCountBadgeInactive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.tabCountText,
-                      selectedCategoryTab === 'pharma' && styles.tabCountTextActive,
-                    ]}
-                  >
-                    {pharmaCount}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.categoryTab,
-                  selectedCategoryTab === 'accessories' && styles.categoryTabActive,
-                ]}
-                onPress={() => setSelectedCategoryTab('accessories')}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name="sparkles"
-                  size={15}
-                  color={selectedCategoryTab === 'accessories' ? '#FFFFFF' : colors.primary}
-                  style={{ marginLeft: 6 }}
-                />
-                <Text
-                  style={[
-                    styles.categoryTabText,
-                    selectedCategoryTab === 'accessories' && styles.categoryTabTextActive,
-                  ]}
-                >
-                  إكسسوارات ومستحضرات
-                </Text>
-                <View
-                  style={[
-                    styles.tabCountBadge,
-                    selectedCategoryTab === 'accessories'
-                      ? styles.tabCountBadgeActive
-                      : styles.tabCountBadgeInactive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.tabCountText,
-                      selectedCategoryTab === 'accessories' && styles.tabCountTextActive,
-                    ]}
-                  >
-                    {accessoriesCount}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            </View>
+            {renderCategoryTabs(false)}
           </View>
         }
         renderItem={({ item }) => (
@@ -685,6 +702,13 @@ export default function HomeScreen() {
                 onAnimationFinish={handleAnimationFinish}
               />
             </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Sticky Category Tabs pinned in the header when scrolling past the promo banner */}
+        {!isSearchActive && isStickyTabs && (
+          <View style={[styles.stickyTabsHeaderWrapper, { backgroundColor: colors.bg }]}>
+            {renderCategoryTabs(true)}
           </View>
         )}
 
@@ -832,6 +856,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#00d780',
     borderWidth: 2,
     borderColor: '#FFFFFF',
+  },
+  stickyTabsHeaderWrapper: {
+    paddingHorizontal: 16,
+    paddingTop: 2,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(63, 0, 130, 0.08)',
+  },
+  tabsStickyContainer: {
+    marginTop: 0,
+    marginBottom: 0,
   },
   featherEdge: {
     height: 8,
