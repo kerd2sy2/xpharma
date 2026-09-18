@@ -422,7 +422,14 @@ func cleanInput(s string) string {
 // Config Management (Unified config.json)
 // -----------------------------------------------------------------------------
 
-const configFileName = "config.json"
+func getConfigFilePath() string {
+	exePath, err := os.Executable()
+	if err == nil {
+		exeDir := filepath.Dir(exePath)
+		return filepath.Join(exeDir, "config.json")
+	}
+	return "config.json"
+}
 
 func loadConfig() *Config {
 	cfg := &Config{
@@ -442,7 +449,7 @@ func loadConfig() *Config {
 	cfg.Firebird.User = "SYSDBA"
 	cfg.Firebird.Password = "masterkey"
 
-	data, err := os.ReadFile(configFileName)
+	data, err := os.ReadFile(getConfigFilePath())
 	if err == nil {
 		_ = json.Unmarshal(data, cfg)
 	}
@@ -484,7 +491,7 @@ func loadConfig() *Config {
 func saveConfig(cfg *Config) {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err == nil {
-		_ = os.WriteFile(configFileName, data, 0644)
+		_ = os.WriteFile(getConfigFilePath(), data, 0644)
 	}
 }
 
