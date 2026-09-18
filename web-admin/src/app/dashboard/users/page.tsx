@@ -19,9 +19,8 @@ export default async function UsersPage(props: PageProps) {
 
   return (
     <PageContainer
-      pageTitle='Users'
-      pageDescription='Manage users (React Query + nuqs table pattern.)'
-      infoContent={usersInfoContent}
+      pageTitle='الصيادلة والمستخدمين المسجلين'
+      pageDescription='إدارة كافة حسابات الصيادلة والمستخدمين المسجلين في منصة إكس فارما وتعديل الصلاحيات وحالة الحساب.'
       pageHeaderAction={<UserFormSheetTrigger />}
     >
       <UserListingPage />
