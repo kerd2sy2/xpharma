@@ -7,7 +7,8 @@ import { AuthProvider, useAuth } from '@/context/AuthContext';
 import LoginScreen from '@/screens/LoginScreen';
 import DeviceMismatchModal from '@/components/DeviceMismatchModal';
 
-SplashScreen.preventAutoHideAsync();
+// Hide native splash immediately on app mount
+SplashScreen.hideAsync().catch(() => {});
 
 function RootNavigator() {
   const { user, isLoading, deviceMismatchInfo, clearDeviceMismatch, logout } = useAuth();
