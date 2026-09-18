@@ -19,7 +19,7 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const isTablet = SCREEN_WIDTH >= 768;
 const CARD_PADDING = 16;
 const CARD_WIDTH = SCREEN_WIDTH - CARD_PADDING * 2;
-const CARD_HEIGHT = isTablet ? 220 : 172;
+const CARD_HEIGHT = isTablet ? 220 : 170;
 
 interface PromoBannerCarouselProps {
   banners: Banner[];
@@ -33,7 +33,7 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
 
   const displayBanners = banners && banners.length > 0 ? banners : [];
 
-  // Auto scroll if multiple banners exist
+  // Auto scroll every 5 seconds if multiple banners exist
   useEffect(() => {
     if (displayBanners.length <= 1) return;
 
@@ -46,7 +46,7 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
         });
         return nextIndex;
       });
-    }, 6000);
+    }, 5000);
 
     return () => {
       if (autoScrollTimer.current) clearInterval(autoScrollTimer.current);
@@ -95,58 +95,62 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
         renderItem={({ item }) => (
           <TouchableOpacity
             style={styles.cardContainer}
-            activeOpacity={item.action_type !== 'none' ? 0.9 : 1}
+            activeOpacity={item.action_type !== 'none' ? 0.92 : 1}
             onPress={() => handleBannerPress(item)}
           >
-            {/* Background Image with uniform fill */}
+            {/* Full Background Promo Image */}
             <Image
               source={{ uri: item.image_url }}
               style={styles.bannerImage}
               contentFit="cover"
-              transition={300}
+              transition={200}
               cachePolicy="memory-disk"
             />
 
-            {/* Gradient Overlay for high text legibility */}
-            <LinearGradient
-              colors={['transparent', 'rgba(10, 0, 26, 0.35)', 'rgba(10, 0, 26, 0.88)']}
-              style={styles.gradientOverlay}
-            />
+            {/* Gradient Overlay only if title or subtitle exists */}
+            {(Boolean(item.title) || Boolean(item.subtitle)) && (
+              <LinearGradient
+                colors={['transparent', 'rgba(15, 5, 30, 0.4)', 'rgba(15, 5, 30, 0.88)']}
+                style={styles.gradientOverlay}
+              />
+            )}
 
-            {/* Top Row: Badge */}
+            {/* Top Row: Badge & Link Indicator */}
             <View style={styles.topBadgeRow}>
               {item.badge_text ? (
                 <View style={styles.badgePill}>
-                  <Ionicons name="sparkles" size={11} color="#3F0082" style={{ marginLeft: 3 }} />
+                  <Ionicons name="sparkles" size={12} color="#3F0082" style={{ marginLeft: 3 }} />
                   <Text style={styles.badgeText}>{item.badge_text}</Text>
                 </View>
-              ) : null}
+              ) : <View />}
 
               {item.action_type !== 'none' && (
                 <View style={styles.actionPill}>
-                  <Ionicons name="arrow-back" size={12} color="#FFFFFF" />
+                  <Ionicons name="arrow-back" size={13} color="#FFFFFF" />
                 </View>
               )}
             </View>
 
-            {/* Bottom Content: Title & Subtitle */}
-            <View style={styles.bottomContent}>
-              {item.title ? (
-                <Text style={styles.titleText} numberOfLines={1}>
-                  {item.title}
-                </Text>
-              ) : null}
-              {item.subtitle ? (
-                <Text style={styles.subtitleText} numberOfLines={2}>
-                  {item.subtitle}
-                </Text>
-              ) : null}
-            </View>
+            {/* Bottom Content: Title & Subtitle if present */}
+            {(Boolean(item.title) || Boolean(item.subtitle)) ? (
+              <View style={styles.bottomContent}>
+                {item.title ? (
+                  <Text style={styles.titleText} numberOfLines={1}>
+                    {item.title}
+                  </Text>
+                ) : null}
+                {item.subtitle ? (
+                  <Text style={styles.subtitleText} numberOfLines={2}>
+                    {item.subtitle}
+                  </Text>
+                ) : null}
+              </View>
+            ) : <View />}
           </TouchableOpacity>
         )}
       />
 
-      {/* Pagination Dots */}
+      {/* Pagination Indicator Dots */}
       {displayBanners.length > 1 && (
         <View style={styles.dotsContainer}>
           {displayBanners.map((_, i) => (
@@ -175,18 +179,16 @@ const styles = StyleSheet.create({
   cardContainer: {
     width: CARD_WIDTH,
     height: CARD_HEIGHT,
-    borderRadius: 18,
+    borderRadius: 20,
     overflow: 'hidden',
-    backgroundColor: '#2A0058',
+    backgroundColor: '#1E1235',
     justifyContent: 'space-between',
     padding: 14,
     shadowColor: '#3F0082',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.18,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.16,
     shadowRadius: 10,
     elevation: 4,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
   },
   bannerImage: {
     position: 'absolute',
@@ -205,33 +207,33 @@ const styles = StyleSheet.create({
     bottom: 0,
   },
   topBadgeRow: {
-    flexDirection: 'row',
+    flexDirection: 'row-reverse',
     alignItems: 'center',
     justifyContent: 'space-between',
     zIndex: 2,
   },
   badgePill: {
-    flexDirection: 'row',
+    flexDirection: 'row-reverse',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: 4.5,
     borderRadius: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
     shadowRadius: 3,
-    elevation: 2,
+    elevation: 3,
   },
   badgeText: {
-    fontSize: 11,
+    fontSize: 11.5,
     fontWeight: '800',
     color: '#3F0082',
   },
   actionPill: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: 'rgba(0, 0, 0, 0.45)',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.3)',
@@ -247,18 +249,17 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#FFFFFF',
     textAlign: 'right',
-    textShadowColor: 'rgba(0, 0, 0, 0.65)',
+    textShadowColor: 'rgba(0, 0, 0, 0.7)',
     textShadowOffset: { width: 0, height: 1.5 },
     textShadowRadius: 4,
-    letterSpacing: 0.2,
   },
   subtitleText: {
     fontSize: isTablet ? 13 : 12,
     fontWeight: '500',
-    color: 'rgba(255, 255, 255, 0.88)',
+    color: 'rgba(255, 255, 255, 0.92)',
     textAlign: 'right',
     lineHeight: 18,
-    textShadowColor: 'rgba(0, 0, 0, 0.5)',
+    textShadowColor: 'rgba(0, 0, 0, 0.6)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
   },
@@ -274,7 +275,7 @@ const styles = StyleSheet.create({
     borderRadius: 3,
   },
   activeDot: {
-    width: 20,
+    width: 22,
     backgroundColor: '#3F0082',
   },
   inactiveDot: {

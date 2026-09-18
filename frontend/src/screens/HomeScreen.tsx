@@ -670,13 +670,12 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Right side: Brand Logo & Word */}
+            {/* Right side: Brand Logo */}
             <TouchableOpacity
               style={styles.brandRow}
               onPress={handleLogoPress}
               activeOpacity={0.7}
             >
-              <Text style={[styles.brandText, { color: '#3f0082' }]}>فارما</Text>
               <XLogo
                 ref={headerLogoRef}
                 size={48}
