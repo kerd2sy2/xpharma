@@ -431,19 +431,10 @@ export default function HomeScreen() {
   const renderCategoryTabs = (isSticky = false) => (
     <View style={[styles.tabsContainer, isSticky && styles.tabsStickyContainer]}>
       <TouchableOpacity
-        style={[
-          styles.categoryTab,
-          selectedCategoryTab === 'pharma' && styles.categoryTabActive,
-        ]}
+        style={styles.categoryTab}
         onPress={() => setSelectedCategoryTab('pharma')}
-        activeOpacity={0.8}
+        activeOpacity={0.7}
       >
-        <Ionicons
-          name="medkit"
-          size={15}
-          color={selectedCategoryTab === 'pharma' ? '#FFFFFF' : colors.primary}
-          style={{ marginLeft: 6 }}
-        />
         <Text
           style={[
             styles.categoryTabText,
@@ -452,39 +443,14 @@ export default function HomeScreen() {
         >
           مخازن الأدوية
         </Text>
-        <View
-          style={[
-            styles.tabCountBadge,
-            selectedCategoryTab === 'pharma'
-              ? styles.tabCountBadgeActive
-              : styles.tabCountBadgeInactive,
-          ]}
-        >
-          <Text
-            style={[
-              styles.tabCountText,
-              selectedCategoryTab === 'pharma' && styles.tabCountTextActive,
-            ]}
-          >
-            {pharmaCount}
-          </Text>
-        </View>
+        {selectedCategoryTab === 'pharma' && <View style={styles.activeTabIndicator} />}
       </TouchableOpacity>
 
       <TouchableOpacity
-        style={[
-          styles.categoryTab,
-          selectedCategoryTab === 'accessories' && styles.categoryTabActive,
-        ]}
+        style={styles.categoryTab}
         onPress={() => setSelectedCategoryTab('accessories')}
-        activeOpacity={0.8}
+        activeOpacity={0.7}
       >
-        <Ionicons
-          name="sparkles"
-          size={15}
-          color={selectedCategoryTab === 'accessories' ? '#FFFFFF' : colors.primary}
-          style={{ marginLeft: 6 }}
-        />
         <Text
           style={[
             styles.categoryTabText,
@@ -493,28 +459,13 @@ export default function HomeScreen() {
         >
           إكسسوارات ومستحضرات
         </Text>
-        <View
-          style={[
-            styles.tabCountBadge,
-            selectedCategoryTab === 'accessories'
-              ? styles.tabCountBadgeActive
-              : styles.tabCountBadgeInactive,
-          ]}
-        >
-          <Text
-            style={[
-              styles.tabCountText,
-              selectedCategoryTab === 'accessories' && styles.tabCountTextActive,
-            ]}
-          >
-            {accessoriesCount}
-          </Text>
-        </View>
+        {selectedCategoryTab === 'accessories' && <View style={styles.activeTabIndicator} />}
       </TouchableOpacity>
     </View>
   );
 
   const topInset = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 0);
+  const hasBanners = !isSearchActive && banners && banners.length > 0;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
@@ -532,7 +483,7 @@ export default function HomeScreen() {
         showsHorizontalScrollIndicator={false}
         onScroll={(event) => {
           const y = event.nativeEvent.contentOffset.y;
-          const threshold = isTablet ? 280 : 230;
+          const threshold = hasBanners ? (isTablet ? 340 : 270) : 60;
           if (y >= threshold && !isStickyTabs) {
             setIsStickyTabs(true);
           } else if (y < threshold && isStickyTabs) {
@@ -549,9 +500,9 @@ export default function HomeScreen() {
           />
         }
         ListHeaderComponent={
-          <View style={[styles.listHeaderContainer, { paddingTop: topInset + 10 }]}>
-            {/* Top Bar inside Scroll: Avatar & Search on Left, X Logo on Right */}
-            <View style={styles.headerTopRow}>
+          <View style={[styles.listHeaderContainer, { paddingTop: topInset + 4 }]}>
+            {/* Top Bar inside Hero / Header: Avatar & Search on Left, X Logo on Right */}
+            <View style={hasBanners ? styles.headerTopRowFloating : styles.headerTopRowNormal}>
               {/* Left side: Avatar & Search Button */}
               <View style={styles.headerLeftRow}>
                 <TouchableOpacity
@@ -571,7 +522,7 @@ export default function HomeScreen() {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.headerSearchBtn, { backgroundColor: 'rgba(63, 0, 130, 0.08)' }]}
+                  style={styles.headerSearchBtn}
                   onPress={() => {
                     setIsSearchActive(true);
                     setTimeout(() => searchInputRef.current?.focus(), 150);
@@ -590,8 +541,8 @@ export default function HomeScreen() {
               >
                 <XLogo
                   ref={headerLogoRef}
-                  size={48}
-                  scale={1.8}
+                  size={46}
+                  scale={1.75}
                   speed={1.0}
                   autoPlay={false}
                   loop={false}
@@ -600,8 +551,8 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Promo Banners Carousel */}
-            {!isSearchActive && (
+            {/* Immersive Promo Banner Carousel */}
+            {hasBanners && (
               <PromoBannerCarousel
                 banners={banners}
                 onWarehousePress={(slugOrId) => {
@@ -613,7 +564,7 @@ export default function HomeScreen() {
               />
             )}
 
-            {/* Google Play Style Category Tabs */}
+            {/* Google Play Style Category Tabs with Active Underline Bar */}
             {renderCategoryTabs(false)}
           </View>
         }
@@ -792,7 +743,19 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 100,
   },
-  headerTopRow: {
+  headerTopRowFloating: {
+    position: 'absolute',
+    top: 4,
+    left: 0,
+    right: 0,
+    zIndex: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 22,
+    height: 50,
+  },
+  headerTopRowNormal: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -821,11 +784,22 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
   },
   avatarButton: {
     position: 'relative',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 3,
   },
   avatarImg: {
     width: 38,
@@ -856,15 +830,17 @@ const styles = StyleSheet.create({
     borderColor: '#FFFFFF',
   },
   stickyTabsHeaderWrapper: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     paddingTop: 2,
-    paddingBottom: 6,
+    paddingBottom: 2,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(63, 0, 130, 0.08)',
+    borderBottomColor: '#EAE5F2',
+    backgroundColor: '#F9F7FD',
   },
   tabsStickyContainer: {
     marginTop: 0,
     marginBottom: 0,
+    borderBottomWidth: 0,
   },
   featherEdge: {
     height: 8,
@@ -969,68 +945,44 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   listHeaderContainer: {
-    paddingBottom: 14,
+    paddingBottom: 8,
   },
   tabsContainer: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 10,
+    justifyContent: 'space-around',
+    borderBottomWidth: 1,
+    borderBottomColor: '#EAE5F2',
+    backgroundColor: '#F9F7FD',
     marginTop: 6,
-    marginBottom: 4,
+    marginBottom: 8,
+    paddingHorizontal: 10,
   },
   categoryTab: {
     flex: 1,
-    flexDirection: 'row-reverse',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-    paddingVertical: 11,
-    paddingHorizontal: 12,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: '#E9E3F3',
-    shadowColor: '#3F0082',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 5,
-    elevation: 1.5,
-    gap: 6,
-  },
-  categoryTabActive: {
-    backgroundColor: '#3F0082',
-    borderColor: '#3F0082',
-    shadowOpacity: 0.22,
-    shadowRadius: 8,
-    elevation: 4,
+    position: 'relative',
   },
   categoryTabText: {
-    fontSize: isTablet ? 14 : 12.5,
-    fontWeight: '800',
-    color: '#3F0082',
+    fontSize: isTablet ? 15.5 : 14,
+    fontWeight: '700',
+    color: '#766B8A',
+    textAlign: 'center',
   },
   categoryTabTextActive: {
-    color: '#FFFFFF',
-  },
-  tabCountBadge: {
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 10,
-    minWidth: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tabCountBadgeActive: {
-    backgroundColor: 'rgba(255, 255, 255, 0.22)',
-  },
-  tabCountBadgeInactive: {
-    backgroundColor: 'rgba(63, 0, 130, 0.08)',
-  },
-  tabCountText: {
-    fontSize: 10.5,
-    fontWeight: '900',
     color: '#3F0082',
+    fontWeight: '900',
   },
-  tabCountTextActive: {
-    color: '#FFFFFF',
+  activeTabIndicator: {
+    position: 'absolute',
+    bottom: -1,
+    left: 20,
+    right: 20,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: '#3F0082',
   },
 });

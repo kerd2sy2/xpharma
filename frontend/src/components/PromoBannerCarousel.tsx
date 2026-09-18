@@ -17,9 +17,9 @@ import { Banner } from '@/services/banner';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const isTablet = SCREEN_WIDTH >= 768;
-const CARD_PADDING = 16;
+const CARD_PADDING = 12;
 const CARD_WIDTH = SCREEN_WIDTH - CARD_PADDING * 2;
-const CARD_HEIGHT = isTablet ? 220 : 170;
+const CARD_HEIGHT = isTablet ? 320 : 255;
 
 interface PromoBannerCarouselProps {
   banners: Banner[];
@@ -33,7 +33,7 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
 
   const displayBanners = banners && banners.length > 0 ? banners : [];
 
-  // Auto scroll every 5 seconds if multiple banners exist
+  // Auto scroll every 5.5 seconds if multiple banners exist
   useEffect(() => {
     if (displayBanners.length <= 1) return;
 
@@ -46,7 +46,7 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
         });
         return nextIndex;
       });
-    }, 5000);
+    }, 5500);
 
     return () => {
       if (autoScrollTimer.current) clearInterval(autoScrollTimer.current);
@@ -67,7 +67,7 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
 
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const offsetX = event.nativeEvent.contentOffset.x;
-    const index = Math.round(offsetX / (CARD_WIDTH + 12));
+    const index = Math.round(offsetX / (CARD_WIDTH + 10));
     if (index >= 0 && index < displayBanners.length && index !== activeIndex) {
       setActiveIndex(index);
     }
@@ -85,7 +85,7 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
         keyExtractor={(item) => item.id}
         horizontal
         pagingEnabled={false}
-        snapToInterval={CARD_WIDTH + 12}
+        snapToInterval={CARD_WIDTH + 10}
         snapToAlignment="center"
         decelerationRate="fast"
         showsHorizontalScrollIndicator={false}
@@ -98,7 +98,7 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
             activeOpacity={item.action_type !== 'none' ? 0.92 : 1}
             onPress={() => handleBannerPress(item)}
           >
-            {/* Full Background Promo Image */}
+            {/* Full Hero Promo Background Image */}
             <Image
               source={{ uri: item.image_url }}
               style={styles.bannerImage}
@@ -107,19 +107,23 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
               cachePolicy="memory-disk"
             />
 
-            {/* Gradient Overlay only if title or subtitle exists */}
-            {(Boolean(item.title) || Boolean(item.subtitle)) && (
-              <LinearGradient
-                colors={['transparent', 'rgba(15, 5, 30, 0.4)', 'rgba(15, 5, 30, 0.88)']}
-                style={styles.gradientOverlay}
-              />
-            )}
+            {/* Subtle Gradient Overlay for Text Readability */}
+            <LinearGradient
+              colors={[
+                'rgba(15, 5, 30, 0.25)',
+                'rgba(15, 5, 30, 0.05)',
+                'rgba(15, 5, 30, 0.55)',
+                'rgba(15, 5, 30, 0.92)',
+              ]}
+              locations={[0, 0.35, 0.65, 1]}
+              style={styles.gradientOverlay}
+            />
 
-            {/* Top Row: Badge & Link Indicator */}
+            {/* Top Row: Badge & Link Pill */}
             <View style={styles.topBadgeRow}>
               {item.badge_text ? (
                 <View style={styles.badgePill}>
-                  <Ionicons name="sparkles" size={12} color="#3F0082" style={{ marginLeft: 3 }} />
+                  <Ionicons name="sparkles" size={11} color="#3F0082" style={{ marginLeft: 3 }} />
                   <Text style={styles.badgeText}>{item.badge_text}</Text>
                 </View>
               ) : <View />}
@@ -131,11 +135,11 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
               )}
             </View>
 
-            {/* Bottom Content: Title & Subtitle if present */}
+            {/* Bottom Content: Title & Subtitle */}
             {(Boolean(item.title) || Boolean(item.subtitle)) ? (
               <View style={styles.bottomContent}>
                 {item.title ? (
-                  <Text style={styles.titleText} numberOfLines={1}>
+                  <Text style={styles.titleText} numberOfLines={2}>
                     {item.title}
                   </Text>
                 ) : null}
@@ -170,25 +174,27 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: 16,
+    marginBottom: 10,
   },
   listContent: {
     paddingHorizontal: CARD_PADDING,
-    gap: 12,
+    gap: 10,
   },
   cardContainer: {
     width: CARD_WIDTH,
     height: CARD_HEIGHT,
-    borderRadius: 20,
+    borderRadius: 24,
     overflow: 'hidden',
     backgroundColor: '#1E1235',
     justifyContent: 'space-between',
-    padding: 14,
+    paddingTop: 62, // Leaves breathing room for floating top header
+    paddingHorizontal: 16,
+    paddingBottom: 16,
     shadowColor: '#3F0082',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.16,
-    shadowRadius: 10,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+    elevation: 6,
   },
   bannerImage: {
     position: 'absolute',
@@ -242,31 +248,32 @@ const styles = StyleSheet.create({
   },
   bottomContent: {
     zIndex: 2,
-    gap: 3,
+    gap: 4,
   },
   titleText: {
-    fontSize: isTablet ? 18 : 16,
+    fontSize: isTablet ? 20 : 17,
     fontWeight: '900',
     color: '#FFFFFF',
     textAlign: 'right',
-    textShadowColor: 'rgba(0, 0, 0, 0.7)',
-    textShadowOffset: { width: 0, height: 1.5 },
+    textShadowColor: 'rgba(0, 0, 0, 0.65)',
+    textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 4,
+    lineHeight: isTablet ? 26 : 22,
   },
   subtitleText: {
-    fontSize: isTablet ? 13 : 12,
-    fontWeight: '500',
-    color: 'rgba(255, 255, 255, 0.92)',
+    fontSize: isTablet ? 13.5 : 12.5,
+    fontWeight: '600',
+    color: '#E0D8EE',
     textAlign: 'right',
-    lineHeight: 18,
     textShadowColor: 'rgba(0, 0, 0, 0.6)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
+    lineHeight: 17,
   },
   dotsContainer: {
     flexDirection: 'row',
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 6,
     marginTop: 10,
   },
@@ -275,11 +282,11 @@ const styles = StyleSheet.create({
     borderRadius: 3,
   },
   activeDot: {
-    width: 22,
+    width: 18,
     backgroundColor: '#3F0082',
   },
   inactiveDot: {
-    width: 6,
-    backgroundColor: '#D1C8E2',
+    width: 5,
+    backgroundColor: '#3F008235',
   },
 });
