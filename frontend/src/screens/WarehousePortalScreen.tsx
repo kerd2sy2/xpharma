@@ -1468,7 +1468,7 @@ export default function WarehousePortalScreen({
     <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: topInset }]}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.bg} translucent={false} />
 
-      {/* Top Header: Simple back arrow on right, Title in center, Add button on left */}
+      {/* Top Header: Simple back arrow on right, Title in center, clean spacer on left */}
       <View style={styles.topHeader}>
         <TouchableOpacity
           style={styles.backBtnClean}
@@ -1480,13 +1480,7 @@ export default function WarehousePortalScreen({
         <Text style={[styles.topHeaderTitle, { color: colors.text }]} numberOfLines={1}>
           {warehouse.name || 'المخزن'}
         </Text>
-        <TouchableOpacity
-          style={styles.headerAddBtn}
-          onPress={handlePressAddPharmacy}
-          activeOpacity={0.6}
-        >
-          <Ionicons name="add" size={26} color={colors.primary} />
-        </TouchableOpacity>
+        <View style={styles.topHeaderSpacer} />
       </View>
 
       <ScrollView
@@ -1531,6 +1525,29 @@ export default function WarehousePortalScreen({
             </TouchableOpacity>
           ))}
         </View>
+
+        {/* كرت إضافة صيدلية أخرى في آخر الصفحة */}
+        <TouchableOpacity
+          style={[
+            styles.addPharmacyBottomCard,
+            { backgroundColor: colors.card, borderColor: colors.borderLayer2 },
+          ]}
+          onPress={handlePressAddPharmacy}
+          activeOpacity={0.8}
+        >
+          <View style={[styles.addPharmacyIconBox, { backgroundColor: colors.primarySoft }]}>
+            <Ionicons name="add" size={24} color={colors.primary} />
+          </View>
+          <View style={styles.addPharmacyInfoCol}>
+            <Text style={[styles.addPharmacyTitle, { color: colors.primary }]}>
+              إضافة صيدلية أخرى
+            </Text>
+            <Text style={[styles.addPharmacySubtitle, { color: colors.secondaryText }]}>
+              ربط فرع أو كود صيدلية جديد لنفس المخزن
+            </Text>
+          </View>
+          <Ionicons name="chevron-back" size={18} color={colors.primary} />
+        </TouchableOpacity>
       </ScrollView>
 
       {/* نافذة التحقق وإضافة صيدلية أخرى لنفس المخزن */}
@@ -1618,6 +1635,47 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 32,
     gap: 10,
+  },
+
+  // كرت إضافة صيدلية أخرى أسفل الصفحة
+  addPharmacyBottomCard: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    marginTop: 4,
+    marginBottom: 8,
+    gap: 12,
+    shadowColor: '#3f0082',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  addPharmacyIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addPharmacyInfoCol: {
+    flex: 1,
+    alignItems: 'flex-end',
+  },
+  addPharmacyTitle: {
+    fontSize: 14.5,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
+  addPharmacySubtitle: {
+    fontSize: 11.5,
+    fontWeight: '500',
+    textAlign: 'right',
+    marginTop: 2,
   },
 
   // حاوية بطاقات الطبقات المتراكمة (Deck)
