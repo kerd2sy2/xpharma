@@ -655,7 +655,6 @@ export default function HomeScreen() {
                     </Text>
                   </View>
                 )}
-                <View style={styles.onlineStatusDot} />
               </TouchableOpacity>
 
               <TouchableOpacity
