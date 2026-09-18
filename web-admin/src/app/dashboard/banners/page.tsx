@@ -66,7 +66,6 @@ export default function BannersPage() {
   const [title, setTitle] = useState('');
   const [subtitle, setSubtitle] = useState('');
   const [imageUrl, setImageUrl] = useState('');
-  const [badgeText, setBadgeText] = useState('إعلان');
   const [actionType, setActionType] = useState<'none' | 'url' | 'warehouse' | 'category'>('none');
   const [actionValue, setActionValue] = useState('');
   const [bgColor, setBgColor] = useState('#3F0082');
@@ -107,7 +106,6 @@ export default function BannersPage() {
     setTitle('');
     setSubtitle('');
     setImageUrl('');
-    setBadgeText('عرض خاص');
     setActionType('none');
     setActionValue('');
     setBgColor('#3F0082');
@@ -121,7 +119,6 @@ export default function BannersPage() {
     setTitle(banner.title || '');
     setSubtitle(banner.subtitle || '');
     setImageUrl(banner.image_url || '');
-    setBadgeText(banner.badge_text || 'إعلان');
     setActionType(banner.action_type || 'none');
     setActionValue(banner.action_value || '');
     setBgColor(banner.bg_color || '#3F0082');
@@ -173,7 +170,7 @@ export default function BannersPage() {
         title: title.trim(),
         subtitle: subtitle.trim(),
         image_url: imageUrl.trim(),
-        badge_text: badgeText.trim() || 'إعلان',
+        badge_text: '',
         action_type: actionType,
         action_value: actionValue.trim(),
         bg_color: bgColor,
@@ -330,7 +327,6 @@ export default function BannersPage() {
                     <TableRow>
                       <TableHead className="w-20 text-right">المعاينة</TableHead>
                       <TableHead className="text-right">العنوان والوصف</TableHead>
-                      <TableHead className="text-right">الشارة (Badge)</TableHead>
                       <TableHead className="text-right">الإجراء عند الضغط</TableHead>
                       <TableHead className="text-center">الترتيب</TableHead>
                       <TableHead className="text-center">الحالة</TableHead>
@@ -360,11 +356,6 @@ export default function BannersPage() {
                           {b.subtitle && (
                             <div className="text-xs text-muted-foreground line-clamp-1 max-w-xs">{b.subtitle}</div>
                           )}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="bg-primary/5 text-primary border-primary/20 font-bold text-xs">
-                            {b.badge_text || 'إعلان'}
-                          </Badge>
                         </TableCell>
                         <TableCell>
                           <div className="text-xs">
@@ -474,26 +465,15 @@ export default function BannersPage() {
                 </p>
               </div>
 
-              {/* Title & Badge */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="sm:col-span-2 space-y-1.5">
-                  <Label className="text-xs font-bold">عنوان الإعلان الرئيسي (اختياري)</Label>
-                  <Input
-                    placeholder="مثال: عروض وتخفيضات الأدوية المستوردة"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    className="text-xs"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-bold">نص الشارة (Badge)</Label>
-                  <Input
-                    placeholder="مثال: عرض خاص / إعلان / جديد"
-                    value={badgeText}
-                    onChange={(e) => setBadgeText(e.target.value)}
-                    className="text-xs"
-                  />
-                </div>
+              {/* Title */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold">عنوان الإعلان الرئيسي (اختياري)</Label>
+                <Input
+                  placeholder="مثال: عروض وتخفيضات الأدوية المستوردة"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  className="text-xs"
+                />
               </div>
 
               {/* Subtitle / Description */}
@@ -570,7 +550,7 @@ export default function BannersPage() {
                 </div>
 
                 <div className="w-full max-w-md mx-auto bg-slate-900 rounded-3xl p-3 shadow-xl border border-slate-700/50">
-                  <div className="relative w-full h-44 rounded-2xl overflow-hidden bg-gradient-to-br from-primary via-purple-900 to-slate-950 flex flex-col justify-between p-4 shadow-md">
+                  <div className="relative w-full h-44 rounded-2xl overflow-hidden bg-gradient-to-br from-primary via-purple-900 to-slate-950 flex flex-col justify-end p-4 shadow-md">
                     {imageUrl ? (
                       <img
                         src={imageUrl}
@@ -579,14 +559,7 @@ export default function BannersPage() {
                       />
                     ) : null}
                     {/* Gradient Overlay */}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/35 to-black/20 pointer-events-none" />
-
-                    {/* Top Row: Badge */}
-                    <div className="relative z-10 flex items-center justify-between">
-                      <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-white/90 text-primary backdrop-blur-sm shadow-xs">
-                        {badgeText || 'إعلان'}
-                      </span>
-                    </div>
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/35 to-transparent pointer-events-none" />
 
                     {/* Bottom Row: Title & Subtitle */}
                     <div className="relative z-10 space-y-1">

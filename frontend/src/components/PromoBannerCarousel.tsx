@@ -112,16 +112,6 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
               />
             )}
 
-            {/* Top Badge Pill if configured */}
-            {item.badge_text ? (
-              <View style={styles.badgeWrapper}>
-                <View style={styles.badgePill}>
-                  <Ionicons name="sparkles" size={11} color="#3F0082" style={{ marginLeft: 3 }} />
-                  <Text style={styles.badgeText}>{item.badge_text}</Text>
-                </View>
-              </View>
-            ) : null}
-
             {/* Bottom Content: Title & Subtitle */}
             {(Boolean(item.title) || Boolean(item.subtitle)) ? (
               <View style={styles.bottomContent}>
@@ -160,7 +150,7 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
 }
 
 const styles = StyleSheet.create({
-  // FIXED CONTAINER: 100% Screen Width, Exactly 25% Screen Height, Edge-to-Edge
+  // FIXED CONTAINER: 100% Screen Width, Exactly 50% Screen Height, Edge-to-Edge
   bannerContainer: {
     width: BANNER_WIDTH,
     height: BANNER_HEIGHT,
@@ -193,30 +183,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-  },
-  badgeWrapper: {
-    position: 'absolute',
-    top: 60,
-    right: 16,
-    zIndex: 3,
-  },
-  badgePill: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 3,
-    elevation: 3,
-  },
-  badgeText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#3F0082',
   },
   bottomContent: {
     zIndex: 3,
