@@ -90,6 +90,7 @@ import {
   IconUsers,
   IconVideo,
   IconCrown,
+  IconLink,
   IconX
 } from '@tabler/icons-react';
 
@@ -225,5 +226,6 @@ export const Icons = {
   slash: IconSlash,
   calendar: IconCalendar,
   galleryVerticalEnd: IconStack2,
-  moreHorizontal: IconDots
+  moreHorizontal: IconDots,
+  link: IconLink
 };

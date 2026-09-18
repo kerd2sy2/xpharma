@@ -75,6 +75,14 @@ export const navGroups: NavGroup[] = [
     label: 'الصيادلة والاشتراكات',
     items: [
       {
+        title: 'الصيدليات والمستخدمين المرتبطين',
+        url: '/dashboard/linked-users',
+        icon: 'link',
+        shortcut: ['l', 'u'],
+        isActive: false,
+        items: []
+      },
+      {
         title: 'الصيادلة والمستخدمين',
         url: '/dashboard/users',
         icon: 'teams',

@@ -506,3 +506,28 @@ export async function signOut(): Promise<void> {
     // Ignore storage deletion errors
   }
 }
+
+/**
+ * Wipe all local data and cached sessions completely
+ */
+export async function clearAllAppData(): Promise<void> {
+  try {
+    await signOut();
+  } catch (e) {}
+
+  const knownKeys = [
+    TOKEN_KEY,
+    USER_KEY,
+    HARDWARE_DEVICE_ID_KEY,
+    'xpharma_subscription_plan',
+    'xpharma_trial_start',
+    'xpharma_global_pharmacies_list',
+  ];
+
+  for (const key of knownKeys) {
+    try {
+      await SecureStore.deleteItemAsync(key);
+    } catch (e) {}
+  }
+}
+
