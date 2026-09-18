@@ -41,7 +41,7 @@ import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
 import SubscriptionModal from '@/components/SubscriptionModal';
 import WarehousePortalScreen from '@/screens/WarehousePortalScreen';
 import XLogo, { XLogoHandle } from '@/components/XLogo';
-import PromoBannerCarousel from '@/components/PromoBannerCarousel';
+import PromoBannerCarousel, { BANNER_HEIGHT } from '@/components/PromoBannerCarousel';
 import { fetchBanners, Banner } from '@/services/banner';
 
 const { width } = Dimensions.get('window');
@@ -469,7 +469,11 @@ export default function HomeScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.bg} translucent={false} />
+      <StatusBar
+        barStyle={hasBanners && !isStickyTabs ? 'light-content' : 'dark-content'}
+        backgroundColor="transparent"
+        translucent={true}
+      />
 
       {/* Warehouses List */}
       <FlatList
@@ -483,7 +487,7 @@ export default function HomeScreen() {
         showsHorizontalScrollIndicator={false}
         onScroll={(event) => {
           const y = event.nativeEvent.contentOffset.y;
-          const threshold = hasBanners ? (isTablet ? 540 : 420) : 70;
+          const threshold = hasBanners ? (BANNER_HEIGHT - topInset - 10) : 60;
           if (y >= threshold && !isStickyTabs) {
             setIsStickyTabs(true);
           } else if (y < threshold && isStickyTabs) {
@@ -500,68 +504,116 @@ export default function HomeScreen() {
           />
         }
         ListHeaderComponent={
-          <View style={[styles.listHeaderContainer, { paddingTop: topInset + 8 }]}>
-            {/* Top Bar: Avatar & Search on Left, X Logo on Right */}
-            <View style={styles.headerTopRow}>
-              {/* Left side: Avatar & Search Button */}
-              <View style={styles.headerLeftRow}>
-                <TouchableOpacity
-                  style={styles.avatarButton}
-                  onPress={() => setProfileModalVisible(true)}
-                  activeOpacity={0.8}
-                >
-                  {user?.photo ? (
-                    <Image source={{ uri: user.photo }} style={styles.avatarImg} />
-                  ) : (
-                    <View style={[styles.avatarPlaceholder, { backgroundColor: colors.primary }]}>
-                      <Text style={styles.avatarLetter}>
-                        {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
-                      </Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
+          <View style={styles.listHeaderContainer}>
+            {/* Dynamic Edge-to-Edge 25% Screen Height Top Banner Container */}
+            {hasBanners ? (
+              <View style={styles.heroBannerHeaderWrapper}>
+                <PromoBannerCarousel
+                  banners={banners}
+                  topInset={topInset}
+                  onWarehousePress={(slugOrId) => {
+                    const target = warehouses.find(
+                      (w) => w.slug === slugOrId || w.id === slugOrId
+                    );
+                    if (target) handleWarehousePress(target);
+                  }}
+                />
+
+                {/* Floating Safe-Area Top Bar: Avatar & Search on Left, X Logo on Right */}
+                <View style={[styles.headerTopRowFloating, { top: topInset + 4 }]}>
+                  <View style={styles.headerLeftRow}>
+                    <TouchableOpacity
+                      style={styles.avatarButton}
+                      onPress={() => setProfileModalVisible(true)}
+                      activeOpacity={0.8}
+                    >
+                      {user?.photo ? (
+                        <Image source={{ uri: user.photo }} style={styles.avatarImg} />
+                      ) : (
+                        <View style={[styles.avatarPlaceholder, { backgroundColor: colors.primary }]}>
+                          <Text style={styles.avatarLetter}>
+                            {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
+                          </Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.headerSearchBtn}
+                      onPress={() => {
+                        setIsSearchActive(true);
+                        setTimeout(() => searchInputRef.current?.focus(), 150);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="search" size={20} color={colors.primary} />
+                    </TouchableOpacity>
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.brandRow}
+                    onPress={handleLogoPress}
+                    activeOpacity={0.7}
+                  >
+                    <XLogo
+                      ref={headerLogoRef}
+                      size={46}
+                      scale={1.75}
+                      speed={1.0}
+                      autoPlay={false}
+                      loop={false}
+                      onAnimationFinish={handleAnimationFinish}
+                    />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <View style={[styles.headerTopRowNormal, { paddingTop: topInset + 8 }]}>
+                <View style={styles.headerLeftRow}>
+                  <TouchableOpacity
+                    style={styles.avatarButton}
+                    onPress={() => setProfileModalVisible(true)}
+                    activeOpacity={0.8}
+                  >
+                    {user?.photo ? (
+                      <Image source={{ uri: user.photo }} style={styles.avatarImg} />
+                    ) : (
+                      <View style={[styles.avatarPlaceholder, { backgroundColor: colors.primary }]}>
+                        <Text style={styles.avatarLetter}>
+                          {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
+                        </Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.headerSearchBtn, { backgroundColor: 'rgba(63, 0, 130, 0.08)' }]}
+                    onPress={() => {
+                      setIsSearchActive(true);
+                      setTimeout(() => searchInputRef.current?.focus(), 150);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="search" size={20} color={colors.primary} />
+                  </TouchableOpacity>
+                </View>
 
                 <TouchableOpacity
-                  style={[styles.headerSearchBtn, { backgroundColor: 'rgba(63, 0, 130, 0.08)' }]}
-                  onPress={() => {
-                    setIsSearchActive(true);
-                    setTimeout(() => searchInputRef.current?.focus(), 150);
-                  }}
+                  style={styles.brandRow}
+                  onPress={handleLogoPress}
                   activeOpacity={0.7}
                 >
-                  <Ionicons name="search" size={20} color={colors.primary} />
+                  <XLogo
+                    ref={headerLogoRef}
+                    size={48}
+                    scale={1.8}
+                    speed={1.0}
+                    autoPlay={false}
+                    loop={false}
+                    onAnimationFinish={handleAnimationFinish}
+                  />
                 </TouchableOpacity>
               </View>
-
-              {/* Right side: Brand Logo */}
-              <TouchableOpacity
-                style={styles.brandRow}
-                onPress={handleLogoPress}
-                activeOpacity={0.7}
-              >
-                <XLogo
-                  ref={headerLogoRef}
-                  size={48}
-                  scale={1.8}
-                  speed={1.0}
-                  autoPlay={false}
-                  loop={false}
-                  onAnimationFinish={handleAnimationFinish}
-                />
-              </TouchableOpacity>
-            </View>
-
-            {/* Immersive Hero Promo Banner Carousel */}
-            {!isSearchActive && (
-              <PromoBannerCarousel
-                banners={banners}
-                onWarehousePress={(slugOrId) => {
-                  const target = warehouses.find(
-                    (w) => w.slug === slugOrId || w.id === slugOrId
-                  );
-                  if (target) handleWarehousePress(target);
-                }}
-              />
             )}
 
             {/* Google Play Style Category Tabs with Active Underline Bar */}
@@ -743,11 +795,27 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 100,
   },
-  headerTopRow: {
+  heroBannerHeaderWrapper: {
+    marginHorizontal: -16, // Bleed edge-to-edge outside FlatList horizontal padding
+    position: 'relative',
+    overflow: 'hidden',
+    backgroundColor: '#0F051D',
+  },
+  headerTopRowFloating: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    zIndex: 10,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
+    height: 48,
+  },
+  headerTopRowNormal: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
     height: 52,
     marginBottom: 8,
   },

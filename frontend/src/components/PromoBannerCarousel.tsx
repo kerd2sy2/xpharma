@@ -16,15 +16,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { Banner } from '@/services/banner';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const isTablet = SCREEN_WIDTH >= 768;
-const CARD_PADDING = 12;
-const CARD_WIDTH = SCREEN_WIDTH - CARD_PADDING * 2;
-// Takes ~45% of screen height (~360-380px on phones, 480px on tablets)
-const CARD_HEIGHT = isTablet ? 480 : Math.min(Math.max(Math.round(SCREEN_HEIGHT * 0.44), 320), 400);
+
+// STRICT FIXED DIMENSIONS: Exactly 25% of screen height, 100% of screen width
+export const BANNER_HEIGHT = Math.round(SCREEN_HEIGHT * 0.25);
+export const BANNER_WIDTH = SCREEN_WIDTH;
 
 interface PromoBannerCarouselProps {
   banners: Banner[];
   onWarehousePress?: (warehouseSlug: string) => void;
+  topInset?: number;
 }
 
 export default function PromoBannerCarousel({ banners, onWarehousePress }: PromoBannerCarouselProps) {
@@ -68,7 +68,7 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
 
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const offsetX = event.nativeEvent.contentOffset.x;
-    const index = Math.round(offsetX / (CARD_WIDTH + 10));
+    const index = Math.round(offsetX / BANNER_WIDTH);
     if (index >= 0 && index < displayBanners.length && index !== activeIndex) {
       setActiveIndex(index);
     }
@@ -79,27 +79,23 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
   }
 
   return (
-    <View style={styles.container}>
+    <View style={styles.bannerContainer}>
       <FlatList
         ref={flatListRef}
         data={displayBanners}
         keyExtractor={(item) => item.id}
         horizontal
-        pagingEnabled={false}
-        snapToInterval={CARD_WIDTH + 10}
-        snapToAlignment="center"
-        decelerationRate="fast"
+        pagingEnabled
         showsHorizontalScrollIndicator={false}
         onScroll={onScroll}
         scrollEventThrottle={16}
-        contentContainerStyle={styles.listContent}
         renderItem={({ item }) => (
           <TouchableOpacity
-            style={styles.cardContainer}
+            style={styles.bannerItem}
             activeOpacity={item.action_type !== 'none' ? 0.92 : 1}
             onPress={() => handleBannerPress(item)}
           >
-            {/* Full Hero Promo Background Image */}
+            {/* Edge-to-Edge Background Image with resizeMode="cover" */}
             <Image
               source={{ uri: item.image_url }}
               style={styles.bannerImage}
@@ -108,39 +104,29 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
               cachePolicy="memory-disk"
             />
 
-            {/* Subtle Gradient Overlay for Text Readability */}
-            <LinearGradient
-              colors={[
-                'rgba(15, 5, 30, 0.15)',
-                'transparent',
-                'rgba(15, 5, 30, 0.50)',
-                'rgba(15, 5, 30, 0.94)',
-              ]}
-              locations={[0, 0.35, 0.65, 1]}
-              style={styles.gradientOverlay}
-            />
+            {/* Subtle Bottom Gradient for Text Legibility */}
+            {(Boolean(item.title) || Boolean(item.subtitle)) && (
+              <LinearGradient
+                colors={['transparent', 'rgba(10, 3, 20, 0.45)', 'rgba(10, 3, 20, 0.88)']}
+                style={styles.gradientOverlay}
+              />
+            )}
 
-            {/* Top Row: Badge & Link Pill */}
-            <View style={styles.topBadgeRow}>
-              {item.badge_text ? (
+            {/* Top Badge Pill if configured */}
+            {item.badge_text ? (
+              <View style={styles.badgeWrapper}>
                 <View style={styles.badgePill}>
                   <Ionicons name="sparkles" size={11} color="#3F0082" style={{ marginLeft: 3 }} />
                   <Text style={styles.badgeText}>{item.badge_text}</Text>
                 </View>
-              ) : <View />}
-
-              {item.action_type !== 'none' && (
-                <View style={styles.actionPill}>
-                  <Ionicons name="arrow-back" size={13} color="#FFFFFF" />
-                </View>
-              )}
-            </View>
+              </View>
+            ) : null}
 
             {/* Bottom Content: Title & Subtitle */}
             {(Boolean(item.title) || Boolean(item.subtitle)) ? (
               <View style={styles.bottomContent}>
                 {item.title ? (
-                  <Text style={styles.titleText} numberOfLines={2}>
+                  <Text style={styles.titleText} numberOfLines={1}>
                     {item.title}
                   </Text>
                 ) : null}
@@ -150,7 +136,7 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
                   </Text>
                 ) : null}
               </View>
-            ) : <View />}
+            ) : null}
           </TouchableOpacity>
         )}
       />
@@ -174,27 +160,24 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
 }
 
 const styles = StyleSheet.create({
-  container: {
-    marginBottom: 12,
-  },
-  listContent: {
-    paddingHorizontal: CARD_PADDING,
-    gap: 10,
-  },
-  cardContainer: {
-    width: CARD_WIDTH,
-    height: CARD_HEIGHT,
-    borderRadius: 22,
+  // FIXED CONTAINER: 100% Screen Width, Exactly 25% Screen Height, Edge-to-Edge
+  bannerContainer: {
+    width: BANNER_WIDTH,
+    height: BANNER_HEIGHT,
     overflow: 'hidden',
-    backgroundColor: '#1E1235',
-    justifyContent: 'space-between',
-    padding: 16,
-    shadowColor: '#3F0082',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    elevation: 5,
+    backgroundColor: '#0F051D',
+    position: 'relative',
   },
+  bannerItem: {
+    width: BANNER_WIDTH,
+    height: BANNER_HEIGHT,
+    overflow: 'hidden',
+    position: 'relative',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 16,
+    paddingBottom: 14,
+  },
+  // RESIZEMODE COVER: Fills the entire container without distortion
   bannerImage: {
     position: 'absolute',
     top: 0,
@@ -211,19 +194,19 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
   },
-  topBadgeRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    zIndex: 2,
+  badgeWrapper: {
+    position: 'absolute',
+    top: 60,
+    right: 16,
+    zIndex: 3,
   },
   badgePill: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.95)',
     paddingHorizontal: 10,
-    paddingVertical: 4.5,
-    borderRadius: 20,
+    paddingVertical: 4,
+    borderRadius: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
@@ -231,61 +214,54 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   badgeText: {
-    fontSize: 11.5,
+    fontSize: 11,
     fontWeight: '800',
     color: '#3F0082',
   },
-  actionPill: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   bottomContent: {
-    zIndex: 2,
-    gap: 4,
+    zIndex: 3,
+    gap: 3,
   },
   titleText: {
-    fontSize: isTablet ? 22 : 18,
+    fontSize: 17,
     fontWeight: '900',
     color: '#FFFFFF',
     textAlign: 'right',
-    textShadowColor: 'rgba(0, 0, 0, 0.65)',
+    textShadowColor: 'rgba(0, 0, 0, 0.7)',
     textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
-    lineHeight: isTablet ? 28 : 24,
+    textShadowRadius: 3,
   },
   subtitleText: {
-    fontSize: isTablet ? 14 : 13,
+    fontSize: 12.5,
     fontWeight: '600',
     color: '#E0D8EE',
     textAlign: 'right',
     textShadowColor: 'rgba(0, 0, 0, 0.6)',
     textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
-    lineHeight: 18,
+    textShadowRadius: 2,
+    lineHeight: 16,
   },
   dotsContainer: {
+    position: 'absolute',
+    bottom: 6,
+    left: 0,
+    right: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    marginTop: 10,
+    gap: 5,
+    zIndex: 4,
   },
   dot: {
-    height: 5,
-    borderRadius: 3,
+    height: 4,
+    borderRadius: 2,
   },
   activeDot: {
-    width: 18,
-    backgroundColor: '#3F0082',
+    width: 16,
+    backgroundColor: '#FFFFFF',
   },
   inactiveDot: {
-    width: 5,
-    backgroundColor: '#3F008235',
+    width: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.4)',
   },
 });
