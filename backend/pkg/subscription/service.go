@@ -20,6 +20,12 @@ func NewSubscriptionService(router *db.TenantRouter) *SubscriptionService {
 	}
 }
 
+// PharmacyItem represents a linked pharmacy
+type PharmacyItem struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
 // GetStatus returns the subscription and trial status for a given user email
 func (s *SubscriptionService) GetStatus(c *gin.Context) {
 	email := strings.ToLower(strings.TrimSpace(c.Query("email")))
@@ -41,19 +47,22 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 			subscription_expires_at,
 			COALESCE(is_subscription_active, false)
 		 FROM public.users 
-		 WHERE email = $1 LIMIT 1`,
+		 WHERE LOWER(email) = LOWER($1) LIMIT 1`,
 		email,
 	).Scan(&trialStartedAt, &subscriptionPlan, &subscriptionExpiresAt, &isSubscriptionActive)
 
 	if err != nil {
-		// New or uncreated user
+		// New or uncreated user: default 7 days trial, 2 pharmacies allowed
 		c.JSON(http.StatusOK, gin.H{
 			"success":                 true,
 			"trial_days_left":         7,
 			"is_trial_expired":        false,
 			"is_subscribed":           false,
 			"subscription_plan":       0,
+			"allowed_pharmacies":      2,
 			"linked_pharmacies_count": 0,
+			"linked_pharmacies":       []PharmacyItem{},
+			"can_add_pharmacy":        true,
 		})
 		return
 	}
@@ -64,19 +73,40 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		trialDaysLeft = 0
 	}
 
-	isSubscribed := isSubscriptionActive || subscriptionPlan > 0
+	isSubscribed := (isSubscriptionActive || subscriptionPlan > 0)
 	if subscriptionExpiresAt != nil && subscriptionExpiresAt.Before(time.Now()) {
 		isSubscribed = false
 	}
 
 	isTrialExpired := trialDaysPassed >= 7 && !isSubscribed
 
-	var linkedCount int
-	_ = s.router.Pool().QueryRow(
+	// Allowed pharmacies: 2 during trial, or subscribedPlan count when subscribed
+	allowedPharmacies := 2
+	if isSubscribed && subscriptionPlan > 0 {
+		allowedPharmacies = subscriptionPlan
+	}
+
+	// Fetch distinct linked pharmacies
+	rows, err := s.router.Pool().Query(
 		c.Request.Context(),
-		`SELECT COUNT(DISTINCT code) FROM public.pharmacies WHERE linked_user_id IN (SELECT id FROM public.users WHERE email = $1)`,
+		`SELECT DISTINCT COALESCE(code, ''), COALESCE(name, '') 
+		 FROM public.pharmacies 
+		 WHERE linked_user_id IN (SELECT id FROM public.users WHERE LOWER(email) = LOWER($1))`,
 		email,
-	).Scan(&linkedCount)
+	)
+	linkedList := make([]PharmacyItem, 0)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var p PharmacyItem
+			if scanErr := rows.Scan(&p.Code, &p.Name); scanErr == nil {
+				linkedList = append(linkedList, p)
+			}
+		}
+	}
+
+	linkedCount := len(linkedList)
+	canAddPharmacy := !isTrialExpired && (linkedCount < allowedPharmacies)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":                 true,
@@ -84,7 +114,10 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		"is_trial_expired":        isTrialExpired,
 		"is_subscribed":           isSubscribed,
 		"subscription_plan":       subscriptionPlan,
+		"allowed_pharmacies":      allowedPharmacies,
 		"linked_pharmacies_count": linkedCount,
+		"linked_pharmacies":       linkedList,
+		"can_add_pharmacy":        canAddPharmacy,
 	})
 }
 
@@ -100,9 +133,22 @@ func (s *SubscriptionService) RegisterPharmacy(c *gin.Context) {
 		return
 	}
 
+	cleanEmail := strings.ToLower(strings.TrimSpace(req.Email))
+	if cleanEmail != "" {
+		var userID string
+		_ = s.router.Pool().QueryRow(c.Request.Context(), `SELECT id FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1`, cleanEmail).Scan(&userID)
+		if userID != "" {
+			_, _ = s.router.Pool().Exec(
+				c.Request.Context(),
+				`UPDATE public.pharmacies SET linked_user_id = $1, updated_at = NOW() WHERE LOWER(code) = LOWER($2)`,
+				userID, strings.TrimSpace(req.Code),
+			)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "تم تسجيل الصيدلية بنجاح",
+		"message": "تم تسجيل الصيدلية وتحديث الربط بنجاح",
 	})
 }
 

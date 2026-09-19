@@ -369,10 +369,52 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Subscription not found' }, { status: 404 });
     }
 
+    const updatedSub = result.rows[0];
+
+    // Atomically synchronize public.users table so the mobile app activates immediately!
+    const targetEmail = updatedSub.user_email;
+    const targetUserId = updatedSub.user_id;
+
+    if (targetEmail || targetUserId) {
+      if (status === 'active') {
+        let planCount = 3;
+        const planStr = String(updatedSub.plan_type || '');
+        const match = planStr.match(/(\d+)/);
+        if (match) {
+          planCount = parseInt(match[1], 10);
+        } else if (Number(updatedSub.amount) >= 300) {
+          planCount = 5;
+        } else if (Number(updatedSub.amount) >= 250) {
+          planCount = 4;
+        } else if (Number(updatedSub.amount) >= 200) {
+          planCount = 3;
+        } else if (Number(updatedSub.amount) >= 150) {
+          planCount = 2;
+        } else if (Number(updatedSub.amount) >= 100) {
+          planCount = 1;
+        }
+
+        try {
+          await query(
+            `UPDATE public.users 
+             SET subscription_plan = $1, 
+                 is_active = TRUE,
+                 is_subscription_active = TRUE,
+                 subscription_expires_at = NOW() + INTERVAL '30 days',
+                 updated_at = NOW() 
+             WHERE (LOWER(email) = LOWER($2) AND $2 <> '') OR id = $3`,
+            [planCount, targetEmail || '', targetUserId || null]
+          );
+        } catch (uErr) {
+          console.warn('Failed to sync approved user status:', uErr);
+        }
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      subscription: result.rows[0],
-      message: `Subscription marked as ${status}`
+      subscription: updatedSub,
+      message: `تم تحديث وتفعيل الاشتراك بنجاح`
     });
   } catch (error: any) {
     console.error('Error updating subscription:', error);

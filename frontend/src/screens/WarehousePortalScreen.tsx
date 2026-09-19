@@ -191,7 +191,7 @@ export default function WarehousePortalScreen({
   useEffect(() => {
     const initPharmacies = async () => {
       if (pharmacyCode && pharmacyName) {
-        await registerGlobalPharmacy(pharmacyCode, pharmacyName);
+        await registerGlobalPharmacy(pharmacyCode, pharmacyName, user?.email);
       }
       const subStatus = await getSubscriptionStatus(user?.email);
       if (subStatus.isTrialExpired) {
@@ -528,7 +528,7 @@ export default function WarehousePortalScreen({
   // When a new pharmacy is verified and added
   const handleAddSuccess = async (result: VerifyPharmacyResult) => {
     if (!result.token) return;
-    await registerGlobalPharmacy(result.pharmacy_code || '', result.pharmacy_name || '');
+    await registerGlobalPharmacy(result.pharmacy_code || '', result.pharmacy_name || '', user?.email);
     setShowAddModal(false);
     setLoaderAnimKey((k) => k + 1);
     setIsSwitchingPharmacy(true);

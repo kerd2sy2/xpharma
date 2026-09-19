@@ -94,10 +94,12 @@ export async function getGlobalLinkedPharmacies(): Promise<Array<{ code: string;
 /**
  * Register a pharmacy globally when verified
  */
-export async function registerGlobalPharmacy(code: string, name: string): Promise<number> {
+/**
+ * Register a pharmacy globally when verified
+ */
+export async function registerGlobalPharmacy(code: string, name: string, email?: string): Promise<number> {
   try {
     const list = await getGlobalLinkedPharmacies();
-    // Match by code or name
     const cleanCode = (code || '').trim().toLowerCase();
     const cleanName = (name || '').trim().toLowerCase();
 
@@ -112,7 +114,20 @@ export async function registerGlobalPharmacy(code: string, name: string): Promis
       await SecureStore.setItemAsync(GLOBAL_PHARMACIES_KEY, JSON.stringify(list));
     }
 
-    // Also make sure trial is initialized
+    // Also notify central backend to register linkage in public.pharmacies
+    if (email && cleanCode) {
+      try {
+        await fetch('https://api.xpharma.cloud/v1/subscription/register-pharmacy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: code.trim(), name: name.trim(), email: email.trim() }),
+        });
+      } catch (beErr) {
+        console.warn('Backend register-pharmacy call error:', beErr);
+      }
+    }
+
+    // Ensure trial is initialized locally
     await getOrInitTrialStartDate();
 
     return list.length;
@@ -153,19 +168,56 @@ import { checkDeviceSession } from './auth';
 
 /**
  * Get full subscription status
- * If userEmail is provided, synchronizes authoritatively with central backend
+ * Authoritatively synchronized with central backend (https://api.xpharma.cloud/v1/subscription/status)
  */
 export async function getSubscriptionStatus(userEmail?: string): Promise<SubscriptionStatus> {
   const trialStartDate = await getOrInitTrialStartDate();
   let subscribedPlan = await getActiveSubscriptionPlan();
-  const uniquePharmacies = await getGlobalLinkedPharmacies();
+  let uniquePharmacies = await getGlobalLinkedPharmacies();
 
   let daysRemaining = 7;
   let isTrialExpired = false;
   let hasServerSync = false;
+  let serverAllowedPharmacies = 2;
 
-  // 1. If email is available, query backend for authoritative trial remaining days & plan
+  // 1. Authoritative check via /v1/subscription/status
   if (userEmail) {
+    try {
+      const url = `https://api.xpharma.cloud/v1/subscription/status?email=${encodeURIComponent(userEmail.trim().toLowerCase())}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          hasServerSync = true;
+          daysRemaining = typeof data.trial_days_left === 'number' ? data.trial_days_left : 7;
+          isTrialExpired = !!data.is_trial_expired;
+          subscribedPlan = typeof data.subscription_plan === 'number' ? data.subscription_plan : 0;
+          serverAllowedPharmacies = typeof data.allowed_pharmacies === 'number' ? data.allowed_pharmacies : (subscribedPlan > 0 ? subscribedPlan : 2);
+
+          // Update local plan cache
+          if (subscribedPlan > 0) {
+            await setActiveSubscriptionPlan(subscribedPlan);
+          }
+
+          // Merge server-linked pharmacies with local cache
+          if (Array.isArray(data.linked_pharmacies) && data.linked_pharmacies.length > 0) {
+            const mergedMap = new Map<string, string>();
+            uniquePharmacies.forEach((p) => mergedMap.set(p.code.toLowerCase(), p.name));
+            data.linked_pharmacies.forEach((p: any) => {
+              if (p.code) mergedMap.set(p.code.toLowerCase(), p.name || p.code);
+            });
+            uniquePharmacies = Array.from(mergedMap.entries()).map(([code, name]) => ({ code, name }));
+            await SecureStore.setItemAsync(GLOBAL_PHARMACIES_KEY, JSON.stringify(uniquePharmacies));
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Subscription server status sync error:', err);
+    }
+  }
+
+  // 2. Secondary sync with checkDeviceSession if server status endpoint wasn't reachable
+  if (!hasServerSync && userEmail) {
     try {
       const serverCheck = await checkDeviceSession(userEmail);
       if (serverCheck.success && typeof serverCheck.trialDaysLeft === 'number') {
@@ -178,11 +230,11 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
         }
       }
     } catch (err) {
-      console.warn('Subscription server sync warning:', err);
+      console.warn('Device session fallback sync error:', err);
     }
   }
 
-  // 2. Fallback to local time calculation if server was unreachable or email was not provided
+  // 3. Fallback to local time calculation if server was completely unreachable
   if (!hasServerSync) {
     const startMs = new Date(trialStartDate).getTime();
     const nowMs = Date.now();
@@ -192,7 +244,7 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
   }
 
   const isSubscribed = subscribedPlan > 0;
-  // Allowed pharmacies: 2 pharmacies across all warehouses during trial, or subscribedPlan count when subscribed
+  // Allowed pharmacies: 2 during trial, or subscribedPlan count when subscribed
   const allowedPharmacies = isSubscribed ? subscribedPlan : 2;
 
   return {
@@ -233,12 +285,15 @@ export async function checkCanAddPharmacy(userEmail?: string): Promise<{
 
   // If adding another pharmacy will exceed the allowed limit:
   if (status.linkedPharmaciesCount >= status.allowedPharmacies) {
-    const nextRequiredPlan = Math.min(5, Math.max(3, status.linkedPharmaciesCount + 1));
+    const nextRequiredPlan = !status.isSubscribed
+      ? 3 // Trial allows up to 2 pharmacies; adding 3rd requires Plan 3
+      : Math.min(5, status.allowedPharmacies + 1);
+
     return {
       canAdd: false,
       reason:
         !status.isSubscribed
-          ? 'الفترة التجريبية تتيح حتى صيدليتين (2) مجاناً لمدة 7 أيام. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في الباقة المناسبة.'
+          ? 'الفترة التجريبية تتيح حتى صيدليتين (2) مجاناً لمدة 7 أيام. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في باقة مناسبة.'
           : `لقد استنفدت باقتك الحالية (${status.allowedPharmacies} صيدليات). لإضافة فرع جديد يرجى ترقية الباقة.`,
       requiredPlan: nextRequiredPlan,
       currentCount: status.linkedPharmaciesCount,

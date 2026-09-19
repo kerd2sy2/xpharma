@@ -16,7 +16,14 @@ import {
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as WebBrowser from 'expo-web-browser';
-import { PRICING_PLANS, PricingPlan, getSubscriptionStatus, initiateKashierPayment, setActiveSubscriptionPlan } from '@/services/subscription';
+import {
+  PRICING_PLANS,
+  PricingPlan,
+  getSubscriptionStatus,
+  initiateKashierPayment,
+  setActiveSubscriptionPlan,
+  recordSubscriptionPayment,
+} from '@/services/subscription';
 import { useAuth } from '@/context/AuthContext';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');

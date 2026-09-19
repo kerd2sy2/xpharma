@@ -1,6 +1,7 @@
 package warehouse
 
 import (
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -237,11 +238,91 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 	}
 
 	linkedUID := req.UserID
-	if linkedUID == "" && req.Email != "" {
-		var foundUserID string
-		_ = s.router.Pool().QueryRow(c.Request.Context(), `SELECT id FROM public.users WHERE email = $1 LIMIT 1`, req.Email).Scan(&foundUserID)
-		if foundUserID != "" {
-			linkedUID = foundUserID
+	cleanEmail := strings.ToLower(strings.TrimSpace(req.Email))
+
+	// Enforce Subscription & Trial limits before linking a pharmacy
+	if linkedUID != "" || cleanEmail != "" {
+		var trialStartedAt time.Time
+		var subPlan int
+		var subExpiresAt *time.Time
+		var isSubActive bool
+		var dbUID string
+
+		err := s.router.Pool().QueryRow(
+			c.Request.Context(),
+			`SELECT id, COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0), subscription_expires_at, COALESCE(is_subscription_active, false)
+			 FROM public.users 
+			 WHERE (id::text = $1 AND $1 <> '') OR (LOWER(email) = LOWER($2) AND $2 <> '') 
+			 LIMIT 1`,
+			linkedUID, cleanEmail,
+		).Scan(&dbUID, &trialStartedAt, &subPlan, &subExpiresAt, &isSubActive)
+
+		if err == nil {
+			linkedUID = dbUID
+			trialDaysPassed := int(time.Since(trialStartedAt).Hours() / 24)
+			isSubscribed := isSubActive || subPlan > 0
+			if subExpiresAt != nil && subExpiresAt.Before(time.Now()) {
+				isSubscribed = false
+			}
+
+			// 1. Check if trial is expired
+			if trialDaysPassed >= 7 && !isSubscribed {
+				c.JSON(http.StatusForbidden, gin.H{
+					"error": "انتهت الفترة التجريبية (7 أيام). يرجى الاشتراك في الباقة المناسبة للاستمرار.",
+					"code":  "TRIAL_EXPIRED",
+				})
+				return
+			}
+
+			// 2. Allowed pharmacies: 2 during trial, or subPlan
+			allowedPharmacies := 2
+			if isSubscribed && subPlan > 0 {
+				allowedPharmacies = subPlan
+			}
+
+			// 3. Check if this specific pharmacy code is already linked to this user
+			var alreadyLinked bool
+			_ = s.router.Pool().QueryRow(
+				c.Request.Context(),
+				`SELECT EXISTS(SELECT 1 FROM public.pharmacies WHERE linked_user_id = $1 AND LOWER(code) = LOWER($2))`,
+				linkedUID, code,
+			).Scan(&alreadyLinked)
+
+			// 4. If it's a NEW distinct pharmacy code, check if user has reached their limit
+			if !alreadyLinked {
+				var currentDistinctCount int
+				_ = s.router.Pool().QueryRow(
+					c.Request.Context(),
+					`SELECT COUNT(DISTINCT code) FROM public.pharmacies WHERE linked_user_id = $1`,
+					linkedUID,
+				).Scan(&currentDistinctCount)
+
+				if currentDistinctCount >= allowedPharmacies {
+					if !isSubscribed {
+						c.JSON(http.StatusForbidden, gin.H{
+							"error":          "الفترة التجريبية تتيح ربط حتى صيدليتين (2) فقط مجاناً. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في باقة مدفوعة.",
+							"code":           "SUBSCRIPTION_REQUIRED",
+							"required_plan":  3,
+							"current_count":  currentDistinctCount,
+							"allowed_count":  allowedPharmacies,
+						})
+						return
+					} else {
+						nextPlan := allowedPharmacies + 1
+						if nextPlan > 5 {
+							nextPlan = 5
+						}
+						c.JSON(http.StatusForbidden, gin.H{
+							"error":          fmt.Sprintf("لقد استنفدت الحد الأقصى لباقة اشتراكك الحالية (%d صيدليات). يرجى ترقية باقتك لإضافة فرع جديد.", allowedPharmacies),
+							"code":           "PLAN_LIMIT_REACHED",
+							"required_plan":  nextPlan,
+							"current_count":  currentDistinctCount,
+							"allowed_count":  allowedPharmacies,
+						})
+						return
+					}
+				}
+			}
 		}
 	}
 

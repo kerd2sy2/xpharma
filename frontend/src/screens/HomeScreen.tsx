@@ -258,7 +258,7 @@ export default function HomeScreen() {
       const activeName = session?.pharmacy_name || wh.linked_pharmacy_name || '';
 
       if (activeCode && activeName) {
-        await registerGlobalPharmacy(activeCode, activeName);
+        await registerGlobalPharmacy(activeCode, activeName, user?.email);
       }
 
       setActivePortal({
@@ -306,7 +306,7 @@ export default function HomeScreen() {
       }
     }
 
-    await registerGlobalPharmacy(result.pharmacy_code || '', result.pharmacy_name || '');
+    await registerGlobalPharmacy(result.pharmacy_code || '', result.pharmacy_name || '', user?.email);
     const updatedStatus = await getSubscriptionStatus(user?.email);
     setSubscriptionStatusInfo(updatedStatus);
 
