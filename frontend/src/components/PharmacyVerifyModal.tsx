@@ -59,6 +59,10 @@ export default function PharmacyVerifyModal({
       setError('اكتب كود الصيدلية في المخزن الأول');
       return;
     }
+    if (!phone.trim()) {
+      setError('اكتب رقم الموبايل المسجل لدى المخزن لتأكيد الهوية');
+      return;
+    }
 
     setLoading(true);
     setError(null);

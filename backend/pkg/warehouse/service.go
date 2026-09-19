@@ -2,6 +2,7 @@ package warehouse
 
 import (
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -9,6 +10,53 @@ import (
 	"xpharma-backend/pkg/auth"
 	"xpharma-backend/pkg/db"
 )
+
+var nonDigitRegex = regexp.MustCompile(`\D+`)
+
+// normalizeEgyptianPhone strips country codes and leading zeros to get the core phone number
+func normalizeEgyptianPhone(p string) string {
+	digits := nonDigitRegex.ReplaceAllString(p, "")
+	if strings.HasPrefix(digits, "0020") {
+		digits = strings.TrimPrefix(digits, "0020")
+	} else if strings.HasPrefix(digits, "20") && len(digits) > 10 {
+		digits = strings.TrimPrefix(digits, "20")
+	}
+	digits = strings.TrimLeft(digits, "0")
+	return digits
+}
+
+// matchEgyptianPhones checks if inputPhone matches any candidate phone in dbPhones
+func matchEgyptianPhones(inputPhone, dbPhones string) bool {
+	normInput := normalizeEgyptianPhone(inputPhone)
+	if normInput == "" || len(normInput) < 7 {
+		return false
+	}
+
+	separatorRegex := regexp.MustCompile(`[,/;\s\n]+`)
+	candidates := separatorRegex.Split(dbPhones, -1)
+
+	for _, cand := range candidates {
+		normCand := normalizeEgyptianPhone(cand)
+		if normCand == "" {
+			continue
+		}
+		if normCand == normInput {
+			return true
+		}
+		if len(normCand) >= 8 && len(normInput) >= 8 {
+			if strings.HasSuffix(normCand, normInput) || strings.HasSuffix(normInput, normCand) {
+				return true
+			}
+		}
+	}
+
+	wholeDBNorm := normalizeEgyptianPhone(dbPhones)
+	if len(wholeDBNorm) >= 8 && len(normInput) >= 8 && strings.Contains(wholeDBNorm, normInput) {
+		return true
+	}
+
+	return false
+}
 
 type WarehouseService struct {
 	router       *db.TenantRouter
@@ -168,13 +216,24 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 		return
 	}
 
-	if phone != "" && dbPhone != "" {
-		cleanInputPhone := strings.ReplaceAll(strings.ReplaceAll(phone, " ", ""), "-", "")
-		cleanDBPhone := strings.ReplaceAll(strings.ReplaceAll(dbPhone, " ", ""), "-", "")
-		if !strings.Contains(cleanDBPhone, cleanInputPhone) && !strings.Contains(cleanInputPhone, cleanDBPhone) {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "رقم الهاتف غير مطابق لبيانات الصيدلية المسجلة لدى المستودع"})
-			return
-		}
+	if phone == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "رقم الهاتف المسجل لدى المخزن مطلوب لتأكيد الربط"})
+		return
+	}
+
+	dbPhone = strings.TrimSpace(dbPhone)
+	if dbPhone == "" {
+		c.JSON(http.StatusPreconditionRequired, gin.H{
+			"error": "لا يوجد رقم هاتف مسجل لهذه الصيدلية في سيستم المخزن. يرجى التواصل مع إدارة المخزن لإضافة رقم هاتفك في حسابك أولاً للتمكن من ربط الحساب.",
+		})
+		return
+	}
+
+	if !matchEgyptianPhones(phone, dbPhone) {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "رقم الهاتف غير مطابق لرقم الصيدلية المسجل في سيستم المخزن",
+		})
+		return
 	}
 
 	linkedUID := req.UserID

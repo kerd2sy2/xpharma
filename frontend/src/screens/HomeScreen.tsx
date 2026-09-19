@@ -28,6 +28,8 @@ import {
   Warehouse,
 } from '@/services/warehouse';
 import {
+  checkCanAddPharmacy,
+  getGlobalLinkedPharmacies,
   getSubscriptionStatus,
   registerGlobalPharmacy,
   SubscriptionStatus,
@@ -36,9 +38,9 @@ import {
 // Modular Components
 import { WarehouseCard } from '@/features/warehouses/components/WarehouseCard';
 import { RequestWarehouseModal } from '@/features/warehouses/components/RequestWarehouseModal';
-import { SettingsModal } from '@/features/settings/components/SettingsModal';
+import SettingsScreen from '@/screens/SettingsScreen';
+import SubscriptionScreen from '@/screens/SubscriptionScreen';
 import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
-import SubscriptionModal from '@/components/SubscriptionModal';
 import WarehousePortalScreen from '@/screens/WarehousePortalScreen';
 import XLogo, { XLogoHandle } from '@/components/XLogo';
 import PromoBannerCarousel, { BANNER_HEIGHT } from '@/components/PromoBannerCarousel';
@@ -266,6 +268,14 @@ export default function HomeScreen() {
         pharmacyName: activeName,
       });
     } else {
+      const check = await checkCanAddPharmacy(user?.email);
+      if (check.isTrialExpired) {
+        setSubscriptionReason('انتهت الفترة التجريبية (7 أيام). يرجى الاشتراك للتمكن من ربط ومتابعة المخازن.');
+        setSubscriptionRequiredPlan(Math.max(1, check.currentCount));
+        setIsTrialExpired(true);
+        setSubscriptionModalVisible(true);
+        return;
+      }
       setSelectedWarehouseForModal(wh);
       setVerifyModalVisible(true);
     }
@@ -273,6 +283,28 @@ export default function HomeScreen() {
 
   const handleVerificationSuccess = async (result: VerifyPharmacyResult) => {
     if (!selectedWarehouseForModal || !result.token) return;
+
+    // Check if adding this unique pharmacy branch is allowed within subscription plan
+    const uniqueList = await getGlobalLinkedPharmacies();
+    const cleanCode = (result.pharmacy_code || '').trim().toLowerCase();
+    const cleanName = (result.pharmacy_name || '').trim().toLowerCase();
+    const isExisting = uniqueList.some(
+      (p) =>
+        (cleanCode && p.code.trim().toLowerCase() === cleanCode) ||
+        (cleanName && p.name.trim().toLowerCase() === cleanName)
+    );
+
+    if (!isExisting) {
+      const check = await checkCanAddPharmacy(user?.email);
+      if (!check.canAdd) {
+        setVerifyModalVisible(false);
+        setSubscriptionReason(check.reason);
+        setSubscriptionRequiredPlan(check.requiredPlan || 3);
+        setIsTrialExpired(check.isTrialExpired);
+        setSubscriptionModalVisible(true);
+        return;
+      }
+    }
 
     await registerGlobalPharmacy(result.pharmacy_code || '', result.pharmacy_name || '');
     const updatedStatus = await getSubscriptionStatus(user?.email);
@@ -428,12 +460,45 @@ export default function HomeScreen() {
     );
   }
 
+  if (profileModalVisible) {
+    return (
+      <SettingsScreen
+        user={user}
+        subscriptionStatusInfo={subscriptionStatusInfo}
+        onOpenSubscriptionModal={() => {
+          setProfileModalVisible(false);
+          setSubscriptionModalVisible(true);
+        }}
+        onLogout={logout}
+        onBack={() => setProfileModalVisible(false)}
+      />
+    );
+  }
+
+  if (subscriptionModalVisible) {
+    return (
+      <SubscriptionScreen
+        reason={subscriptionReason}
+        isTrialExpired={isTrialExpired}
+        suggestedPlan={subscriptionRequiredPlan}
+        onSubscribed={async () => {
+          const updatedStatus = await getSubscriptionStatus(user?.email);
+          setSubscriptionStatusInfo(updatedStatus);
+        }}
+        onBack={() => setSubscriptionModalVisible(false)}
+      />
+    );
+  }
+
   const renderCategoryTabs = (isSticky = false) => (
     <View style={[styles.tabsContainer, isSticky && styles.tabsStickyContainer]}>
       <TouchableOpacity
-        style={styles.categoryTab}
+        style={[
+          styles.categoryTab,
+          selectedCategoryTab === 'pharma' && styles.categoryTabActive,
+        ]}
         onPress={() => setSelectedCategoryTab('pharma')}
-        activeOpacity={0.7}
+        activeOpacity={0.75}
       >
         <Text
           style={[
@@ -441,15 +506,17 @@ export default function HomeScreen() {
             selectedCategoryTab === 'pharma' && styles.categoryTabTextActive,
           ]}
         >
-          مخازن الأدوية
+          أدوية
         </Text>
-        {selectedCategoryTab === 'pharma' && <View style={styles.activeTabIndicator} />}
       </TouchableOpacity>
 
       <TouchableOpacity
-        style={styles.categoryTab}
+        style={[
+          styles.categoryTab,
+          selectedCategoryTab === 'accessories' && styles.categoryTabActive,
+        ]}
         onPress={() => setSelectedCategoryTab('accessories')}
-        activeOpacity={0.7}
+        activeOpacity={0.75}
       >
         <Text
           style={[
@@ -457,9 +524,8 @@ export default function HomeScreen() {
             selectedCategoryTab === 'accessories' && styles.categoryTabTextActive,
           ]}
         >
-          إكسسوارات ومستحضرات
+          إكسسوارات
         </Text>
-        {selectedCategoryTab === 'accessories' && <View style={styles.activeTabIndicator} />}
       </TouchableOpacity>
     </View>
   );
@@ -505,6 +571,20 @@ export default function HomeScreen() {
         }
         ListHeaderComponent={
           <View style={styles.listHeaderContainer}>
+            {/* Top overscroll bleed attached to header (moves with scroll, covers bounce area only when pulled down) */}
+            {hasBanners && (
+              <View
+                style={{
+                  position: 'absolute',
+                  top: -800,
+                  left: -50,
+                  right: -50,
+                  height: 800,
+                  backgroundColor: '#0F051D',
+                }}
+              />
+            )}
+
             {/* Dynamic Edge-to-Edge 25% Screen Height Top Banner Container */}
             {hasBanners ? (
               <View style={styles.heroBannerHeaderWrapper}>
@@ -621,12 +701,14 @@ export default function HomeScreen() {
           </View>
         }
         renderItem={({ item }) => (
-          <WarehouseCard
-            item={item}
-            onPress={handleWarehousePress}
-            width={isTablet ? TABLET_CARD_WIDTH : undefined}
-            marginBottom={isTablet ? CARD_GAP : 12}
-          />
+          <View style={!isTablet ? { paddingHorizontal: 16 } : undefined}>
+            <WarehouseCard
+              item={item}
+              onPress={handleWarehousePress}
+              width={isTablet ? TABLET_CARD_WIDTH : undefined}
+              marginBottom={isTablet ? CARD_GAP : 12}
+            />
+          </View>
         )}
         ListEmptyComponent={
           loadingWarehouses ? (
@@ -740,15 +822,6 @@ export default function HomeScreen() {
         onSuccess={handleVerificationSuccess}
       />
 
-      <SettingsModal
-        visible={profileModalVisible}
-        onClose={() => setProfileModalVisible(false)}
-        user={user}
-        subscriptionStatusInfo={subscriptionStatusInfo}
-        onOpenSubscriptionModal={() => setSubscriptionModalVisible(true)}
-        onLogout={logout}
-      />
-
       <RequestWarehouseModal
         visible={requestModalVisible}
         onClose={() => setRequestModalVisible(false)}
@@ -765,14 +838,6 @@ export default function HomeScreen() {
           setSearchQuery('');
         }}
       />
-
-      <SubscriptionModal
-        visible={subscriptionModalVisible}
-        onClose={() => setSubscriptionModalVisible(false)}
-        reason={subscriptionReason}
-        suggestedPlan={subscriptionRequiredPlan}
-        isTrialExpired={isTrialExpired}
-      />
     </View>
   );
 }
@@ -782,10 +847,10 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   listContent: {
-    paddingHorizontal: 16,
     paddingBottom: 40,
   },
   columnWrapper: {
+    paddingHorizontal: 16,
     gap: CARD_GAP,
   },
   fixedHeaderArea: {
@@ -796,7 +861,7 @@ const styles = StyleSheet.create({
     zIndex: 100,
   },
   heroBannerHeaderWrapper: {
-    marginHorizontal: -16, // Bleed edge-to-edge outside FlatList horizontal padding
+    width: '100%',
     position: 'relative',
     overflow: 'hidden',
     backgroundColor: '#0F051D',
@@ -815,7 +880,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 2,
+    paddingHorizontal: 16,
     height: 52,
     marginBottom: 8,
   },
@@ -880,17 +945,14 @@ const styles = StyleSheet.create({
     borderColor: '#FFFFFF',
   },
   stickyTabsHeaderWrapper: {
-    paddingHorizontal: 12,
+    paddingHorizontal: 0,
     paddingTop: 2,
     paddingBottom: 2,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EAE5F2',
-    backgroundColor: '#F9F7FD',
+    backgroundColor: '#F8F9FA',
   },
   tabsStickyContainer: {
-    marginTop: 0,
-    marginBottom: 0,
-    borderBottomWidth: 0,
+    marginTop: 2,
+    marginBottom: 4,
   },
   featherEdge: {
     height: 8,
@@ -944,6 +1006,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     marginTop: 40,
+    marginHorizontal: 16,
     gap: 12,
   },
   emptyText: {
@@ -957,6 +1020,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     borderWidth: 1,
     marginTop: 20,
+    marginHorizontal: 16,
     gap: 10,
   },
   emptyIconCircle: {
@@ -1000,39 +1064,37 @@ const styles = StyleSheet.create({
   tabsContainer: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    justifyContent: 'space-around',
-    borderBottomWidth: 1,
-    borderBottomColor: '#EAE5F2',
-    backgroundColor: '#F9F7FD',
-    marginTop: 6,
-    marginBottom: 8,
-    paddingHorizontal: 10,
+    justifyContent: 'center',
+    backgroundColor: '#EAEBF2',
+    borderRadius: 14,
+    padding: 3.5,
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 10,
   },
   categoryTab: {
     flex: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
+    paddingVertical: 9.5,
     alignItems: 'center',
     justifyContent: 'center',
-    position: 'relative',
+    borderRadius: 11,
+  },
+  categoryTabActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1.5 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
   },
   categoryTabText: {
-    fontSize: isTablet ? 15.5 : 14,
-    fontWeight: '700',
-    color: '#766B8A',
+    fontSize: isTablet ? 15 : 13.5,
+    fontWeight: '600',
+    color: '#64748B',
     textAlign: 'center',
   },
   categoryTabTextActive: {
     color: '#3F0082',
-    fontWeight: '900',
-  },
-  activeTabIndicator: {
-    position: 'absolute',
-    bottom: -1,
-    left: 20,
-    right: 20,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: '#3F0082',
+    fontWeight: '800',
   },
 });

@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   Dimensions,
   Linking,
   Modal,
@@ -13,7 +15,8 @@ import {
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { PRICING_PLANS, PricingPlan, setActiveSubscriptionPlan } from '@/services/subscription';
+import * as WebBrowser from 'expo-web-browser';
+import { PRICING_PLANS, PricingPlan, getSubscriptionStatus, initiateKashierPayment, setActiveSubscriptionPlan } from '@/services/subscription';
 import { useAuth } from '@/context/AuthContext';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -32,15 +35,111 @@ export default function SubscriptionModal({
   onClose,
   reason,
   isTrialExpired = false,
-  suggestedPlan = 2,
+  suggestedPlan = 3,
   onSubscribed,
 }: SubscriptionModalProps) {
   const { user } = useAuth();
-  const [selectedPlan, setSelectedPlan] = useState<number>(suggestedPlan || 2);
+  const [selectedPlan, setSelectedPlan] = useState<number>(suggestedPlan || 3);
   const [showSuccess, setShowSuccess] = useState(false);
   const [activatedPlanObj, setActivatedPlanObj] = useState<PricingPlan | null>(null);
+  const [isCheckingServer, setIsCheckingServer] = useState(false);
+  const [isProcessingKashier, setIsProcessingKashier] = useState(false);
 
   const activePlanObj = PRICING_PLANS.find((p) => p.pharmacies === selectedPlan) || PRICING_PLANS[0];
+
+  const handlePayWithKashier = async () => {
+    if (!user?.email) {
+      Alert.alert('تنبيه', 'يرجى تسجيل الدخول بحسابك أولاً لإتمام الدفع الإلكتروني.');
+      return;
+    }
+
+    setIsProcessingKashier(true);
+    try {
+      const res = await initiateKashierPayment({
+        email: user.email,
+        plan: selectedPlan,
+        userName: user.name,
+      });
+
+      if (!res.success || !res.session_url) {
+        Alert.alert('تعذر فتح بوابة كاشير', res.error || 'يرجى المحاولة مرة أخرى أو الدفع عبر واتساب.');
+        setIsProcessingKashier(false);
+        return;
+      }
+
+      // Open AuthSession that intercepts xpharma:// redirect and closes browser automatically
+      const result = await WebBrowser.openAuthSessionAsync(
+        res.session_url,
+        'xpharma://'
+      );
+
+      // If user finished payment and returned:
+      if (result.type === 'success') {
+        const returnUrl = result.url || '';
+        if (
+          returnUrl.includes('SUCCESS') ||
+          returnUrl.includes('CAPTURED') ||
+          returnUrl.includes('PAID') ||
+          returnUrl.includes('subscription-success') ||
+          !returnUrl.includes('FAILED')
+        ) {
+          await setActiveSubscriptionPlan(selectedPlan);
+          setActivatedPlanObj(activePlanObj);
+          setShowSuccess(true);
+          if (onSubscribed) onSubscribed(selectedPlan);
+          return;
+        }
+      }
+
+      // Check server for activation
+      setIsCheckingServer(true);
+      setTimeout(async () => {
+        try {
+          const status = await getSubscriptionStatus(user.email);
+          if (status.isSubscribed && status.subscribedPlan > 0) {
+            const matchingPlan = PRICING_PLANS.find((p) => p.pharmacies === status.subscribedPlan) || PRICING_PLANS[0];
+            setActivatedPlanObj(matchingPlan);
+            setShowSuccess(true);
+            if (onSubscribed) onSubscribed(status.subscribedPlan);
+          } else {
+            // Offer confirmation to instantly unlock
+            Alert.alert(
+              'تأكيد الدفع',
+              'هل أتممت عملية الدفع بنجاح في كاشير لتفعيل باقتك فوراً؟',
+              [
+                { text: 'إلغاء', style: 'cancel' },
+                {
+                  text: 'نعم، تم الدفع بنجاح',
+                  onPress: async () => {
+                    await setActiveSubscriptionPlan(selectedPlan);
+                    recordSubscriptionPayment({
+                      user_email: user?.email || '',
+                      user_name: user?.name || 'دكتور صيدلي',
+                      user_phone: user?.phone || '',
+                      plan_type: `${selectedPlan} صيدليات`,
+                      amount: activePlanObj.price,
+                      payment_method: 'kashier',
+                      status: 'active',
+                      order_id: res.order_id || '',
+                      notes: `تفعيل فوري لاشتراك باقة ${activePlanObj.label} عبر تطبيق XPharma`,
+                    }).catch(() => {});
+                    setActivatedPlanObj(activePlanObj);
+                    setShowSuccess(true);
+                    if (onSubscribed) onSubscribed(selectedPlan);
+                  },
+                },
+              ]
+            );
+          }
+        } catch {}
+        setIsCheckingServer(false);
+      }, 800);
+    } catch (e: any) {
+      Alert.alert('خطأ', 'حدث خطأ أثناء فتح بوابة الدفع: ' + (e.message || 'يرجى المحاولة لاحقاً'));
+    } finally {
+      setIsProcessingKashier(false);
+    }
+  };
 
   const handleSubscribeWhatsApp = async () => {
     const text = encodeURIComponent(
@@ -48,7 +147,8 @@ export default function SubscriptionModal({
       `• الباقة: ${activePlanObj.label} (${activePlanObj.pharmacies} صيدليات)\n` +
       `• السعر: ${activePlanObj.price} ج.م / شهرياً\n` +
       `• اسم المستخدم: ${user?.name || 'دكتور صيدلي'}\n` +
-      `• البريد: ${user?.email || '—'}`
+      `• البريد: ${user?.email || '—'}\n` +
+      `• الجهاز: ${user?.deviceId || '—'}`
     );
 
     const whatsappUrl = `https://wa.me/201019688000?text=${text}`;
@@ -65,11 +165,30 @@ export default function SubscriptionModal({
     }
   };
 
-  const handleSimulateActivation = async () => {
-    await setActiveSubscriptionPlan(selectedPlan);
-    setActivatedPlanObj(activePlanObj);
-    setShowSuccess(true);
-    if (onSubscribed) onSubscribed(selectedPlan);
+  const handleCheckAdminActivation = async () => {
+    if (!user?.email) {
+      Alert.alert('تنبيه', 'يرجى تسجيل الدخول بحسابك أولاً للتحقق من حالة الاشتراك.');
+      return;
+    }
+    setIsCheckingServer(true);
+    try {
+      const status = await getSubscriptionStatus(user.email);
+      if (status.isSubscribed && status.subscribedPlan > 0) {
+        const matchingPlan = PRICING_PLANS.find((p) => p.pharmacies === status.subscribedPlan) || PRICING_PLANS[0];
+        setActivatedPlanObj(matchingPlan);
+        setShowSuccess(true);
+        if (onSubscribed) onSubscribed(status.subscribedPlan);
+      } else {
+        Alert.alert(
+          'طلبك قيد المراجعة ⏳',
+          'لم يتم تفعيل الباقة حتى الآن.\n\nإذا أتممت الدفع عبر كاشير أو واتساب سيتم التفعيل تلقائياً، يمكنك التحقق مجدداً بعد لحظات.'
+        );
+      }
+    } catch (e) {
+      Alert.alert('خطأ', 'تعذر الاتصال بالخادم. يرجى التأكد من اتصال الإنترنت والمحاولة مرة أخرى.');
+    } finally {
+      setIsCheckingServer(false);
+    }
   };
 
   const handleCloseSuccess = () => {
@@ -294,24 +413,52 @@ export default function SubscriptionModal({
                   {/* Actions Column */}
                   <View style={styles.actionsBox}>
                     <TouchableOpacity
+                      style={styles.kashierBtn}
+                      onPress={handlePayWithKashier}
+                      disabled={isProcessingKashier}
+                      activeOpacity={0.88}
+                    >
+                      <LinearGradient
+                        colors={['#3B0764', '#581C87', '#6B21A8']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={styles.kashierBtnGradient}
+                      >
+                        {isProcessingKashier ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <Ionicons name="card" size={20} color="#FBBF24" />
+                        )}
+                        <Text style={styles.kashierBtnText}>
+                          {isProcessingKashier ? 'جاري تجهيز بوابة الدفع...' : `الدفع والتفعيل الفوري (${activePlanObj.price} ج.م)`}
+                        </Text>
+                      </LinearGradient>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
                       style={styles.whatsappBtn}
                       onPress={handleSubscribeWhatsApp}
                       activeOpacity={0.88}
                     >
                       <Ionicons name="logo-whatsapp" size={21} color="#FFFFFF" />
                       <Text style={styles.whatsappBtnText}>
-                        طلب الاشتراك عبر واتساب ({activePlanObj.price} ج.م / شهر)
+                        تحويل يدوي وتأكيد عبر واتساب ({activePlanObj.price} ج.م)
                       </Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                      style={styles.directActivateBtn}
-                      onPress={handleSimulateActivation}
+                      style={styles.checkServerBtn}
+                      onPress={handleCheckAdminActivation}
+                      disabled={isCheckingServer}
                       activeOpacity={0.8}
                     >
-                      <Ionicons name="flash" size={16} color="#3F0082" />
-                      <Text style={styles.directActivateBtnText}>
-                        تفعيل الباقة فوراً ({activePlanObj.label})
+                      {isCheckingServer ? (
+                        <ActivityIndicator size="small" color="#4338CA" />
+                      ) : (
+                        <Ionicons name="refresh-circle" size={20} color="#4338CA" />
+                      )}
+                      <Text style={styles.checkServerBtnText}>
+                        {isCheckingServer ? 'جاري التحقق من الخادم...' : 'التحقق من تفعيل الحساب من الإدارة'}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -561,6 +708,28 @@ const styles = StyleSheet.create({
   actionsBox: {
     gap: 10,
   },
+  kashierBtn: {
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: '#581C87',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.28,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  kashierBtnGradient: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  kashierBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
+  },
   whatsappBtn: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
@@ -580,19 +749,19 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
   },
-  directActivateBtn: {
+  checkServerBtn: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    backgroundColor: '#FFFFFF',
+    gap: 8,
+    backgroundColor: '#EEF2FF',
     borderWidth: 1.5,
-    borderColor: '#3F0082',
+    borderColor: '#C7D2FE',
     borderRadius: 16,
     paddingVertical: 13,
   },
-  directActivateBtnText: {
-    color: '#3F0082',
+  checkServerBtnText: {
+    color: '#4338CA',
     fontSize: 14,
     fontWeight: '800',
   },

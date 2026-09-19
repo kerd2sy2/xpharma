@@ -38,14 +38,23 @@ import { toast } from 'sonner';
 
 interface Subscription {
   id: string;
-  tenant_id: string;
+  tenant_id: string | null;
   tenant_name: string;
-  tenant_slug: string;
+  tenant_slug: string | null;
   pharmacy_id: string | null;
   pharmacy_name: string | null;
   pharmacy_code: string | null;
   pharmacy_phone: string | null;
+  user_email: string | null;
+  user_name: string | null;
+  user_phone: string | null;
   plan_type: string;
+  amount: number;
+  payment_method: string;
+  order_id: string | null;
+  transaction_id: string | null;
+  card_brand: string | null;
+  masked_card: string | null;
   status: 'active' | 'pending_approval' | 'rejected' | 'expired';
   start_date: string;
   end_date: string;
@@ -58,7 +67,7 @@ interface Subscription {
 export default function BillingReviewPage() {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterTab, setFilterTab] = useState<'all' | 'pending' | 'active' | 'rejected'>('all');
+  const [filterTab, setFilterTab] = useState<'all' | 'pending' | 'active' | 'kashier' | 'rejected'>('all');
 
   // Receipt Preview modal
   const [previewSub, setPreviewSub] = useState<Subscription | null>(null);
@@ -145,12 +154,24 @@ export default function BillingReviewPage() {
   const filteredSubs = subscriptions.filter((s) => {
     if (filterTab === 'pending') return s.status === 'pending_approval';
     if (filterTab === 'active') return s.status === 'active';
+    if (filterTab === 'kashier') return s.payment_method === 'kashier' || !!s.transaction_id;
     if (filterTab === 'rejected') return s.status === 'rejected';
     return true;
   });
 
   const pendingCount = subscriptions.filter((s) => s.status === 'pending_approval').length;
   const activeCount = subscriptions.filter((s) => s.status === 'active').length;
+  const totalRevenue = subscriptions
+    .filter((s) => s.status === 'active')
+    .reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
+
+  const formatPlanName = (plan: string) => {
+    if (plan === 'yearly') return 'سنوي';
+    if (plan === 'quarterly') return 'ربع سنوي';
+    if (plan === 'monthly') return 'شهري';
+    if (plan.startsWith('P') || plan.includes('صيدل')) return plan;
+    return `${plan} صيدليات`;
+  };
 
   return (
     <PageContainer>
@@ -158,27 +179,27 @@ export default function BillingReviewPage() {
         {/* Header */}
         <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
           <div>
-            <h1 className='text-2xl font-bold tracking-tight'>مراجعة الاشتراكات ومدفوعات إنستاباي (Billing Review)</h1>
+            <h1 className='text-2xl font-bold tracking-tight'>مراجعة الفواتير والاشتراكات (Billing & Subscriptions)</h1>
             <p className='text-sm text-muted-foreground'>
-              فحص إيصالات التحويل البنكي وتطبيق InstaPay وتفعيل اشتراكات الصيدليات في السحابة.
+              متابعة عمليات الدفع الإلكتروني (بوابة Kashier) والتحويلات البنكية (InstaPay) وتفعيل اشتراكات الصيدليات.
             </p>
           </div>
           <Button variant='outline' size='sm' onClick={fetchSubscriptions} disabled={loading}>
             <IconRefresh className={`size-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
-            تحديث البيانات
+            تحديث الفواتير
           </Button>
         </div>
 
         {/* Stats */}
-        <div className='grid gap-4 md:grid-cols-3'>
+        <div className='grid gap-4 md:grid-cols-4'>
           <Card className={pendingCount > 0 ? 'border-amber-500/60 bg-amber-500/5' : ''}>
             <CardHeader className='flex flex-row items-center justify-between pb-2'>
-              <CardTitle className='text-sm font-medium'>طلبات معلقة للمراجعة</CardTitle>
+              <CardTitle className='text-sm font-medium'>معاملات بانتظار المراجعة</CardTitle>
               <IconReceipt className='size-4 text-amber-500' />
             </CardHeader>
             <CardContent>
               <div className='text-2xl font-bold text-amber-600'>{pendingCount}</div>
-              <p className='text-xs text-muted-foreground'>إيصالات إنستاباي بانتظار فحص المشرف</p>
+              <p className='text-xs text-muted-foreground'>إيصالات إنستاباي اليدوية</p>
             </CardContent>
           </Card>
           <Card>
@@ -188,17 +209,27 @@ export default function BillingReviewPage() {
             </CardHeader>
             <CardContent>
               <div className='text-2xl font-bold text-emerald-600'>{activeCount}</div>
-              <p className='text-xs text-muted-foreground'>صيدلية مفعلة ومحدثة</p>
+              <p className='text-xs text-muted-foreground'>مفعلة وتعمل الآن</p>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className='flex flex-row items-center justify-between pb-2'>
-              <CardTitle className='text-sm font-medium'>إجمالي السجلات</CardTitle>
-              <IconCreditCard className='size-4 text-muted-foreground' />
+              <CardTitle className='text-sm font-medium'>إجمالي الإيرادات</CardTitle>
+              <IconCreditCard className='size-4 text-primary' />
+            </CardHeader>
+            <CardContent>
+              <div className='text-2xl font-bold text-primary'>{totalRevenue.toLocaleString()} ج.م</div>
+              <p className='text-xs text-muted-foreground'>من الاشتراكات المعتمدة</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className='flex flex-row items-center justify-between pb-2'>
+              <CardTitle className='text-sm font-medium'>إجمالي العمليات</CardTitle>
+              <IconReceipt className='size-4 text-muted-foreground' />
             </CardHeader>
             <CardContent>
               <div className='text-2xl font-bold'>{subscriptions.length}</div>
-              <p className='text-xs text-muted-foreground'>سجل اشتراك مسجل</p>
+              <p className='text-xs text-muted-foreground'>عملية مسجلة بالنظام</p>
             </CardContent>
           </Card>
         </div>
@@ -207,19 +238,20 @@ export default function BillingReviewPage() {
         <Card>
           <CardHeader className='flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4'>
             <div>
-              <CardTitle>سجل الاشتراكات والمدفوعات</CardTitle>
-              <CardDescription>عرض تفاصيل التحويلات ورقم المعاملة وصور الإيصالات المرفوعة.</CardDescription>
+              <CardTitle>سجل الفواتير وعمليات الدفع</CardTitle>
+              <CardDescription>عرض فوري لعمليات الدفع عبر كاشير وتحويلات إنستاباي وتفاصيل العميل.</CardDescription>
             </div>
             <Tabs value={filterTab} onValueChange={(v: any) => setFilterTab(v)}>
               <TabsList>
                 <TabsTrigger value='all'>الكل ({subscriptions.length})</TabsTrigger>
+                <TabsTrigger value='kashier'>بوابة كاشير 💳</TabsTrigger>
+                <TabsTrigger value='active'>النشطة ({activeCount})</TabsTrigger>
                 <TabsTrigger value='pending' className='relative'>
                   المعلقة ({pendingCount})
                   {pendingCount > 0 && (
                     <span className='size-2 rounded-full bg-amber-500 absolute -top-0.5 -right-0.5' />
                   )}
                 </TabsTrigger>
-                <TabsTrigger value='active'>النشطة ({activeCount})</TabsTrigger>
                 <TabsTrigger value='rejected'>المرفوضة</TabsTrigger>
               </TabsList>
             </Tabs>
@@ -229,77 +261,79 @@ export default function BillingReviewPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>الصيدلية</TableHead>
-                    <TableHead>المخزن التابع له</TableHead>
+                    <TableHead>العميل / الصيدلية</TableHead>
+                    <TableHead>طريقة الدفع</TableHead>
                     <TableHead>نوع الباقة</TableHead>
-                    <TableHead>رقم معاملة إنستاباي</TableHead>
-                    <TableHead>الإيصال</TableHead>
-                    <TableHead>تاريخ الانتهاء</TableHead>
+                    <TableHead>المبلغ المدفوع</TableHead>
+                    <TableHead>رقم العملية / المرجع</TableHead>
+                    <TableHead>تاريخ العملية</TableHead>
                     <TableHead>الحالة</TableHead>
-                    <TableHead className='text-end'>الإجراء</TableHead>
+                    <TableHead className='text-end'>التفاصيل</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {loading && subscriptions.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={8} className='text-center py-8 text-muted-foreground'>
-                        جاري التحميل...
+                        جاري تحميل الفواتير...
                       </TableCell>
                     </TableRow>
                   ) : filteredSubs.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={8} className='text-center py-8 text-muted-foreground'>
-                        لا توجد اشتراكات مطابقة للفلتر المحدد.
+                        لا توجد فواتير أو اشتراكات مسجلة مطابقة للفلتر.
                       </TableCell>
                     </TableRow>
                   ) : (
                     filteredSubs.map((s) => (
                       <TableRow key={s.id}>
                         <TableCell>
-                          <div className='font-semibold'>{s.pharmacy_name || 'غير محدد'}</div>
-                          <div className='text-xs text-muted-foreground'>كود: {s.pharmacy_code || '-'}</div>
+                          <div className='font-semibold'>{s.user_name || s.pharmacy_name || 'مشترك تطبيق'}</div>
+                          <div className='text-xs text-muted-foreground font-mono'>
+                            {s.user_email || s.pharmacy_phone || s.pharmacy_code || '-'}
+                          </div>
                         </TableCell>
                         <TableCell>
-                          <span className='font-medium'>{s.tenant_name}</span>
+                          {s.payment_method === 'kashier' || s.transaction_id ? (
+                            <Badge variant='outline' className='border-indigo-500 text-indigo-600 bg-indigo-50 dark:bg-indigo-950/30 gap-1 text-xs'>
+                              <IconCreditCard className='size-3' />
+                              كاشير (أونلاين)
+                            </Badge>
+                          ) : (
+                            <Badge variant='outline' className='border-amber-500 text-amber-600 bg-amber-50 dark:bg-amber-950/30 gap-1 text-xs'>
+                              <IconReceipt className='size-3' />
+                              إنستاباي (تحويل)
+                            </Badge>
+                          )}
                         </TableCell>
                         <TableCell>
                           <Badge variant='secondary' className='text-xs'>
-                            {s.plan_type === 'yearly' ? 'سنوي' : s.plan_type === 'quarterly' ? 'ربع سنوي' : 'شهري'}
+                            {formatPlanName(s.plan_type)}
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          {s.receipt_ref ? (
+                          <span className='font-bold text-emerald-600 dark:text-emerald-400 font-mono'>
+                            {s.amount ? `${s.amount} ج.م` : '-'}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          {s.receipt_ref || s.transaction_id || s.order_id ? (
                             <code className='text-xs bg-muted px-1.5 py-0.5 rounded font-mono'>
-                              {s.receipt_ref}
+                              {s.transaction_id || s.receipt_ref || s.order_id}
                             </code>
                           ) : (
                             <span className='text-xs text-muted-foreground'>-</span>
                           )}
                         </TableCell>
                         <TableCell>
-                          {s.receipt_url ? (
-                            <Button
-                              variant='outline'
-                              size='sm'
-                              className='h-7 text-xs gap-1'
-                              onClick={() => setPreviewSub(s)}
-                            >
-                              <IconPhoto className='size-3.5' />
-                              عرض الإيصال
-                            </Button>
-                          ) : (
-                            <span className='text-xs text-muted-foreground'>لا يوجد مرفق</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
                           <span className='text-xs text-muted-foreground'>
-                            {s.end_date ? new Date(s.end_date).toLocaleDateString('ar-EG') : '-'}
+                            {s.created_at ? new Date(s.created_at).toLocaleDateString('ar-EG') : '-'}
                           </span>
                         </TableCell>
                         <TableCell>
                           {s.status === 'active' ? (
                             <Badge variant='outline' className='border-emerald-500 text-emerald-600 bg-emerald-50 dark:bg-emerald-950/30'>
-                              نشط (Active)
+                              مدفوع ونشط
                             </Badge>
                           ) : s.status === 'pending_approval' ? (
                             <Badge variant='outline' className='border-amber-500 text-amber-600 bg-amber-50 dark:bg-amber-950/30 animate-pulse'>
@@ -314,38 +348,14 @@ export default function BillingReviewPage() {
                           )}
                         </TableCell>
                         <TableCell className='text-end'>
-                          {s.status === 'pending_approval' ? (
-                            <div className='flex items-center justify-end gap-1.5'>
-                              <Button
-                                size='sm'
-                                className='h-8 bg-emerald-600 hover:bg-emerald-700 text-white gap-1'
-                                onClick={() => handleApprove(s.id, s.pharmacy_name || '')}
-                                disabled={actionLoading}
-                              >
-                                <IconCheck className='size-3.5' />
-                                اعتماد
-                              </Button>
-                              <Button
-                                size='sm'
-                                variant='destructive'
-                                className='h-8 gap-1'
-                                onClick={() => setRejectSub(s)}
-                                disabled={actionLoading}
-                              >
-                                <IconX className='size-3.5' />
-                                رفض
-                              </Button>
-                            </div>
-                          ) : (
-                            <Button
-                              variant='ghost'
-                              size='sm'
-                              className='h-8 text-xs'
-                              onClick={() => setPreviewSub(s)}
-                            >
-                              التفاصيل
-                            </Button>
-                          )}
+                          <Button
+                            variant='ghost'
+                            size='sm'
+                            className='h-8 text-xs'
+                            onClick={() => setPreviewSub(s)}
+                          >
+                            التفاصيل
+                          </Button>
                         </TableCell>
                       </TableRow>
                     ))
@@ -356,6 +366,7 @@ export default function BillingReviewPage() {
           </CardContent>
         </Card>
       </div>
+
 
       {/* Dialog: Receipt Preview */}
       <Dialog open={!!previewSub} onOpenChange={(open) => !open && setPreviewSub(null)}>

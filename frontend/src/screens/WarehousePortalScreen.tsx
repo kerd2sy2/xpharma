@@ -517,7 +517,7 @@ export default function WarehousePortalScreen({
     const check = await checkCanAddPharmacy(user?.email);
     if (!check.canAdd) {
       setSubscriptionReason(check.reason);
-      setSubscriptionRequiredPlan(check.requiredPlan || 2);
+      setSubscriptionRequiredPlan(check.requiredPlan || 3);
       setIsTrialExpired(check.isTrialExpired);
       setShowSubscriptionModal(true);
       return;

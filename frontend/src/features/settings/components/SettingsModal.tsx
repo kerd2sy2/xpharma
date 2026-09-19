@@ -15,6 +15,7 @@ import {
 import { Ionicons, FontAwesome } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useOTAUpdates } from '../hooks/useOTAUpdates';
+import UpdateModal from '@/components/UpdateModal';
 import { SubscriptionStatus } from '@/services/subscription';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -42,7 +43,16 @@ export function SettingsModal({
   onOpenSubscriptionModal,
   onLogout,
 }: SettingsModalProps) {
-  const { checkingUpdate, checkForUpdates } = useOTAUpdates();
+  const {
+    checkingUpdate,
+    modalVisible,
+    modalStatus,
+    errorMessage,
+    checkForUpdates,
+    downloadUpdate,
+    restartApp,
+    closeUpdateModal,
+  } = useOTAUpdates();
 
   const handleSupportPress = () => {
     Linking.openURL('https://wa.me/201019688000').catch(() => {
@@ -51,12 +61,13 @@ export function SettingsModal({
   };
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
+    <>
+      <Modal
+        visible={visible}
+        transparent
+        animationType="slide"
+        onRequestClose={onClose}
+      >
       <TouchableWithoutFeedback onPress={onClose}>
         <View style={styles.modalOverlay}>
           <TouchableWithoutFeedback>
@@ -332,13 +343,24 @@ export function SettingsModal({
                   <Text style={styles.logoutBtnText}>تسجيل الخروج من الحساب</Text>
                 </TouchableOpacity>
 
-                <View style={{ height: 20 }} />
-              </ScrollView>
-            </View>
-          </TouchableWithoutFeedback>
-        </View>
-      </TouchableWithoutFeedback>
-    </Modal>
+                  <View style={{ height: 20 }} />
+                </ScrollView>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      <UpdateModal
+        visible={modalVisible}
+        status={modalStatus}
+        errorMessage={errorMessage}
+        onClose={closeUpdateModal}
+        onDownload={downloadUpdate}
+        onRestart={restartApp}
+        onRetry={checkForUpdates}
+      />
+    </>
   );
 }
 

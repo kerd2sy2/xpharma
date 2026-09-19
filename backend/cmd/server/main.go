@@ -113,11 +113,15 @@ func main() {
 		authGroup.POST("/reset-device", authHandler.ResetDevice)
 	}
 
-	// 6. Subscription Module
+	// 6. Subscription & Payment Module (Kashier Integration)
 	subGroup := r.Group("/v1/subscription")
 	{
 		subGroup.GET("/status", subscriptionService.GetStatus)
 		subGroup.POST("/register-pharmacy", subscriptionService.RegisterPharmacy)
+		subGroup.POST("/record-payment", subscriptionService.RecordPayment)
+		subGroup.POST("/kashier/initiate", subscriptionService.InitiateSession)
+		subGroup.POST("/kashier/webhook", subscriptionService.HandleWebhook)
+		subGroup.GET("/kashier/redirect", subscriptionService.HandleRedirect)
 	}
 
 	srv := &http.Server{

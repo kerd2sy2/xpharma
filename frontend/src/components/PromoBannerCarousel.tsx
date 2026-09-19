@@ -8,18 +8,15 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Ionicons } from '@expo/vector-icons';
 import { Banner, formatBannerImageUrl } from '@/services/banner';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-
-// STRICT FIXED DIMENSIONS: Exactly 50% of screen height, 100% of screen width
-export const BANNER_HEIGHT = Math.round(SCREEN_HEIGHT * 0.5);
-export const BANNER_WIDTH = SCREEN_WIDTH;
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+export const BANNER_HEIGHT = Math.round(SCREEN_HEIGHT / 3);
 
 interface PromoBannerCarouselProps {
   banners: Banner[];
@@ -28,6 +25,8 @@ interface PromoBannerCarouselProps {
 }
 
 export default function PromoBannerCarousel({ banners, onWarehousePress }: PromoBannerCarouselProps) {
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const currentBannerHeight = Math.round(windowHeight / 3);
   const [activeIndex, setActiveIndex] = useState(0);
   const flatListRef = useRef<FlatList<Banner>>(null);
   const autoScrollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -68,7 +67,7 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
 
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const offsetX = event.nativeEvent.contentOffset.x;
-    const index = Math.round(offsetX / BANNER_WIDTH);
+    const index = Math.round(offsetX / windowWidth);
     if (index >= 0 && index < displayBanners.length && index !== activeIndex) {
       setActiveIndex(index);
     }
@@ -78,58 +77,89 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
     return null;
   }
 
-  return (
-    <View style={styles.bannerContainer}>
-      <FlatList
-        ref={flatListRef}
-        data={displayBanners}
-        keyExtractor={(item) => item.id}
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        onScroll={onScroll}
-        scrollEventThrottle={16}
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={styles.bannerItem}
-            activeOpacity={item.action_type !== 'none' ? 0.92 : 1}
-            onPress={() => handleBannerPress(item)}
-          >
-            {/* Edge-to-Edge Background Image with resizeMode="cover" */}
-            <Image
-              source={{ uri: formatBannerImageUrl(item.image_url) }}
-              style={styles.bannerImage}
-              contentFit="cover"
-              transition={200}
-              cachePolicy="memory-disk"
-            />
-
-            {/* Subtle Bottom Gradient for Text Legibility */}
-            {(Boolean(item.title) || Boolean(item.subtitle)) && (
-              <LinearGradient
-                colors={['transparent', 'rgba(10, 3, 20, 0.45)', 'rgba(10, 3, 20, 0.88)']}
-                style={styles.gradientOverlay}
-              />
-            )}
-
-            {/* Bottom Content: Title & Subtitle */}
-            {(Boolean(item.title) || Boolean(item.subtitle)) ? (
-              <View style={styles.bottomContent}>
-                {item.title ? (
-                  <Text style={styles.titleText} numberOfLines={1}>
-                    {item.title}
-                  </Text>
-                ) : null}
-                {item.subtitle ? (
-                  <Text style={styles.subtitleText} numberOfLines={2}>
-                    {item.subtitle}
-                  </Text>
-                ) : null}
-              </View>
-            ) : null}
-          </TouchableOpacity>
-        )}
+  const renderSingleBanner = (item: Banner, index = 0) => (
+    <TouchableOpacity
+      key={item.id || index}
+      style={[styles.bannerItem, { width: windowWidth, height: currentBannerHeight }]}
+      activeOpacity={item.action_type !== 'none' ? 0.92 : 1}
+      onPress={() => handleBannerPress(item)}
+    >
+      {/* 100% Full Edge-to-Edge Centered Cover Image */}
+      <Image
+        source={{ uri: formatBannerImageUrl(item.image_url) }}
+        style={StyleSheet.absoluteFill}
+        contentFit="cover"
+        contentPosition="center"
+        transition={200}
+        cachePolicy="memory-disk"
       />
+
+      {/* Top Gradient: Ensures Status Bar icons and floating header buttons are crystal clear */}
+      <LinearGradient
+        colors={[
+          'rgba(10, 3, 20, 0.78)',
+          'rgba(10, 3, 20, 0.40)',
+          'rgba(10, 3, 20, 0.12)',
+          'transparent',
+        ]}
+        locations={[0, 0.42, 0.75, 1]}
+        style={styles.topGradient}
+        pointerEvents="none"
+      />
+
+      {/* Bottom Gradient: Gives smooth luxury shading and ensures text legibility */}
+      <LinearGradient
+        colors={[
+          'transparent',
+          'rgba(10, 3, 20, 0.15)',
+          'rgba(10, 3, 20, 0.52)',
+          'rgba(10, 3, 20, 0.88)',
+        ]}
+        locations={[0, 0.35, 0.68, 1]}
+        style={styles.bottomGradient}
+        pointerEvents="none"
+      />
+
+      {/* Bottom Content: Title & Subtitle */}
+      {(Boolean(item.title) || Boolean(item.subtitle)) ? (
+        <View style={styles.bottomContent}>
+          {item.title ? (
+            <Text style={styles.titleText} numberOfLines={1}>
+              {item.title}
+            </Text>
+          ) : null}
+          {item.subtitle ? (
+            <Text style={styles.subtitleText} numberOfLines={2}>
+              {item.subtitle}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+    </TouchableOpacity>
+  );
+
+  return (
+    <View style={[styles.bannerContainer, { width: windowWidth, height: currentBannerHeight }]}>
+      {displayBanners.length === 1 ? (
+        renderSingleBanner(displayBanners[0])
+      ) : (
+        <FlatList
+          ref={flatListRef}
+          data={displayBanners}
+          keyExtractor={(item) => item.id}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onScroll={onScroll}
+          scrollEventThrottle={16}
+          getItemLayout={(_, index) => ({
+            length: windowWidth,
+            offset: windowWidth * index,
+            index,
+          })}
+          renderItem={({ item, index }) => renderSingleBanner(item, index)}
+        />
+      )}
 
       {/* Pagination Indicator Dots */}
       {displayBanners.length > 1 && (
@@ -150,39 +180,33 @@ export default function PromoBannerCarousel({ banners, onWarehousePress }: Promo
 }
 
 const styles = StyleSheet.create({
-  // FIXED CONTAINER: 100% Screen Width, Exactly 50% Screen Height, Edge-to-Edge
   bannerContainer: {
-    width: BANNER_WIDTH,
-    height: BANNER_HEIGHT,
     overflow: 'hidden',
     backgroundColor: '#0F051D',
     position: 'relative',
   },
   bannerItem: {
-    width: BANNER_WIDTH,
-    height: BANNER_HEIGHT,
     overflow: 'hidden',
     position: 'relative',
     justifyContent: 'flex-end',
     paddingHorizontal: 16,
     paddingBottom: 14,
   },
-  // RESIZEMODE COVER: Fills the entire container without distortion
-  bannerImage: {
+  topGradient: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    bottom: 0,
-    width: '100%',
-    height: '100%',
+    height: 90,
+    zIndex: 1,
   },
-  gradientOverlay: {
+  bottomGradient: {
     position: 'absolute',
-    top: 0,
+    bottom: 0,
     left: 0,
     right: 0,
-    bottom: 0,
+    height: 95,
+    zIndex: 1,
   },
   bottomContent: {
     zIndex: 3,

@@ -1,6 +1,7 @@
 package subscription
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -104,3 +105,99 @@ func (s *SubscriptionService) RegisterPharmacy(c *gin.Context) {
 		"message": "تم تسجيل الصيدلية بنجاح",
 	})
 }
+
+// RecordPayment persists a successful Kashier/Card/InstaPay payment into DB
+func (s *SubscriptionService) RecordPayment(c *gin.Context) {
+	var req struct {
+		UserEmail     string  `json:"user_email"`
+		UserName      string  `json:"user_name"`
+		UserPhone     string  `json:"user_phone"`
+		PlanType      string  `json:"plan_type"`
+		Amount        float64 `json:"amount"`
+		PaymentMethod string  `json:"payment_method"`
+		Status        string  `json:"status"`
+		OrderID       string  `json:"order_id"`
+		TransactionID string  `json:"transaction_id"`
+		CardBrand     string  `json:"card_brand"`
+		MaskedCard    string  `json:"masked_card"`
+		ReceiptRef    string  `json:"receipt_ref"`
+		Notes         string  `json:"notes"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload"})
+		return
+	}
+
+	if req.PaymentMethod == "" {
+		req.PaymentMethod = "kashier"
+	}
+	if req.Status == "" {
+		req.Status = "active"
+	}
+	if req.ReceiptRef == "" {
+		req.ReceiptRef = req.TransactionID
+		if req.ReceiptRef == "" {
+			req.ReceiptRef = req.OrderID
+		}
+	}
+	if req.Notes == "" {
+		req.Notes = "دفع إلكتروني ناجح عبر بوابة كاشير (Kashier) - مرجع: " + req.ReceiptRef
+	}
+
+	// Determine plan integer
+	plan := 3
+	if strings.HasPrefix(req.PlanType, "P") {
+		var p int
+		if _, err := fmt.Sscanf(req.PlanType, "P%d", &p); err == nil && p > 0 {
+			plan = p
+		}
+	} else if req.Amount >= 300 {
+		plan = 5
+	} else if req.Amount >= 250 {
+		plan = 4
+	} else if req.Amount >= 200 {
+		plan = 3
+	} else if req.Amount >= 150 {
+		plan = 2
+	} else if req.Amount >= 100 {
+		plan = 1
+	}
+
+	// 1. Insert into public.subscriptions
+	_, _ = s.router.Pool().Exec(
+		c.Request.Context(),
+		`INSERT INTO public.subscriptions (
+			user_email, user_name, user_phone, plan_type, amount, payment_method,
+			status, order_id, transaction_id, card_brand, masked_card, receipt_ref,
+			notes, start_date, end_date, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+			CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', NOW(), NOW()
+		)`,
+		req.UserEmail, req.UserName, req.UserPhone, fmt.Sprintf("%d صيدليات", plan),
+		req.Amount, req.PaymentMethod, req.Status, req.OrderID, req.TransactionID,
+		req.CardBrand, req.MaskedCard, req.ReceiptRef, req.Notes,
+	)
+
+	// 2. Update public.users
+	if req.UserEmail != "" {
+		_, _ = s.router.Pool().Exec(
+			c.Request.Context(),
+			`UPDATE public.users 
+			 SET subscription_plan = $1, 
+			     is_subscription_active = true, 
+			     subscription_expires_at = NOW() + INTERVAL '30 days',
+			     updated_at = NOW()
+			 WHERE LOWER(email) = LOWER($2)`,
+			plan, strings.ToLower(req.UserEmail),
+		)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "تم تسجيل الفاتورة والاشتراك بنجاح",
+		"plan":    plan,
+	})
+}
+

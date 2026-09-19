@@ -16,17 +16,23 @@ export interface PricingPlan {
 
 export const PRICING_PLANS: PricingPlan[] = [
   {
-    pharmacies: 2,
-    price: 150,
-    label: 'صيدليتان (2)',
-    subtitle: 'إدارة فرعين في نفس الوقت عبر كل المخازن',
-    popular: true,
-  },
-  {
     pharmacies: 3,
     price: 200,
     label: '3 صيدليات',
-    subtitle: 'حل متكامل لإدارة 3 صيدليات شقيقة',
+    subtitle: 'إدارة 3 فروع مع كافة المخازن (تفعيل فوري)',
+    popular: true,
+  },
+  {
+    pharmacies: 2,
+    price: 150,
+    label: 'صيدليتان (2)',
+    subtitle: 'اشتراك شهري بعد انتهاء الـ 7 أيام التجريبية',
+  },
+  {
+    pharmacies: 1,
+    price: 100,
+    label: 'صيدلية واحدة',
+    subtitle: 'اشتراك شهري بعد انتهاء الـ 7 أيام التجريبية',
   },
   {
     pharmacies: 4,
@@ -40,12 +46,6 @@ export const PRICING_PLANS: PricingPlan[] = [
     label: '5 صيدليات',
     subtitle: 'أعلى باقة توفير للسلاسل والصيدليات الكبرى',
   },
-  {
-    pharmacies: 1,
-    price: 100,
-    label: 'صيدلية واحدة',
-    subtitle: 'اشتراك شهري بعد انتهاء الـ 7 أيام التجريبية',
-  },
 ];
 
 export interface SubscriptionStatus {
@@ -54,7 +54,7 @@ export interface SubscriptionStatus {
   isTrialExpired: boolean;
   isSubscribed: boolean;
   subscribedPlan: number; // e.g. 1, 2, 3, 4, 5
-  allowedPharmacies: number; // 1 during trial, or subscribedPlan
+  allowedPharmacies: number; // 2 during trial, or subscribedPlan
   linkedPharmaciesCount: number;
   uniquePharmacies: Array<{ code: string; name: string }>;
 }
@@ -192,8 +192,8 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
   }
 
   const isSubscribed = subscribedPlan > 0;
-  // Allowed pharmacies: 1 pharmacy across all warehouses during trial, or subscribedPlan count
-  const allowedPharmacies = isSubscribed ? subscribedPlan : 1;
+  // Allowed pharmacies: 2 pharmacies across all warehouses during trial, or subscribedPlan count when subscribed
+  const allowedPharmacies = isSubscribed ? subscribedPlan : 2;
 
   return {
     trialStartDate,
@@ -233,13 +233,13 @@ export async function checkCanAddPharmacy(userEmail?: string): Promise<{
 
   // If adding another pharmacy will exceed the allowed limit:
   if (status.linkedPharmaciesCount >= status.allowedPharmacies) {
-    const nextRequiredPlan = Math.min(5, Math.max(2, status.linkedPharmaciesCount + 1));
+    const nextRequiredPlan = Math.min(5, Math.max(3, status.linkedPharmaciesCount + 1));
     return {
       canAdd: false,
       reason:
-        status.linkedPharmaciesCount === 1 && !status.isSubscribed
-          ? 'الفترة التجريبية تتيح صيدلية واحدة فقط على جميع المخازن لمدة 7 أيام. لإضافة صيدلية أخرى يرجى الاشتراك.'
-          : `لقد استنفدت باقتك الحالية (${status.allowedPharmacies} صيدلية). لإضافة فرع جديد يرجى ترقية الباقة.`,
+        !status.isSubscribed
+          ? 'الفترة التجريبية تتيح حتى صيدليتين (2) مجاناً لمدة 7 أيام. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في الباقة المناسبة.'
+          : `لقد استنفدت باقتك الحالية (${status.allowedPharmacies} صيدليات). لإضافة فرع جديد يرجى ترقية الباقة.`,
       requiredPlan: nextRequiredPlan,
       currentCount: status.linkedPharmaciesCount,
       allowedCount: status.allowedPharmacies,
@@ -254,3 +254,142 @@ export async function checkCanAddPharmacy(userEmail?: string): Promise<{
     isTrialExpired: false,
   };
 }
+
+import CryptoJS from 'crypto-js';
+
+const KASHIER_MID = 'MID-51040-472';
+const KASHIER_PAYMENT_API_KEY = 'c64c4651-40c5-4a07-afc3-81ecdd5ed324';
+
+/**
+ * Initiate an online payment session with Kashier (Cards, Meeza, Wallets)
+ */
+export async function initiateKashierPayment(params: {
+  email: string;
+  plan: number;
+  userName?: string;
+  phone?: string;
+}): Promise<{
+  success: boolean;
+  session_url?: string;
+  order_id?: string;
+  amount?: number;
+  error?: string;
+}> {
+  try {
+    const cleanEmail = (params.email || '').trim().toLowerCase();
+    const plan = params.plan || 3;
+    
+    // Determine price
+    let amount = 200;
+    if (plan === 1) amount = 100;
+    else if (plan === 2) amount = 150;
+    else if (plan === 3) amount = 200;
+    else if (plan === 4) amount = 250;
+    else if (plan === 5) amount = 300;
+
+    const timestamp = Date.now();
+    const emailPrefix = cleanEmail.split('@')[0].replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) || 'user';
+    const orderId = `XPH-SUB-${emailPrefix}-P${plan}-${timestamp}`;
+    const currency = 'EGP';
+
+    // 1. First try Backend endpoint (if backend is live)
+    try {
+      const res = await fetch('https://api.xpharma.cloud/v1/subscription/kashier/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: cleanEmail,
+          plan: plan,
+          user_name: params.userName || 'دكتور صيدلي',
+          phone: params.phone || '',
+        }),
+      });
+
+      if (res.ok) {
+        const text = await res.text();
+        if (text.startsWith('{')) {
+          const data = JSON.parse(text);
+          if (data.success && data.session_url) {
+            return {
+              success: true,
+              session_url: data.session_url,
+              order_id: data.order_id || orderId,
+              amount: data.amount || amount,
+            };
+          }
+        }
+      }
+    } catch {
+      // Backend not reached, proceed with direct client-side HMAC signature
+    }
+
+    // 2. Direct Kashier Hosted Checkout URL with HMAC-SHA256 signature
+    const path = `/?payment=${KASHIER_MID}.${orderId}.${amount}.${currency}`;
+    const hash = CryptoJS.HmacSHA256(path, KASHIER_PAYMENT_API_KEY).toString(CryptoJS.enc.Hex);
+
+    const redirectUrl = encodeURIComponent('xpharma://subscription-success');
+    const webhookUrl = encodeURIComponent('https://api.xpharma.cloud/v1/subscription/kashier/webhook');
+
+    const checkoutUrl = `https://payments.kashier.io/?merchantId=${KASHIER_MID}&orderId=${orderId}&amount=${amount}&currency=${currency}&hash=${hash}&mode=test&display=ar&serverWebhook=${webhookUrl}&merchantRedirect=${redirectUrl}`;
+
+    return {
+      success: true,
+      session_url: checkoutUrl,
+      order_id: orderId,
+      amount: amount,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err.message || 'فشل تجهيز بوابة الدفع',
+    };
+  }
+}
+
+/**
+ * Record a successful subscription payment to both web-admin billing review and central API
+ */
+export async function recordSubscriptionPayment(payload: {
+  user_email: string;
+  user_name?: string;
+  user_phone?: string;
+  plan_type: string | number;
+  amount: number;
+  payment_method?: string;
+  status?: string;
+  order_id?: string;
+  transaction_id?: string;
+  card_brand?: string;
+  masked_card?: string;
+  receipt_ref?: string;
+  notes?: string;
+}): Promise<boolean> {
+  let success = false;
+
+  // 1. Send to admin.xpharma.cloud for Super Admin billing review
+  try {
+    const res = await fetch('https://admin.xpharma.cloud/api/billing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) success = true;
+  } catch (e) {
+    console.warn('Failed to record billing in admin portal:', e);
+  }
+
+  // 2. Send to api.xpharma.cloud backend
+  try {
+    const res = await fetch('https://api.xpharma.cloud/v1/subscription/record-payment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) success = true;
+  } catch (e) {
+    console.warn('Failed to record billing in API backend:', e);
+  }
+
+  return success;
+}
+

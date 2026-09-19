@@ -1,74 +1,86 @@
 import { useState } from 'react';
-import { Alert } from 'react-native';
 import * as Updates from 'expo-updates';
+import { UpdateModalStatus } from '@/components/UpdateModal';
 
 export function useOTAUpdates() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalStatus, setModalStatus] = useState<UpdateModalStatus>('idle');
+  const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
 
   const checkForUpdates = async () => {
     if (__DEV__) {
-      Alert.alert(
-        'وضع التطوير المحلي',
-        'أنت حالياً في وضع المطور المحلي (Development Mode). التحديثات الهوائية التلقائية تعمل على النسخ المثبتة (Preview / Production).'
-      );
+      setModalStatus('dev_mode');
+      setModalVisible(true);
       return;
     }
 
     setCheckingUpdate(true);
+    setModalStatus('checking');
+    setModalVisible(true);
+    setErrorMessage(undefined);
+
     try {
       const update = await Updates.checkForUpdateAsync();
       if (update.isAvailable) {
-        Alert.alert(
-          'تحديث هوائي جديد متاح 🚀',
-          'تم العثور على تحديث جديد للنظام يحتوي على تحسينات وإصلاحات. هل تريد تنزيل التحديث وإعادة تشغيل التطبيق فوراً؟',
-          [
-            { text: 'لاحقاً', style: 'cancel' },
-            {
-              text: 'تنزيل وتحديث الآن',
-              onPress: async () => {
-                try {
-                  setCheckingUpdate(true);
-                  await Updates.fetchUpdateAsync();
-                  Alert.alert(
-                    'تم التنزيل بنجاح ✅',
-                    'تم تنزيل أحدث ملفات النظام. سيتم الآن إعادة تشغيل التطبيق لتطبيق التحديث.',
-                    [
-                      {
-                        text: 'إعادة التشغيل الآن',
-                        onPress: async () => {
-                          await Updates.reloadAsync();
-                        },
-                      },
-                    ]
-                  );
-                } catch (e: any) {
-                  Alert.alert(
-                    'تنبيه',
-                    'تعذر استكمال تنزيل التحديث: ' +
-                      (e?.message || 'يرجى التحقق من الاتصال بالإنترنت والمحاولة لاحقاً')
-                  );
-                } finally {
-                  setCheckingUpdate(false);
-                }
-              },
-            },
-          ]
-        );
+        setModalStatus('available');
       } else {
-        Alert.alert('أحدث إصدار ✅', 'تطبيقك يعمل بالفعل بأحدث إصدار متاح، ولا توجد تحديثات جديدة.');
+        setModalStatus('up_to_date');
       }
     } catch (error: any) {
-      Alert.alert(
-        'فحص التحديثات الهوائية',
-        'التطبيق يعمل بآخر ملفات، أو تعذر الاتصال بمركز التحديثات حالياً: ' + (error?.message || '')
+      setModalStatus('error');
+      setErrorMessage(
+        error?.message
+          ? `تعذر فحص التحديثات حالياً: ${error.message}`
+          : 'التطبيق يعمل بآخر ملفات، أو تعذر الاتصال بمركز التحديثات حالياً.'
       );
     } finally {
       setCheckingUpdate(false);
     }
   };
 
+  const downloadUpdate = async () => {
+    try {
+      setCheckingUpdate(true);
+      setModalStatus('downloading');
+      await Updates.fetchUpdateAsync();
+      setModalStatus('ready');
+    } catch (e: any) {
+      setModalStatus('error');
+      setErrorMessage(
+        e?.message
+          ? `تعذر استكمال تنزيل التحديث: ${e.message}`
+          : 'يرجى التحقق من الاتصال بالإنترنت والمحاولة لاحقاً.'
+      );
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const restartApp = async () => {
+    try {
+      await Updates.reloadAsync();
+    } catch {
+      setModalVisible(false);
+    }
+  };
+
+  const closeUpdateModal = () => {
+    if (modalStatus !== 'downloading' && modalStatus !== 'checking') {
+      setModalVisible(false);
+      setModalStatus('idle');
+      setErrorMessage(undefined);
+    }
+  };
+
   return {
     checkingUpdate,
+    modalVisible,
+    modalStatus,
+    errorMessage,
     checkForUpdates,
+    downloadUpdate,
+    restartApp,
+    closeUpdateModal,
   };
 }
