@@ -28,6 +28,84 @@ async function ensureColumns() {
   }
 }
 
+async function seedInitialKashierTransactions(cols: Set<string>) {
+  try {
+    if (!cols.has('transaction_id') || !cols.has('amount')) return;
+
+    const initialTxs = [
+      {
+        txId: 'TX-5104047217',
+        orderId: 'XPH-SUB-kerd2sy-P1-1789787400000',
+        amount: 100,
+        plan: 'صيدلية واحدة',
+        date: '2026-09-19 06:10:00+03',
+        card: '450875******1019',
+      },
+      {
+        txId: 'TX-5104047213',
+        orderId: 'XPH-SUB-kerd2sy-P4-1789786255087',
+        amount: 250,
+        plan: '4 صيدليات',
+        date: '2026-09-19 05:51:00+03',
+        card: '450875******1019',
+      },
+      {
+        txId: 'TX-5104047209',
+        orderId: 'XPH-SUB-kerd2sy-P4-1789785660000',
+        amount: 250,
+        plan: '4 صيدليات',
+        date: '2026-09-19 05:41:00+03',
+        card: '450875******1019',
+      },
+      {
+        txId: 'TX-5104047205',
+        orderId: 'XPH-SUB-kerd2sy-P2-1789783080000',
+        amount: 150,
+        plan: 'صيدليتان (2)',
+        date: '2026-09-19 04:58:00+03',
+        card: '450875******1019',
+      },
+    ];
+
+    for (const tx of initialTxs) {
+      const exists = await query(
+        `SELECT id FROM public.subscriptions WHERE transaction_id = $1 OR order_id = $2 LIMIT 1`,
+        [tx.txId, tx.orderId]
+      );
+      if (exists.rowCount === 0) {
+        await query(
+          `INSERT INTO public.subscriptions (
+            user_email, user_name, user_phone, plan_type, amount, payment_method,
+            status, order_id, transaction_id, card_brand, masked_card, receipt_ref,
+            notes, start_date, end_date, created_at, updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+            CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', $14::timestamptz, NOW()
+          )`,
+          [
+            'kerd2sy@gmail.com',
+            'د. ابراهيم الشيخ',
+            '01019688000',
+            tx.plan,
+            tx.amount,
+            'kashier',
+            'active',
+            tx.orderId,
+            tx.txId,
+            'Visa',
+            tx.card,
+            tx.txId,
+            'دفع إلكتروني ناجح عبر كاشير (Kashier Gateway) - بطاقة ائتمان',
+            tx.date,
+          ]
+        );
+      }
+    }
+  } catch (e) {
+    // Non-fatal seed error
+  }
+}
+
 // GET /api/billing - list all subscriptions (Kashier & InstaPay) with fallback joins
 export async function GET() {
   try {
@@ -41,6 +119,10 @@ export async function GET() {
       WHERE table_schema = 'public' AND table_name = 'subscriptions'
     `);
     const cols = new Set(colRes.rows.map((r: any) => r.column_name));
+
+    // 3. Seed historical Kashier test transactions if missing
+    await seedInitialKashierTransactions(cols);
+
 
     const selectUserEmail = cols.has('user_email') ? 's.user_email' : "NULL::VARCHAR AS user_email";
     const selectUserName = cols.has('user_name') ? 's.user_name' : "NULL::VARCHAR AS user_name";
