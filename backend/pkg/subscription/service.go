@@ -214,10 +214,11 @@ func (s *SubscriptionService) RecordPayment(c *gin.Context) {
 	_, _ = s.router.Pool().Exec(
 		c.Request.Context(),
 		`INSERT INTO public.subscriptions (
-			user_email, user_name, user_phone, plan_type, amount, payment_method,
+			tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
 			status, order_id, transaction_id, card_brand, masked_card, receipt_ref,
 			notes, start_date, end_date, created_at, updated_at
 		) VALUES (
+			(SELECT id FROM public.tenants LIMIT 1),
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
 			CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', NOW(), NOW()
 		)`,

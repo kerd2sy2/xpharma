@@ -75,10 +75,11 @@ async function seedInitialKashierTransactions(cols: Set<string>) {
       if (exists.rowCount === 0) {
         await query(
           `INSERT INTO public.subscriptions (
-            user_email, user_name, user_phone, plan_type, amount, payment_method,
+            tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
             status, order_id, transaction_id, card_brand, masked_card, receipt_ref,
             notes, start_date, end_date, created_at, updated_at
           ) VALUES (
+            (SELECT id FROM public.tenants LIMIT 1),
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
             CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', $14::timestamptz, NOW()
           )`,
@@ -122,7 +123,6 @@ export async function GET() {
 
     // 3. Seed historical Kashier test transactions if missing
     await seedInitialKashierTransactions(cols);
-
 
     const selectUserEmail = cols.has('user_email') ? 's.user_email' : "NULL::VARCHAR AS user_email";
     const selectUserName = cols.has('user_name') ? 's.user_name' : "NULL::VARCHAR AS user_name";
@@ -184,6 +184,7 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const {
+      tenant_id,
       user_email,
       user_name,
       user_phone,
@@ -213,6 +214,7 @@ export async function POST(req: NextRequest) {
     if (cols.has('user_email') && cols.has('amount')) {
       queryText = `
         INSERT INTO public.subscriptions (
+          tenant_id,
           user_email,
           user_name,
           user_phone,
@@ -232,7 +234,8 @@ export async function POST(req: NextRequest) {
           created_at,
           updated_at
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+          COALESCE($1::uuid, (SELECT id FROM public.tenants LIMIT 1)),
+          $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
           CURRENT_DATE,
           CURRENT_DATE + INTERVAL '30 days',
           NOW(),
@@ -241,6 +244,7 @@ export async function POST(req: NextRequest) {
         RETURNING *
       `;
       params = [
+        tenant_id || null,
         user_email || '',
         user_name || 'دكتور صيدلي',
         user_phone || '',
@@ -260,6 +264,7 @@ export async function POST(req: NextRequest) {
       // Fallback if custom columns not added
       queryText = `
         INSERT INTO public.subscriptions (
+          tenant_id,
           plan_type,
           status,
           receipt_ref,
@@ -270,7 +275,8 @@ export async function POST(req: NextRequest) {
           created_at,
           updated_at
         ) VALUES (
-          $1, $2, $3, $4, $5,
+          COALESCE($1::uuid, (SELECT id FROM public.tenants LIMIT 1)),
+          $2, $3, $4, $5,
           CURRENT_DATE,
           CURRENT_DATE + INTERVAL '30 days',
           NOW(),
@@ -279,6 +285,7 @@ export async function POST(req: NextRequest) {
         RETURNING *
       `;
       params = [
+        tenant_id || null,
         String(plan_type || 'monthly'),
         status,
         receipt_ref || transaction_id || order_id || null,
