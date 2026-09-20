@@ -71,9 +71,9 @@ func NewWarehouseService(router *db.TenantRouter, tokenService *auth.TokenServic
 	}
 }
 
-// GetWarehouses returns the list of active warehouses, annotating linked status for the requested user
+// GetWarehouses returns the list of active warehouses, annotating linked status and all linked pharmacies for the requested user
 func (s *WarehouseService) GetWarehouses(c *gin.Context) {
-	userID := c.Query("user_id")
+	userID := strings.TrimSpace(c.Query("user_id"))
 
 	query := `
 		SELECT 
@@ -84,55 +84,97 @@ func (s *WarehouseService) GetWarehouses(c *gin.Context) {
 			COALESCE(t.address, '') AS address,
 			COALESCE(t.contact_phone, '') AS contact_phone,
 			COALESCE(t.logo_url, '') AS logo_url,
-			COALESCE(t.category, 'مخزن أدوية') AS category,
-			COALESCE(p.id::text, '') AS linked_pharmacy_id,
-			COALESCE(p.name, '') AS linked_pharmacy_name,
-			COALESCE(p.code, '') AS linked_pharmacy_code
+			COALESCE(t.category, 'مخزن أدوية') AS category
 		FROM public.tenants t
-		LEFT JOIN public.pharmacies p ON p.tenant_id = t.id AND (p.linked_user_id = $1 AND $1 <> '')
 		WHERE t.status = 'active'
 		ORDER BY t.name ASC
 	`
-	rows, err := s.router.Pool().Query(c.Request.Context(), query, userID)
+	rows, err := s.router.Pool().Query(c.Request.Context(), query)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer rows.Close()
 
-	var warehouses []map[string]interface{}
+	type TenantBasic struct {
+		id, name, slug, status, address, contactPhone, logoURL, category string
+	}
+	var tenants []TenantBasic
 	for rows.Next() {
-		var id, name, slug, status, address, contactPhone, logoURL, category, linkedPharmaID, linkedPharmaName, linkedPharmaCode string
-		if err := rows.Scan(&id, &name, &slug, &status, &address, &contactPhone, &logoURL, &category, &linkedPharmaID, &linkedPharmaName, &linkedPharmaCode); err != nil {
-			continue
+		var t TenantBasic
+		if err := rows.Scan(&t.id, &t.name, &t.slug, &t.status, &t.address, &t.contactPhone, &t.logoURL, &t.category); err == nil {
+			tenants = append(tenants, t)
+		}
+	}
+
+	var warehouses []map[string]interface{}
+	for _, t := range tenants {
+		var linkedPharmacies []map[string]interface{}
+
+		if userID != "" {
+			// Query all pharmacies linked to this user in this warehouse
+			pQuery := `
+				SELECT p.id::text, p.code, p.name 
+				FROM public.pharmacies p
+				WHERE p.tenant_id = $1 
+				  AND (p.linked_user_id = $2 OR p.linked_user_id = (SELECT email FROM public.users WHERE id::text = $2 LIMIT 1))
+				  AND p.is_active = true
+				ORDER BY p.updated_at DESC
+			`
+			pRows, pErr := s.router.Pool().Query(c.Request.Context(), pQuery, t.id, userID)
+			if pErr == nil {
+				for pRows.Next() {
+					var pID, pCode, pName string
+					if err := pRows.Scan(&pID, &pCode, &pName); err == nil {
+						pToken, _ := s.tokenService.GenerateToken(auth.Claims{
+							UserID:     userID,
+							TenantID:   t.id,
+							PharmacyID: pID,
+							PharmaCode: pCode,
+							Role:       "pharmacist",
+						}, 30*24*time.Hour)
+
+						linkedPharmacies = append(linkedPharmacies, map[string]interface{}{
+							"id":            pID,
+							"pharmacy_id":   pID,
+							"pharmacy_code": pCode,
+							"code":          pCode,
+							"pharmacy_name": pName,
+							"name":          pName,
+							"token":         pToken,
+							"tenant_id":     t.id,
+						})
+					}
+				}
+				pRows.Close()
+			}
 		}
 
-		isLinked := linkedPharmaID != ""
-		var pharmaToken string
+		isLinked := len(linkedPharmacies) > 0
+		var linkedPharmaID, linkedPharmaName, linkedPharmaCode, pharmaToken string
 		if isLinked {
-			pharmaToken, _ = s.tokenService.GenerateToken(auth.Claims{
-				UserID:     userID,
-				TenantID:   id,
-				PharmacyID: linkedPharmaID,
-				PharmaCode: linkedPharmaCode,
-				Role:       "pharmacist",
-			}, 30*24*time.Hour)
+			first := linkedPharmacies[0]
+			linkedPharmaID = first["pharmacy_id"].(string)
+			linkedPharmaName = first["pharmacy_name"].(string)
+			linkedPharmaCode = first["pharmacy_code"].(string)
+			pharmaToken = first["token"].(string)
 		}
 
 		warehouses = append(warehouses, map[string]interface{}{
-			"id":                   id,
-			"name":                 name,
-			"slug":                 slug,
-			"status":               status,
-			"address":              address,
-			"contact_phone":        contactPhone,
-			"logo_url":             logoURL,
-			"category":             category,
+			"id":                   t.id,
+			"name":                 t.name,
+			"slug":                 t.slug,
+			"status":               t.status,
+			"address":              t.address,
+			"contact_phone":        t.contactPhone,
+			"logo_url":             t.logoURL,
+			"category":             t.category,
 			"is_linked":            isLinked,
 			"linked_pharmacy_id":   linkedPharmaID,
 			"linked_pharmacy_name": linkedPharmaName,
 			"linked_pharmacy_code": linkedPharmaCode,
 			"pharmacy_token":       pharmaToken,
+			"linked_pharmacies":    linkedPharmacies,
 		})
 	}
 

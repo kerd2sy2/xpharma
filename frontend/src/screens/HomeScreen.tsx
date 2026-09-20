@@ -21,9 +21,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '@/context/AuthContext';
 import {
+  clearPharmacySession,
   fetchWarehouses,
   getPharmacySession,
+  LinkedPharmacyAccount,
   savePharmacySession,
+  syncWarehousePharmacies,
   VerifyPharmacyResult,
   Warehouse,
 } from '@/services/warehouse';
@@ -169,29 +172,47 @@ export default function HomeScreen() {
 
       const updatedList: Warehouse[] = await Promise.all(
         list.map(async (wh) => {
-          let session = await getPharmacySession(wh.id);
+          const serverPharmacies = (wh.linked_pharmacies || []) as LinkedPharmacyAccount[];
 
-          if (wh.is_linked && wh.pharmacy_token) {
-            const pharmaSession = {
-              token: wh.pharmacy_token,
-              pharmacy_code: wh.linked_pharmacy_code || '',
-              pharmacy_name: wh.linked_pharmacy_name || '',
-              tenant_id: wh.id,
-            };
-            await savePharmacySession(wh.id, pharmaSession);
-            session = pharmaSession;
-          }
-
-          if (session && session.token) {
+          // 1. If server indicates warehouse is not linked or has 0 linked pharmacies for this user
+          if (!wh.is_linked || serverPharmacies.length === 0) {
+            await clearPharmacySession(wh.id);
             return {
               ...wh,
-              is_linked: true,
-              linked_pharmacy_code: session.pharmacy_code,
-              linked_pharmacy_name: session.pharmacy_name,
-              pharmacy_token: session.token,
+              is_linked: false,
+              linked_pharmacy_id: undefined,
+              linked_pharmacy_code: undefined,
+              linked_pharmacy_name: undefined,
+              pharmacy_token: undefined,
+              linked_pharmacies: [],
             };
           }
-          return wh;
+
+          // 2. Normalize and synchronize local list of accounts with server
+          const serverAccounts: LinkedPharmacyAccount[] = serverPharmacies.map((p) => ({
+            token: p.token || wh.pharmacy_token || '',
+            pharmacy_code: (p as any).pharmacy_code || (p as any).code || '',
+            pharmacy_name: (p as any).pharmacy_name || (p as any).name || '',
+            tenant_id: wh.id,
+          }));
+
+          await syncWarehousePharmacies(wh.id, serverAccounts);
+
+          // 3. Get currently active session; if unlinked on server, switch to first available server account
+          let session = await getPharmacySession(wh.id);
+          if (!session || !serverAccounts.some((a) => a.pharmacy_code === session?.pharmacy_code)) {
+            session = serverAccounts[0];
+            await savePharmacySession(wh.id, session);
+          }
+
+          return {
+            ...wh,
+            is_linked: true,
+            linked_pharmacy_code: session.pharmacy_code,
+            linked_pharmacy_name: session.pharmacy_name,
+            pharmacy_token: session.token,
+            linked_pharmacies: serverAccounts,
+          };
         })
       );
 

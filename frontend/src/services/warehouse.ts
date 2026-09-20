@@ -16,6 +16,7 @@ export interface Warehouse {
   linked_pharmacy_code?: string;
   linked_pharmacy_name?: string;
   pharmacy_token?: string;
+  linked_pharmacies?: LinkedPharmacyAccount[];
 }
 
 export interface PharmacyBalance {
@@ -279,6 +280,27 @@ export async function clearPharmacySession(tenantId: string): Promise<void> {
     await SecureStore.deleteItemAsync(`${PHARMACIES_LIST_PREFIX}${tenantId}`);
   } catch (e) {
     // Ignore error
+  }
+}
+
+/**
+ * Synchronize local branches with server authoritative list of linked pharmacies
+ */
+export async function syncWarehousePharmacies(
+  tenantId: string,
+  serverPharmacies: LinkedPharmacyAccount[]
+): Promise<void> {
+  try {
+    if (!serverPharmacies || serverPharmacies.length === 0) {
+      await clearPharmacySession(tenantId);
+      return;
+    }
+    await SecureStore.setItemAsync(
+      `${PHARMACIES_LIST_PREFIX}${tenantId}`,
+      JSON.stringify(serverPharmacies)
+    );
+  } catch (e) {
+    console.warn('Failed to sync warehouse pharmacies:', e);
   }
 }
 

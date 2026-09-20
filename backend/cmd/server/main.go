@@ -83,6 +83,7 @@ func main() {
 	// 3. Query Service Module (Mobile Pharmacy Protected Queries)
 	pharmaGroup := r.Group("/v1/pharmacy")
 	pharmaGroup.Use(tokenService.AuthMiddleware("pharmacist", "superadmin"))
+	pharmaGroup.Use(queryService.ValidateLinkedPharmacyMiddleware())
 	{
 		pharmaGroup.GET("/balance", queryService.GetBalance)
 		pharmaGroup.GET("/purchases", queryService.GetPurchases)

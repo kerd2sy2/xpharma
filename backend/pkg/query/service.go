@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"xpharma-backend/pkg/auth"
 	"xpharma-backend/pkg/db"
 )
 
@@ -18,6 +19,57 @@ type QueryService struct {
 
 func NewQueryService(router *db.TenantRouter) *QueryService {
 	return &QueryService{router: router}
+}
+
+// ValidateLinkedPharmacyMiddleware ensures the requested pharmacy is still actively linked to the requesting user in public.pharmacies
+func (s *QueryService) ValidateLinkedPharmacyMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		claimsVal, exists := c.Get("claims")
+		if !exists {
+			c.Next()
+			return
+		}
+		claims, ok := claimsVal.(*auth.Claims)
+		if !ok || claims.Role == "superadmin" {
+			c.Next()
+			return
+		}
+
+		tenantID := claims.TenantID
+		pharmaCode := claims.PharmaCode
+		userID := claims.UserID
+
+		if tenantID == "" || pharmaCode == "" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"error":   "بيانات الصيدلية غير مكتملة في التوكن",
+				"code":    "PHARMACY_INVALID",
+			})
+			return
+		}
+
+		var isLinked bool
+		err := s.router.Pool().QueryRow(c.Request.Context(), `
+			SELECT EXISTS(
+				SELECT 1 FROM public.pharmacies p
+				WHERE p.tenant_id = $1 
+				  AND LOWER(p.code) = LOWER($2) 
+				  AND (p.linked_user_id = $3 OR p.linked_user_id = (SELECT email FROM public.users WHERE id::text = $3 LIMIT 1))
+				  AND p.is_active = true
+			)
+		`, tenantID, pharmaCode, userID).Scan(&isLinked)
+
+		if err != nil || !isLinked {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"error":   "تم إلغاء ربط هذه الصيدلية من قبل إدارة المنصة",
+				"code":    "PHARMACY_UNLINKED",
+			})
+			return
+		}
+
+		c.Next()
+	}
 }
 
 // GetBalance returns balance, total purchases, and credit summary
