@@ -99,7 +99,7 @@ export const navGroups: NavGroup[] = [
         items: []
       },
       {
-        title: 'الفواتير واشتراكات إنستاباي',
+        title: 'إدارة الاشتراكات والمدفوعات',
         url: '/dashboard/billing-review',
         icon: 'billing',
         isActive: false,
