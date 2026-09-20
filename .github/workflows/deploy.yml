@@ -65,30 +65,10 @@ jobs:
             echo "✅ Latest commit: $(git log -1 --oneline)"
 
             echo "🗄️ [2.5/4] Synchronizing PostgreSQL database schemas and subscriptions..."
-            sudo -u postgres psql -d xpharma_db -c "
-              ALTER TABLE public.subscriptions DROP CONSTRAINT IF EXISTS subscriptions_plan_type_check;
-              ALTER TABLE public.subscriptions DROP CONSTRAINT IF EXISTS subscriptions_status_check;
-              ALTER TABLE public.subscriptions ALTER COLUMN tenant_id DROP NOT NULL;
-              ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES public.users(id) ON DELETE SET NULL;
-              ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS user_email VARCHAR(255);
-              ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS user_name VARCHAR(255);
-              ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS user_phone VARCHAR(64);
-              ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS amount NUMERIC(10,2) DEFAULT 0;
-              ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS currency VARCHAR(16) DEFAULT 'EGP';
-              ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS payment_method VARCHAR(64) DEFAULT 'kashier';
-              ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS order_id VARCHAR(128);
-              ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(128);
-              ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS card_brand VARCHAR(32);
-              ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS masked_card VARCHAR(32);
-              ALTER TABLE public.users ADD COLUMN IF NOT EXISTS is_subscription_active BOOLEAN DEFAULT TRUE;
-              ALTER TABLE public.users ADD COLUMN IF NOT EXISTS subscription_plan INT DEFAULT 3;
-              ALTER TABLE public.users ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '30 days');
-              UPDATE public.users SET is_subscription_active = TRUE, subscription_plan = GREATEST(COALESCE(subscription_plan, 0), 3) WHERE email IS NOT NULL;
-              GRANT ALL ON TABLE public.subscriptions TO xpharma_user;
-              GRANT ALL ON TABLE public.users TO xpharma_user;
-              ALTER TABLE public.subscriptions OWNER TO xpharma_user;
-              ALTER TABLE public.users OWNER TO xpharma_user;
-            " 2>/dev/null || echo "Database sync step completed"
+            sudo -u postgres psql -d xpharma_db -f backend/migrations/0011_fix_subscriptions_schema.sql || \
+            su - postgres -c "psql -d xpharma_db -f $TARGET_DIR/backend/migrations/0011_fix_subscriptions_schema.sql" || \
+            PGPASSWORD=Xpharma_Secure_Db_2026 psql -h 127.0.0.1 -U xpharma_user -d xpharma_db -f backend/migrations/0011_fix_subscriptions_schema.sql || \
+            echo "⚠️ Migration step finished with warnings"
 
             echo "⚙️ [3/4] Updating Go Backend..."
             if [ -d "backend" ]; then
