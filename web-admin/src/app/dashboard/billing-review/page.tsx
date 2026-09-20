@@ -17,6 +17,7 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -802,43 +803,47 @@ export default function BillingReviewPage() {
                                 التفاصيل
                               </Button>
 
-                              <DropdownMenu>
+                              <DropdownMenu modal={false}>
                                 <DropdownMenuTrigger render={<Button variant='ghost' size='sm' className='h-8 w-8 p-0' />}>
                                   <IconDotsVertical className='size-4' />
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align='end' className='w-48'>
-                                  <DropdownMenuLabel>إجراءات الاشتراك</DropdownMenuLabel>
-                                  <DropdownMenuItem onClick={() => openEditModal(s)} className='gap-2 cursor-pointer'>
-                                    <IconEdit className='size-4 text-primary' />
-                                    تعديل الباقة والمدة
-                                  </DropdownMenuItem>
-
-                                  {s.status === 'active' && (
-                                    <DropdownMenuItem onClick={() => triggerPause(s)} className='gap-2 cursor-pointer text-amber-600'>
-                                      <IconPlayerPause className='size-4' />
-                                      إيقاف مؤقت للاشتراك
+                                  <DropdownMenuGroup>
+                                    <DropdownMenuLabel>إجراءات الاشتراك</DropdownMenuLabel>
+                                    <DropdownMenuItem onClick={() => openEditModal(s)} className='gap-2 cursor-pointer'>
+                                      <IconEdit className='size-4 text-primary' />
+                                      تعديل الباقة والمدة
                                     </DropdownMenuItem>
-                                  )}
 
-                                  {s.status === 'paused' && (
-                                    <DropdownMenuItem onClick={() => triggerResume(s)} className='gap-2 cursor-pointer text-emerald-600'>
-                                      <IconPlayerPlay className='size-4' />
-                                      استئناف تفعيل الاشتراك
+                                    {s.status === 'active' && (
+                                      <DropdownMenuItem onClick={() => triggerPause(s)} className='gap-2 cursor-pointer text-amber-600'>
+                                        <IconPlayerPause className='size-4' />
+                                        إيقاف مؤقت للاشتراك
+                                      </DropdownMenuItem>
+                                    )}
+
+                                    {s.status === 'paused' && (
+                                      <DropdownMenuItem onClick={() => triggerResume(s)} className='gap-2 cursor-pointer text-emerald-600'>
+                                        <IconPlayerPlay className='size-4' />
+                                        استئناف تفعيل الاشتراك
+                                      </DropdownMenuItem>
+                                    )}
+
+                                    <DropdownMenuItem onClick={() => triggerExtend(s)} className='gap-2 cursor-pointer text-blue-600'>
+                                      <IconCalendarPlus className='size-4' />
+                                      تمديد 30 يوماً
                                     </DropdownMenuItem>
-                                  )}
-
-                                  <DropdownMenuItem onClick={() => triggerExtend(s)} className='gap-2 cursor-pointer text-blue-600'>
-                                    <IconCalendarPlus className='size-4' />
-                                    تمديد 30 يوماً
-                                  </DropdownMenuItem>
+                                  </DropdownMenuGroup>
 
                                   {s.status !== 'cancelled' && s.status !== 'superseded' && (
                                     <>
                                       <DropdownMenuSeparator />
-                                      <DropdownMenuItem onClick={() => triggerCancel(s)} className='gap-2 cursor-pointer text-rose-600'>
-                                        <IconBan className='size-4' />
-                                        إلغاء الاشتراك نهائياً
-                                      </DropdownMenuItem>
+                                      <DropdownMenuGroup>
+                                        <DropdownMenuItem onClick={() => triggerCancel(s)} className='gap-2 cursor-pointer text-rose-600'>
+                                          <IconBan className='size-4' />
+                                          إلغاء الاشتراك نهائياً
+                                        </DropdownMenuItem>
+                                      </DropdownMenuGroup>
                                     </>
                                   )}
                                 </DropdownMenuContent>

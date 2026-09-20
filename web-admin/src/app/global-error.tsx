@@ -13,6 +13,7 @@ export default function GlobalError({
   reset: () => void;
 }) {
   useEffect(() => {
+    console.error('Global error caught:', error);
     Sentry.captureException(error);
   }, [error]);
 
@@ -28,11 +29,28 @@ export default function GlobalError({
           fontFamily: 'system-ui, sans-serif'
         }}
       >
-        <div style={{ textAlign: 'center', padding: '1rem' }}>
+        <div style={{ textAlign: 'center', padding: '1rem', maxWidth: '600px' }}>
           <h1 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Something went wrong</h1>
           <p style={{ color: '#6b7280', marginBottom: '1.25rem' }}>
             An unexpected error occurred. Please try again.
           </p>
+          {error?.message && (
+            <pre
+              style={{
+                background: '#f3f4f6',
+                color: '#dc2626',
+                padding: '0.75rem',
+                borderRadius: '0.375rem',
+                fontSize: '0.8rem',
+                textAlign: 'left',
+                overflowX: 'auto',
+                marginBottom: '1rem',
+                whiteSpace: 'pre-wrap'
+              }}
+            >
+              {error.message}
+            </pre>
+          )}
           <button
             onClick={() => reset()}
             style={{
