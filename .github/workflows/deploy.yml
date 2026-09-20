@@ -101,4 +101,18 @@ jobs:
               cd ..
             fi
 
+            # Also ensure secondary directory is updated if it exists
+            for OTHER_DIR in "/var/www/xpharma" "/var/www/xpharma/repo" "/root/xpharma"; do
+              if [ -d "$OTHER_DIR/web-admin" ] && [ "$OTHER_DIR" != "$TARGET_DIR" ]; then
+                echo "🔄 Syncing alternate directory: $OTHER_DIR"
+                cd "$OTHER_DIR"
+                git fetch origin main 2>/dev/null || true
+                git reset --hard origin/main 2>/dev/null || true
+                if [ -d "web-admin" ]; then
+                  cd web-admin
+                  npm run build 2>/dev/null || true
+                fi
+              fi
+            done
+
             echo "🎉 Deployment completed successfully!"

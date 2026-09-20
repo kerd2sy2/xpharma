@@ -3,22 +3,13 @@ import { query } from '@/lib/db';
 
 async function ensureColumns() {
   const statements = [
+    `ALTER TABLE public.users ADD COLUMN IF NOT EXISTS subscription_plan INT DEFAULT 0`,
+    `ALTER TABLE public.users ADD COLUMN IF NOT EXISTS is_subscription_active BOOLEAN DEFAULT TRUE`,
+    `ALTER TABLE public.users ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '30 days')`,
     `ALTER TABLE public.subscriptions ALTER COLUMN tenant_id DROP NOT NULL`,
     `ALTER TABLE public.subscriptions ALTER COLUMN end_date DROP NOT NULL`,
-    `DO $$
-    DECLARE
-        r RECORD;
-    BEGIN
-        FOR r IN (
-            SELECT constraint_name 
-            FROM information_schema.table_constraints 
-            WHERE table_schema = 'public' 
-              AND table_name = 'subscriptions' 
-              AND constraint_type = 'CHECK'
-        ) LOOP
-            EXECUTE 'ALTER TABLE public.subscriptions DROP CONSTRAINT IF EXISTS ' || quote_ident(r.constraint_name);
-        END LOOP;
-    END $$;`,
+    `ALTER TABLE public.subscriptions DROP CONSTRAINT IF EXISTS subscriptions_plan_type_check`,
+    `ALTER TABLE public.subscriptions DROP CONSTRAINT IF EXISTS subscriptions_status_check`,
     `ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS user_id UUID`,
     `ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS user_email VARCHAR(255)`,
     `ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS user_name VARCHAR(255)`,
@@ -47,7 +38,7 @@ async function ensureColumns() {
 
 async function syncSubscribedUsers() {
   try {
-    // 1. Auto-sync EVERY user from public.users into public.subscriptions if they don't already have an active subscription
+    // 1. Auto-sync EVERY registered user from public.users into public.subscriptions
     await query(`
       INSERT INTO public.subscriptions (
         tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
@@ -58,24 +49,12 @@ async function syncSubscribedUsers() {
         LOWER(TRIM(u.email)),
         COALESCE(NULLIF(u.name, ''), 'مشترك Google'),
         COALESCE(NULLIF(u.phone, ''), NULLIF(u.device_name, ''), '01019688000'),
-        CASE 
-          WHEN u.subscription_plan = 1 THEN 'صيدلية واحدة'
-          WHEN u.subscription_plan = 2 THEN 'صيدليتان (2)'
-          WHEN u.subscription_plan = 4 THEN '4 صيدليات'
-          WHEN u.subscription_plan >= 5 THEN '5 صيدليات وأكثر'
-          ELSE 'باقة المشترك (3 صيدليات)'
-        END,
-        CASE 
-          WHEN u.subscription_plan = 1 THEN 100
-          WHEN u.subscription_plan = 2 THEN 150
-          WHEN u.subscription_plan = 4 THEN 250
-          WHEN u.subscription_plan >= 5 THEN 300
-          ELSE 200
-        END,
+        'باقة المشترك (3 صيدليات)',
+        200,
         COALESCE(NULLIF(u.provider, ''), 'google'),
         'active',
         COALESCE(u.created_at::date, CURRENT_DATE),
-        COALESCE(u.subscription_expires_at::date, (CURRENT_DATE + INTERVAL '30 days')::date),
+        (CURRENT_DATE + INTERVAL '30 days')::date,
         COALESCE(u.last_login_at, u.created_at, NOW()),
         NOW(),
         'اشتراك حساب Google مفعل تلقائياً'
@@ -88,18 +67,19 @@ async function syncSubscribedUsers() {
         )
     `);
 
-    // 2. Mark users active in public.users with at least 3-pharmacy plan
+    // 2. Mark users active in public.users
     await query(`
       UPDATE public.users
       SET is_subscription_active = TRUE,
-          subscription_plan = GREATEST(COALESCE(subscription_plan, 0), 3),
-          subscription_expires_at = COALESCE(subscription_expires_at, NOW() + INTERVAL '30 days')
+          subscription_plan = 3,
+          subscription_expires_at = (NOW() + INTERVAL '30 days')
       WHERE email IS NOT NULL AND email <> ''
     `);
   } catch (e: any) {
     console.error('syncSubscribedUsers error:', e?.message || e);
   }
 }
+
 
 async function seedInitialKashierTransactions(cols: Set<string>) {
   try {
