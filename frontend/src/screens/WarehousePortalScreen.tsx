@@ -45,6 +45,7 @@ import {
 } from '@/services/warehouse';
 import {
   checkCanAddPharmacy,
+  checkCanAddPharmacyInWarehouse,
   getSubscriptionStatus,
   registerGlobalPharmacy,
 } from '@/services/subscription';
@@ -192,13 +193,6 @@ export default function WarehousePortalScreen({
     const initPharmacies = async () => {
       if (pharmacyCode && pharmacyName) {
         await registerGlobalPharmacy(pharmacyCode, pharmacyName, user?.email);
-      }
-      const subStatus = await getSubscriptionStatus(user?.email);
-      if (subStatus.isTrialExpired) {
-        setIsTrialExpired(true);
-        setSubscriptionReason('انتهت الفترة التجريبية (7 أيام). يرجى الاشتراك للاستمرار.');
-        setSubscriptionRequiredPlan(Math.max(1, subStatus.linkedPharmaciesCount));
-        setShowSubscriptionModal(true);
       }
 
       const list = await getWarehousePharmacies(warehouse.id);
@@ -514,11 +508,11 @@ export default function WarehousePortalScreen({
 
   // Check if pharmacist can add a new pharmacy before opening modal
   const handlePressAddPharmacy = async () => {
-    const check = await checkCanAddPharmacy(user?.email);
+    const check = await checkCanAddPharmacyInWarehouse(warehouse.id, pharmacies.length, user?.email);
     if (!check.canAdd) {
       setSubscriptionReason(check.reason);
-      setSubscriptionRequiredPlan(check.requiredPlan || 3);
-      setIsTrialExpired(check.isTrialExpired);
+      setSubscriptionRequiredPlan(check.requiredPlan || 2);
+      setIsTrialExpired(false);
       setShowSubscriptionModal(true);
       return;
     }

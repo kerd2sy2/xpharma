@@ -240,17 +240,20 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
     const nowMs = Date.now();
     const elapsedDays = (nowMs - startMs) / (1000 * 60 * 60 * 24);
     daysRemaining = Math.max(0, Math.ceil(TRIAL_DURATION_DAYS - elapsedDays));
-    isTrialExpired = elapsedDays >= TRIAL_DURATION_DAYS && subscribedPlan === 0;
+    isTrialExpired = false;
   }
 
+  // Free tier: no trial expiration locking
+  isTrialExpired = false;
+
   const isSubscribed = subscribedPlan > 0;
-  // Allowed pharmacies: 2 during trial, or subscribedPlan count when subscribed
+  // Allowed pharmacies: up to 2 pharmacies free initially, or subscribedPlan count when subscribed
   const allowedPharmacies = isSubscribed ? subscribedPlan : 2;
 
   return {
     trialStartDate,
     daysRemaining,
-    isTrialExpired,
+    isTrialExpired: false,
     isSubscribed,
     subscribedPlan,
     allowedPharmacies,
@@ -260,7 +263,7 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
 }
 
 /**
- * Check if the user can add another pharmacy
+ * Check if the user can add another pharmacy globally
  */
 export async function checkCanAddPharmacy(userEmail?: string): Promise<{
   canAdd: boolean;
@@ -272,28 +275,17 @@ export async function checkCanAddPharmacy(userEmail?: string): Promise<{
 }> {
   const status = await getSubscriptionStatus(userEmail);
 
-  if (status.isTrialExpired) {
-    return {
-      canAdd: false,
-      reason: 'انتهت الفترة التجريبية (7 أيام). يرجى الاشتراك للاستمرار.',
-      requiredPlan: Math.max(1, status.linkedPharmaciesCount),
-      currentCount: status.linkedPharmaciesCount,
-      allowedCount: status.allowedPharmacies,
-      isTrialExpired: true,
-    };
-  }
-
-  // If adding another pharmacy will exceed the allowed limit:
+  // If adding another pharmacy will exceed the allowed limit (2 free pharmacies):
   if (status.linkedPharmaciesCount >= status.allowedPharmacies) {
     const nextRequiredPlan = !status.isSubscribed
-      ? 3 // Trial allows up to 2 pharmacies; adding 3rd requires Plan 3
+      ? 3 // 2 pharmacies free initially; adding 3rd requires Plan 3
       : Math.min(5, status.allowedPharmacies + 1);
 
     return {
       canAdd: false,
       reason:
         !status.isSubscribed
-          ? 'الفترة التجريبية تتيح حتى صيدليتين (2) مجاناً لمدة 7 أيام. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في باقة مناسبة.'
+          ? 'النظام يتيح ربط حتى صيدليتين (2) مجاناً. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في باقة مناسبة.'
           : `لقد استنفدت باقتك الحالية (${status.allowedPharmacies} صيدليات). لإضافة فرع جديد يرجى ترقية الباقة.`,
       requiredPlan: nextRequiredPlan,
       currentCount: status.linkedPharmaciesCount,
@@ -308,6 +300,60 @@ export async function checkCanAddPharmacy(userEmail?: string): Promise<{
     allowedCount: status.allowedPharmacies,
     isTrialExpired: false,
   };
+}
+
+/**
+ * Check if pharmacist can add a pharmacy inside a specific warehouse:
+ * Rule: Only 1 pharmacy is allowed free in the SAME warehouse.
+ * Adding a 2nd pharmacy in the same warehouse requires an active subscription!
+ */
+export async function checkCanAddPharmacyInWarehouse(
+  warehouseId: string,
+  warehousePharmaciesCount: number,
+  userEmail?: string
+): Promise<{
+  canAdd: boolean;
+  reason?: string;
+  requiredPlan?: number;
+  isTrialExpired: boolean;
+}> {
+  const status = await getSubscriptionStatus(userEmail);
+
+  // If user is already subscribed to a paid plan:
+  if (status.isSubscribed) {
+    if (status.linkedPharmaciesCount >= status.allowedPharmacies) {
+      return {
+        canAdd: false,
+        reason: `لقد استنفدت الحد الأقصى لباقة اشتراكك الحالية (${status.allowedPharmacies} صيدليات). يرجى ترقية باقتك لإضافة فرع جديد.`,
+        requiredPlan: Math.min(5, status.allowedPharmacies + 1),
+        isTrialExpired: false,
+      };
+    }
+    return { canAdd: true, isTrialExpired: false };
+  }
+
+  // Not subscribed:
+  // 1. Check if user is trying to add more than 1 pharmacy in the SAME warehouse:
+  if (warehousePharmaciesCount >= 1) {
+    return {
+      canAdd: false,
+      reason: 'إضافة أكثر من صيدلية في نفس المخزن تتطلب الاشتراك في إحدى باقات إكس فارما.',
+      requiredPlan: 2,
+      isTrialExpired: false,
+    };
+  }
+
+  // 2. Check if overall user already linked 2 pharmacies across all warehouses:
+  if (status.linkedPharmaciesCount >= 2) {
+    return {
+      canAdd: false,
+      reason: 'النظام يتيح ربط حتى صيدليتين (2) مجاناً. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في باقة مناسبة.',
+      requiredPlan: 3,
+      isTrialExpired: false,
+    };
+  }
+
+  return { canAdd: true, isTrialExpired: false };
 }
 
 import CryptoJS from 'crypto-js';

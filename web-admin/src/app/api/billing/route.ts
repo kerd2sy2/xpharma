@@ -17,6 +17,10 @@ async function ensureColumns() {
     `ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(128)`,
     `ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS card_brand VARCHAR(32)`,
     `ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS masked_card VARCHAR(32)`,
+    `ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS start_date DATE DEFAULT CURRENT_DATE`,
+    `ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS end_date DATE DEFAULT (CURRENT_DATE + INTERVAL '30 days')`,
+    `UPDATE public.subscriptions SET start_date = CURRENT_DATE WHERE start_date IS NULL`,
+    `UPDATE public.subscriptions SET end_date = (start_date + INTERVAL '30 days')::date WHERE end_date IS NULL`,
   ];
 
   for (const stmt of statements) {
@@ -25,6 +29,51 @@ async function ensureColumns() {
     } catch (e) {
       // Continue next statement
     }
+  }
+}
+
+async function syncSubscribedUsers() {
+  try {
+    // Auto-sync any user who has subscription_plan > 0 or is_subscription_active into public.subscriptions
+    await query(`
+      INSERT INTO public.subscriptions (
+        tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
+        status, start_date, end_date, created_at, updated_at, notes
+      )
+      SELECT 
+        (SELECT id FROM public.tenants LIMIT 1),
+        LOWER(TRIM(u.email)),
+        COALESCE(u.name, 'مشترك Google'),
+        COALESCE(u.device_name, '-'),
+        CASE 
+          WHEN u.subscription_plan > 0 THEN u.subscription_plan::text || ' صيدليات'
+          ELSE '3 صيدليات'
+        END,
+        CASE 
+          WHEN u.subscription_plan = 1 THEN 100
+          WHEN u.subscription_plan = 2 THEN 150
+          WHEN u.subscription_plan = 4 THEN 250
+          WHEN u.subscription_plan >= 5 THEN 300
+          ELSE 200
+        END,
+        'kashier',
+        'active',
+        CURRENT_DATE,
+        COALESCE(u.subscription_expires_at::date, (CURRENT_DATE + INTERVAL '30 days')::date),
+        COALESCE(u.last_login_at, NOW()),
+        NOW(),
+        'اشتراك مفعل لحساب Google'
+      FROM public.users u
+      WHERE (u.subscription_plan > 0 OR u.is_subscription_active = TRUE)
+        AND u.email IS NOT NULL AND u.email <> ''
+        AND NOT EXISTS (
+          SELECT 1 FROM public.subscriptions s 
+          WHERE LOWER(TRIM(s.user_email)) = LOWER(TRIM(u.email)) 
+            AND s.status = 'active'
+        )
+    `);
+  } catch (e) {
+    // Ignore non-fatal sync error
   }
 }
 
@@ -107,13 +156,16 @@ async function seedInitialKashierTransactions(cols: Set<string>) {
   }
 }
 
-// GET /api/billing - list all subscriptions (Kashier & InstaPay) with fallback joins
+// GET /api/billing - list all subscriptions (Kashier & InstaPay) with fallback joins & countdown
 export async function GET() {
   try {
     // 1. Ensure table columns exist
     await ensureColumns();
 
-    // 2. Query available columns dynamically to avoid any missing-column crash
+    // 2. Sync subscribed users from users table
+    await syncSubscribedUsers();
+
+    // 3. Query available columns dynamically to avoid any missing-column crash
     const colRes = await query(`
       SELECT column_name 
       FROM information_schema.columns 
@@ -121,7 +173,7 @@ export async function GET() {
     `);
     const cols = new Set(colRes.rows.map((r: any) => r.column_name));
 
-    // 3. Seed historical Kashier test transactions if missing
+    // 4. Seed historical Kashier test transactions if missing
     await seedInitialKashierTransactions(cols);
 
     const selectUserEmail = cols.has('user_email') ? 's.user_email' : "NULL::VARCHAR AS user_email";
@@ -146,8 +198,9 @@ export async function GET() {
         COALESCE(p.phone, ${cols.has('user_phone') ? 's.user_phone' : "NULL"}, '-') AS pharmacy_phone,
         s.plan_type,
         s.status,
-        s.start_date,
-        s.end_date,
+        COALESCE(s.start_date, s.created_at::date, CURRENT_DATE) AS start_date,
+        COALESCE(s.end_date, (COALESCE(s.start_date, s.created_at::date, CURRENT_DATE) + INTERVAL '30 days')::date) AS end_date,
+        GREATEST(0, (COALESCE(s.end_date, (COALESCE(s.start_date, s.created_at::date, CURRENT_DATE) + INTERVAL '30 days')::date) - CURRENT_DATE)) AS days_left,
         s.receipt_url,
         COALESCE(s.receipt_ref, ${cols.has('transaction_id') ? 's.transaction_id' : "NULL"}, ${cols.has('order_id') ? 's.order_id' : "NULL"}) AS receipt_ref,
         s.notes,
@@ -170,7 +223,19 @@ export async function GET() {
         s.created_at DESC
     `);
 
-    return NextResponse.json({ success: true, subscriptions: result.rows });
+    // Ensure calculated days_left is attached accurately
+    const todayMs = new Date().setHours(0, 0, 0, 0);
+    const enriched = result.rows.map((row: any) => {
+      const endMs = row.end_date ? new Date(row.end_date).getTime() : todayMs + 30 * 86400000;
+      const diffDays = Math.ceil((endMs - todayMs) / (1000 * 60 * 60 * 24));
+      return {
+        ...row,
+        days_left: row.status === 'active' ? Math.max(0, diffDays) : (row.status === 'pending_approval' ? 30 : 0),
+        is_expired: row.status === 'active' ? diffDays <= 0 : false,
+      };
+    });
+
+    return NextResponse.json({ success: true, subscriptions: enriched });
   } catch (error: any) {
     console.error('Error fetching subscriptions:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -310,6 +375,8 @@ export async function POST(req: NextRequest) {
           `UPDATE public.users 
            SET subscription_plan = $1, 
                is_active = TRUE,
+               is_subscription_active = TRUE,
+               subscription_expires_at = NOW() + INTERVAL '30 days',
                updated_at = NOW() 
            WHERE LOWER(email) = LOWER($2)`,
           [planCount, user_email]

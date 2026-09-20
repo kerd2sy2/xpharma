@@ -33,6 +33,9 @@ import {
   IconAlertCircle,
   IconCircleCheck,
   IconPhoto,
+  IconClock,
+  IconCalendarTime,
+  IconHourglassHigh,
 } from '@tabler/icons-react';
 import { toast } from 'sonner';
 
@@ -58,6 +61,8 @@ interface Subscription {
   status: 'active' | 'pending_approval' | 'rejected' | 'expired';
   start_date: string;
   end_date: string;
+  days_left?: number;
+  is_expired?: boolean;
   receipt_url: string | null;
   receipt_ref: string | null;
   notes: string | null;
@@ -173,6 +178,49 @@ export default function BillingReviewPage() {
     return `${plan} صيدليات`;
   };
 
+  const getCountdownInfo = (s: Subscription) => {
+    let days = typeof s.days_left === 'number' ? s.days_left : 30;
+    if (s.end_date) {
+      const endMs = new Date(s.end_date).getTime();
+      const todayMs = new Date().setHours(0, 0, 0, 0);
+      days = Math.ceil((endMs - todayMs) / (1000 * 60 * 60 * 24));
+    }
+
+    if (s.status === 'pending_approval') {
+      return {
+        label: '30 يوماً (عند التفعيل)',
+        days: 30,
+        variant: 'pending',
+      };
+    }
+    if (s.status === 'rejected') {
+      return {
+        label: 'مرفوض',
+        days: 0,
+        variant: 'rejected',
+      };
+    }
+    if (days <= 0 || s.status === 'expired') {
+      return {
+        label: days < 0 ? `منتهي منذ ${Math.abs(days)} يوم` : 'منتهي اليوم',
+        days: 0,
+        variant: 'expired',
+      };
+    }
+    if (days <= 3) {
+      return {
+        label: `باقي ${days} ${days === 1 ? 'يوم' : days === 2 ? 'يومان' : 'أيام'} (ينتهي قريباً)`,
+        days,
+        variant: 'urgent',
+      };
+    }
+    return {
+      label: `باقي ${days} يوم`,
+      days,
+      variant: 'active',
+    };
+  };
+
   return (
     <PageContainer>
       <div className='flex flex-col gap-6'>
@@ -181,7 +229,7 @@ export default function BillingReviewPage() {
           <div>
             <h1 className='text-2xl font-bold tracking-tight'>مراجعة الفواتير والاشتراكات (Billing & Subscriptions)</h1>
             <p className='text-sm text-muted-foreground'>
-              متابعة عمليات الدفع الإلكتروني (بوابة Kashier) والتحويلات البنكية (InstaPay) وتفعيل اشتراكات الصيدليات.
+              متابعة عمليات الدفع الإلكتروني (بوابة Kashier) والتحويلات البنكية (InstaPay) وتفعيل اشتراكات الصيدليات والعد التنازلي للشهر.
             </p>
           </div>
           <Button variant='outline' size='sm' onClick={fetchSubscriptions} disabled={loading}>
@@ -209,7 +257,7 @@ export default function BillingReviewPage() {
             </CardHeader>
             <CardContent>
               <div className='text-2xl font-bold text-emerald-600'>{activeCount}</div>
-              <p className='text-xs text-muted-foreground'>مفعلة وتعمل الآن</p>
+              <p className='text-xs text-muted-foreground'>مفعلة مع عداد 30 يوم</p>
             </CardContent>
           </Card>
           <Card>
@@ -238,8 +286,8 @@ export default function BillingReviewPage() {
         <Card>
           <CardHeader className='flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4'>
             <div>
-              <CardTitle>سجل الفواتير وعمليات الدفع</CardTitle>
-              <CardDescription>عرض فوري لعمليات الدفع عبر كاشير وتحويلات إنستاباي وتفاصيل العميل.</CardDescription>
+              <CardTitle>سجل الفواتير والاشتراكات الشهرية</CardTitle>
+              <CardDescription>عرض فوري للاشتراكات وباقي كم يوم لانتهاء كل اشتراك وعمليات الدفع.</CardDescription>
             </div>
             <Tabs value={filterTab} onValueChange={(v: any) => setFilterTab(v)}>
               <TabsList>
@@ -265,6 +313,7 @@ export default function BillingReviewPage() {
                     <TableHead>طريقة الدفع</TableHead>
                     <TableHead>نوع الباقة</TableHead>
                     <TableHead>المبلغ المدفوع</TableHead>
+                    <TableHead>عداد الاشتراك (شهر)</TableHead>
                     <TableHead>رقم العملية / المرجع</TableHead>
                     <TableHead>تاريخ العملية</TableHead>
                     <TableHead>الحالة</TableHead>
@@ -274,91 +323,128 @@ export default function BillingReviewPage() {
                 <TableBody>
                   {loading && subscriptions.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={8} className='text-center py-8 text-muted-foreground'>
-                        جاري تحميل الفواتير...
+                      <TableCell colSpan={9} className='text-center py-8 text-muted-foreground'>
+                        جاري تحميل الفواتير والاشتراكات...
                       </TableCell>
                     </TableRow>
                   ) : filteredSubs.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={8} className='text-center py-8 text-muted-foreground'>
+                      <TableCell colSpan={9} className='text-center py-8 text-muted-foreground'>
                         لا توجد فواتير أو اشتراكات مسجلة مطابقة للفلتر.
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredSubs.map((s) => (
-                      <TableRow key={s.id}>
-                        <TableCell>
-                          <div className='font-semibold'>{s.user_name || s.pharmacy_name || 'مشترك تطبيق'}</div>
-                          <div className='text-xs text-muted-foreground font-mono'>
-                            {s.user_email || s.pharmacy_phone || s.pharmacy_code || '-'}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {s.payment_method === 'kashier' || s.transaction_id ? (
-                            <Badge variant='outline' className='border-indigo-500 text-indigo-600 bg-indigo-50 dark:bg-indigo-950/30 gap-1 text-xs'>
-                              <IconCreditCard className='size-3' />
-                              كاشير (أونلاين)
+                    filteredSubs.map((s) => {
+                      const countdown = getCountdownInfo(s);
+                      return (
+                        <TableRow key={s.id}>
+                          <TableCell>
+                            <div className='font-semibold'>{s.user_name || s.pharmacy_name || 'مشترك تطبيق'}</div>
+                            <div className='text-xs text-muted-foreground font-mono'>
+                              {s.user_email || s.pharmacy_phone || s.pharmacy_code || '-'}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {s.payment_method === 'kashier' || s.transaction_id ? (
+                              <Badge variant='outline' className='border-indigo-500 text-indigo-600 bg-indigo-50 dark:bg-indigo-950/30 gap-1 text-xs'>
+                                <IconCreditCard className='size-3' />
+                                كاشير (أونلاين)
+                              </Badge>
+                            ) : (
+                              <Badge variant='outline' className='border-amber-500 text-amber-600 bg-amber-50 dark:bg-amber-950/30 gap-1 text-xs'>
+                                <IconReceipt className='size-3' />
+                                إنستاباي (تحويل)
+                              </Badge>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant='secondary' className='text-xs'>
+                              {formatPlanName(s.plan_type)}
                             </Badge>
-                          ) : (
-                            <Badge variant='outline' className='border-amber-500 text-amber-600 bg-amber-50 dark:bg-amber-950/30 gap-1 text-xs'>
-                              <IconReceipt className='size-3' />
-                              إنستاباي (تحويل)
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant='secondary' className='text-xs'>
-                            {formatPlanName(s.plan_type)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <span className='font-bold text-emerald-600 dark:text-emerald-400 font-mono'>
-                            {s.amount ? `${s.amount} ج.م` : '-'}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          {s.receipt_ref || s.transaction_id || s.order_id ? (
-                            <code className='text-xs bg-muted px-1.5 py-0.5 rounded font-mono'>
-                              {s.transaction_id || s.receipt_ref || s.order_id}
-                            </code>
-                          ) : (
-                            <span className='text-xs text-muted-foreground'>-</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <span className='text-xs text-muted-foreground'>
-                            {s.created_at ? new Date(s.created_at).toLocaleDateString('ar-EG') : '-'}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          {s.status === 'active' ? (
-                            <Badge variant='outline' className='border-emerald-500 text-emerald-600 bg-emerald-50 dark:bg-emerald-950/30'>
-                              مدفوع ونشط
-                            </Badge>
-                          ) : s.status === 'pending_approval' ? (
-                            <Badge variant='outline' className='border-amber-500 text-amber-600 bg-amber-50 dark:bg-amber-950/30 animate-pulse'>
-                              بانتظار المراجعة
-                            </Badge>
-                          ) : s.status === 'rejected' ? (
-                            <Badge variant='outline' className='border-rose-500 text-rose-600 bg-rose-50 dark:bg-rose-950/30'>
-                              مرفوض
-                            </Badge>
-                          ) : (
-                            <Badge variant='outline'>منتهي</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className='text-end'>
-                          <Button
-                            variant='ghost'
-                            size='sm'
-                            className='h-8 text-xs'
-                            onClick={() => setPreviewSub(s)}
-                          >
-                            التفاصيل
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))
+                          </TableCell>
+                          <TableCell>
+                            <span className='font-bold text-emerald-600 dark:text-emerald-400 font-mono'>
+                              {s.amount ? `${s.amount} ج.م` : '-'}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            {countdown.variant === 'active' ? (
+                              <div className='flex flex-col gap-1 min-w-[125px]'>
+                                <div className='flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400'>
+                                  <IconClock className='size-3.5 shrink-0' />
+                                  <span>{countdown.label}</span>
+                                </div>
+                                <div className='w-full bg-emerald-100 dark:bg-emerald-950/50 rounded-full h-1.5 overflow-hidden'>
+                                  <div
+                                    className='bg-emerald-500 h-1.5 rounded-full transition-all'
+                                    style={{ width: `${Math.min(100, Math.max(0, Math.round((countdown.days / 30) * 100)))}%` }}
+                                  />
+                                </div>
+                                <span className='text-[10px] text-muted-foreground'>من دورة 30 يوماً</span>
+                              </div>
+                            ) : countdown.variant === 'urgent' ? (
+                              <Badge variant='outline' className='border-amber-500 text-amber-600 bg-amber-50 dark:bg-amber-950/30 gap-1 text-xs animate-pulse'>
+                                <IconHourglassHigh className='size-3.5' />
+                                {countdown.label}
+                              </Badge>
+                            ) : countdown.variant === 'expired' ? (
+                              <Badge variant='outline' className='border-rose-500 text-rose-600 bg-rose-50 dark:bg-rose-950/30 gap-1 text-xs'>
+                                <IconAlertCircle className='size-3.5' />
+                                {countdown.label}
+                              </Badge>
+                            ) : countdown.variant === 'pending' ? (
+                              <Badge variant='outline' className='border-blue-500 text-blue-600 bg-blue-50 dark:bg-blue-950/30 gap-1 text-xs'>
+                                <IconCalendarTime className='size-3.5' />
+                                {countdown.label}
+                              </Badge>
+                            ) : (
+                              <span className='text-xs text-muted-foreground'>-</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {s.receipt_ref || s.transaction_id || s.order_id ? (
+                              <code className='text-xs bg-muted px-1.5 py-0.5 rounded font-mono'>
+                                {s.transaction_id || s.receipt_ref || s.order_id}
+                              </code>
+                            ) : (
+                              <span className='text-xs text-muted-foreground'>-</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <span className='text-xs text-muted-foreground'>
+                              {s.created_at ? new Date(s.created_at).toLocaleDateString('ar-EG') : '-'}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            {s.status === 'active' ? (
+                              <Badge variant='outline' className='border-emerald-500 text-emerald-600 bg-emerald-50 dark:bg-emerald-950/30'>
+                                مدفوع ونشط
+                              </Badge>
+                            ) : s.status === 'pending_approval' ? (
+                              <Badge variant='outline' className='border-amber-500 text-amber-600 bg-amber-50 dark:bg-amber-950/30 animate-pulse'>
+                                بانتظار المراجعة
+                              </Badge>
+                            ) : s.status === 'rejected' ? (
+                              <Badge variant='outline' className='border-rose-500 text-rose-600 bg-rose-50 dark:bg-rose-950/30'>
+                                مرفوض
+                              </Badge>
+                            ) : (
+                              <Badge variant='outline'>منتهي</Badge>
+                            )}
+                          </TableCell>
+                          <TableCell className='text-end'>
+                            <Button
+                              variant='ghost'
+                              size='sm'
+                              className='h-8 text-xs'
+                              onClick={() => setPreviewSub(s)}
+                            >
+                              التفاصيل
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
                   )}
                 </TableBody>
               </Table>
@@ -372,22 +458,57 @@ export default function BillingReviewPage() {
       <Dialog open={!!previewSub} onOpenChange={(open) => !open && setPreviewSub(null)}>
         <DialogContent className='sm:max-w-[560px]'>
           <DialogHeader>
-            <DialogTitle>فحص إيصال التحويل (InstaPay Receipt)</DialogTitle>
+            <DialogTitle>فحص بيانات وتفاصيل الاشتراك</DialogTitle>
             <DialogDescription>
-              مراجعة بيانات الدفع الخاصة بـ ({previewSub?.pharmacy_name || 'الصيدلية'}) - مخزن {previewSub?.tenant_name}
+              مراجعة بيانات الدفع الخاصة بـ ({previewSub?.pharmacy_name || previewSub?.user_name || 'الصيدلية'}) - {previewSub?.tenant_name}
             </DialogDescription>
           </DialogHeader>
 
           {previewSub && (
             <div className='space-y-4 py-3'>
+              {/* Countdown & Dates Panel */}
+              <div className='bg-primary/5 border border-primary/20 p-3 rounded-lg flex flex-col gap-2'>
+                <div className='flex items-center justify-between text-sm'>
+                  <span className='text-muted-foreground flex items-center gap-1.5'>
+                    <IconClock className='size-4 text-primary' />
+                    عداد مدة الاشتراك:
+                  </span>
+                  <span className='font-bold text-primary'>
+                    {getCountdownInfo(previewSub).label}
+                  </span>
+                </div>
+                <div className='grid grid-cols-2 gap-2 text-xs pt-2 border-t border-primary/10'>
+                  <div>
+                    <span className='text-muted-foreground block'>تاريخ بداية الاشتراك:</span>
+                    <span className='font-semibold'>
+                      {previewSub.start_date ? new Date(previewSub.start_date).toLocaleDateString('ar-EG') : 'تاريخ الاعتماد'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className='text-muted-foreground block'>تاريخ نهاية الاشتراك (شهر):</span>
+                    <span className='font-semibold'>
+                      {previewSub.end_date ? new Date(previewSub.end_date).toLocaleDateString('ar-EG') : 'بعد 30 يوماً'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
               <div className='grid grid-cols-2 gap-2 text-sm bg-muted/50 p-3 rounded-md'>
                 <div>
                   <span className='text-xs text-muted-foreground block'>رقم المعاملة (Ref ID):</span>
-                  <span className='font-mono font-semibold'>{previewSub.receipt_ref || 'غير مسجل'}</span>
+                  <span className='font-mono font-semibold'>{previewSub.receipt_ref || previewSub.transaction_id || previewSub.order_id || 'غير مسجل'}</span>
                 </div>
                 <div>
                   <span className='text-xs text-muted-foreground block'>نوع الباقة:</span>
                   <span className='font-semibold'>{previewSub.plan_type}</span>
+                </div>
+                <div>
+                  <span className='text-xs text-muted-foreground block'>البريد الإلكتروني:</span>
+                  <span className='font-mono text-xs'>{previewSub.user_email || '-'}</span>
+                </div>
+                <div>
+                  <span className='text-xs text-muted-foreground block'>المبلغ المسدد:</span>
+                  <span className='font-bold text-emerald-600'>{previewSub.amount ? `${previewSub.amount} ج.م` : '-'}</span>
                 </div>
                 {previewSub.notes && (
                   <div className='col-span-2 pt-1 border-t'>

@@ -259,28 +259,18 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 
 		if err == nil {
 			linkedUID = dbUID
-			trialDaysPassed := int(time.Since(trialStartedAt).Hours() / 24)
 			isSubscribed := isSubActive || subPlan > 0
 			if subExpiresAt != nil && subExpiresAt.Before(time.Now()) {
 				isSubscribed = false
 			}
 
-			// 1. Check if trial is expired
-			if trialDaysPassed >= 7 && !isSubscribed {
-				c.JSON(http.StatusForbidden, gin.H{
-					"error": "انتهت الفترة التجريبية (7 أيام). يرجى الاشتراك في الباقة المناسبة للاستمرار.",
-					"code":  "TRIAL_EXPIRED",
-				})
-				return
-			}
-
-			// 2. Allowed pharmacies: 2 during trial, or subPlan
+			// 1. Allowed pharmacies: up to 2 pharmacies free initially, or subPlan when subscribed
 			allowedPharmacies := 2
 			if isSubscribed && subPlan > 0 {
 				allowedPharmacies = subPlan
 			}
 
-			// 3. Check if this specific pharmacy code is already linked to this user
+			// 2. Check if this specific pharmacy code is already linked to this user
 			var alreadyLinked bool
 			_ = s.router.Pool().QueryRow(
 				c.Request.Context(),
@@ -288,7 +278,26 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 				linkedUID, code,
 			).Scan(&alreadyLinked)
 
-			// 4. If it's a NEW distinct pharmacy code, check if user has reached their limit
+			// 3. Rule: In the same warehouse, more than 1 pharmacy requires an active subscription
+			if !alreadyLinked && !isSubscribed {
+				var warehousePharmaciesCount int
+				_ = s.router.Pool().QueryRow(
+					c.Request.Context(),
+					`SELECT COUNT(DISTINCT code) FROM public.pharmacies WHERE linked_user_id = $1 AND tenant_id = $2`,
+					linkedUID, req.TenantID,
+				).Scan(&warehousePharmaciesCount)
+
+				if warehousePharmaciesCount >= 1 {
+					c.JSON(http.StatusForbidden, gin.H{
+						"error":          "إضافة أكثر من صيدلية في نفس المخزن تتطلب الاشتراك في إحدى باقات إكس فارما.",
+						"code":           "SUBSCRIPTION_REQUIRED",
+						"required_plan":  2,
+					})
+					return
+				}
+			}
+
+			// 4. If it's a NEW distinct pharmacy code, check if user has reached their overall limit (2 free pharmacies)
 			if !alreadyLinked {
 				var currentDistinctCount int
 				_ = s.router.Pool().QueryRow(
@@ -300,7 +309,7 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 				if currentDistinctCount >= allowedPharmacies {
 					if !isSubscribed {
 						c.JSON(http.StatusForbidden, gin.H{
-							"error":          "الفترة التجريبية تتيح ربط حتى صيدليتين (2) فقط مجاناً. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في باقة مدفوعة.",
+							"error":          "النظام يتيح ربط حتى صيدليتين (2) مجاناً. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في باقة مناسبة.",
 							"code":           "SUBSCRIPTION_REQUIRED",
 							"required_plan":  3,
 							"current_count":  currentDistinctCount,

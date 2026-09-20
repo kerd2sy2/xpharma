@@ -78,7 +78,7 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		isSubscribed = false
 	}
 
-	isTrialExpired := trialDaysPassed >= 7 && !isSubscribed
+	isTrialExpired := false
 
 	// Allowed pharmacies: 2 during trial, or subscribedPlan count when subscribed
 	allowedPharmacies := 2

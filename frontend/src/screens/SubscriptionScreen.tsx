@@ -107,6 +107,19 @@ export default function SubscriptionScreen({
           !returnUrl.includes('FAILED')
         ) {
           await setActiveSubscriptionPlan(selectedPlan);
+          // Immediately record to web-admin billing review & central backend
+          recordSubscriptionPayment({
+            user_email: user?.email || '',
+            user_name: user?.name || 'دكتور صيدلي',
+            user_phone: user?.phone || '',
+            plan_type: `${selectedPlan} صيدليات`,
+            amount: activePlanObj.price,
+            payment_method: 'kashier',
+            status: 'active',
+            order_id: res.order_id || '',
+            notes: `اشتراك إلكتروني ناجح بحساب Google (${user?.email || ''}) - باقة ${activePlanObj.label}`,
+          }).catch((e) => console.warn('Record billing error:', e));
+
           setActivatedPlanObj(activePlanObj);
           setShowSuccess(true);
           if (onSubscribed) onSubscribed(selectedPlan);

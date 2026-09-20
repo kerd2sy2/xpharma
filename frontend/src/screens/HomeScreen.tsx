@@ -223,11 +223,6 @@ export default function HomeScreen() {
     const checkTrial = async () => {
       const status = await getSubscriptionStatus(user?.email);
       setSubscriptionStatusInfo(status);
-      if (status.isTrialExpired) {
-        setIsTrialExpired(true);
-        setSubscriptionReason('انتهت الفترة التجريبية (7 أيام). يرجى الاشتراك للاستمرار في فتح المخازن.');
-        setSubscriptionRequiredPlan(Math.max(1, status.linkedPharmaciesCount));
-      }
     };
     checkTrial();
   }, [user?.id, user?.email]);
@@ -242,13 +237,6 @@ export default function HomeScreen() {
   const handleWarehousePress = async (wh: Warehouse) => {
     const subStatus = await getSubscriptionStatus(user?.email);
     setSubscriptionStatusInfo(subStatus);
-    if (subStatus.isTrialExpired) {
-      setSubscriptionReason('انتهت الفترة التجريبية (7 أيام). يرجى الاشتراك للاستمرار في فتح المخازن.');
-      setSubscriptionRequiredPlan(Math.max(1, subStatus.linkedPharmaciesCount));
-      setIsTrialExpired(true);
-      setSubscriptionModalVisible(true);
-      return;
-    }
 
     let session = await getPharmacySession(wh.id);
 
@@ -269,10 +257,10 @@ export default function HomeScreen() {
       });
     } else {
       const check = await checkCanAddPharmacy(user?.email);
-      if (check.isTrialExpired) {
-        setSubscriptionReason('انتهت الفترة التجريبية (7 أيام). يرجى الاشتراك للتمكن من ربط ومتابعة المخازن.');
-        setSubscriptionRequiredPlan(Math.max(1, check.currentCount));
-        setIsTrialExpired(true);
+      if (!check.canAdd) {
+        setSubscriptionReason(check.reason || 'يرجى ترقية الباقة لإضافة صيدليات جديدة.');
+        setSubscriptionRequiredPlan(check.requiredPlan || 3);
+        setIsTrialExpired(false);
         setSubscriptionModalVisible(true);
         return;
       }

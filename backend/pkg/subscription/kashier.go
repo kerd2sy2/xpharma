@@ -295,6 +295,28 @@ func (s *SubscriptionService) HandleWebhook(c *gin.Context) {
 			} else {
 				log.Printf("[Kashier Webhook] Successfully activated Plan %d for %s", plan, email)
 			}
+
+			// Also persist to public.subscriptions for web-admin billing review immediately
+			price := getPlanPrice(plan)
+			subQuery := `
+				INSERT INTO public.subscriptions (
+					tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
+					status, order_id, transaction_id, receipt_ref, notes,
+					start_date, end_date, created_at, updated_at
+				) VALUES (
+					(SELECT id FROM public.tenants LIMIT 1),
+					$1, 
+					COALESCE((SELECT name FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1), 'مشترك Google'),
+					COALESCE((SELECT device_name FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1), '-'),
+					$2, $3, 'kashier', 'active', $4, $4, $4, 
+					'دفع إلكتروني ناجح عبر بوابة كاشير (Kashier Webhook)',
+					CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', NOW(), NOW()
+				)
+			`
+			_, subErr := s.router.Pool().Exec(c.Request.Context(), subQuery, email, fmt.Sprintf("%d صيدليات", plan), price, orderID)
+			if subErr != nil {
+				log.Printf("[Kashier Webhook] Subscriptions insert error: %v", subErr)
+			}
 		}
 	}
 
