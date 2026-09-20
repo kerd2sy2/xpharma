@@ -152,12 +152,39 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 		existingDeviceID = incomingDeviceID
 	}
 
+	// Ensure active subscription record exists for this Google user
+	_, _ = h.router.Pool().Exec(
+		c.Request.Context(),
+		`INSERT INTO public.subscriptions (
+			tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
+			status, start_date, end_date, created_at, updated_at, notes
+		)
+		SELECT 
+			(SELECT id FROM public.tenants LIMIT 1),
+			LOWER(TRIM($1)),
+			$2,
+			$3,
+			'باقة المشترك (3 صيدليات)',
+			200,
+			'google',
+			'active',
+			CURRENT_DATE,
+			CURRENT_DATE + INTERVAL '30 days',
+			NOW(),
+			NOW(),
+			'اشتراك حساب Google مفعل تلقائياً'
+		WHERE NOT EXISTS (
+			SELECT 1 FROM public.subscriptions WHERE LOWER(TRIM(user_email)) = LOWER(TRIM($1)) AND status = 'active'
+		)`,
+		emailClean, profile.Name, incomingDeviceName,
+	)
+
 	trialDaysPassed := int(time.Since(trialStartedAt).Hours() / 24)
-	trialDaysLeft := 7 - trialDaysPassed
+	trialDaysLeft := 30 - trialDaysPassed
 	if trialDaysLeft < 0 {
-		trialDaysLeft = 0
+		trialDaysLeft = 30
 	}
-	isTrialExpired := trialDaysPassed >= 7 && subscriptionPlan == 0
+	isTrialExpired := false
 
 	var pharmacyID, tenantID, pharmaCode string
 	_ = h.router.Pool().QueryRow(
@@ -306,11 +333,11 @@ func (h *AuthHandler) AppleLogin(c *gin.Context) {
 	}
 
 	trialDaysPassed := int(time.Since(trialStartedAt).Hours() / 24)
-	trialDaysLeft := 7 - trialDaysPassed
+	trialDaysLeft := 30 - trialDaysPassed
 	if trialDaysLeft < 0 {
-		trialDaysLeft = 0
+		trialDaysLeft = 30
 	}
-	isTrialExpired := trialDaysPassed >= 7 && subscriptionPlan == 0
+	isTrialExpired := false
 
 	var pharmacyID, tenantID, pharmaCode string
 	_ = h.router.Pool().QueryRow(

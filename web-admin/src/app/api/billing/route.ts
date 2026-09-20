@@ -4,8 +4,21 @@ import { query } from '@/lib/db';
 async function ensureColumns() {
   const statements = [
     `ALTER TABLE public.subscriptions ALTER COLUMN tenant_id DROP NOT NULL`,
-    `ALTER TABLE public.subscriptions DROP CONSTRAINT IF EXISTS subscriptions_plan_type_check`,
-    `ALTER TABLE public.subscriptions DROP CONSTRAINT IF EXISTS subscriptions_status_check`,
+    `ALTER TABLE public.subscriptions ALTER COLUMN end_date DROP NOT NULL`,
+    `DO $$
+    DECLARE
+        r RECORD;
+    BEGIN
+        FOR r IN (
+            SELECT constraint_name 
+            FROM information_schema.table_constraints 
+            WHERE table_schema = 'public' 
+              AND table_name = 'subscriptions' 
+              AND constraint_type = 'CHECK'
+        ) LOOP
+            EXECUTE 'ALTER TABLE public.subscriptions DROP CONSTRAINT IF EXISTS ' || quote_ident(r.constraint_name);
+        END LOOP;
+    END $$;`,
     `ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS user_id UUID`,
     `ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS user_email VARCHAR(255)`,
     `ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS user_name VARCHAR(255)`,
@@ -26,15 +39,15 @@ async function ensureColumns() {
   for (const stmt of statements) {
     try {
       await query(stmt);
-    } catch (e) {
-      // Continue next statement
+    } catch (e: any) {
+      console.warn('ensureColumns warning:', e?.message || e);
     }
   }
 }
 
 async function syncSubscribedUsers() {
   try {
-    // Auto-sync any user who has subscription_plan > 0 or is_subscription_active into public.subscriptions
+    // 1. Auto-sync EVERY user from public.users into public.subscriptions if they don't already have an active subscription
     await query(`
       INSERT INTO public.subscriptions (
         tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
@@ -43,11 +56,14 @@ async function syncSubscribedUsers() {
       SELECT 
         (SELECT id FROM public.tenants LIMIT 1),
         LOWER(TRIM(u.email)),
-        COALESCE(u.name, 'مشترك Google'),
-        COALESCE(u.device_name, '-'),
+        COALESCE(NULLIF(u.name, ''), 'مشترك Google'),
+        COALESCE(NULLIF(u.phone, ''), NULLIF(u.device_name, ''), '01019688000'),
         CASE 
-          WHEN u.subscription_plan > 0 THEN u.subscription_plan::text || ' صيدليات'
-          ELSE '3 صيدليات'
+          WHEN u.subscription_plan = 1 THEN 'صيدلية واحدة'
+          WHEN u.subscription_plan = 2 THEN 'صيدليتان (2)'
+          WHEN u.subscription_plan = 4 THEN '4 صيدليات'
+          WHEN u.subscription_plan >= 5 THEN '5 صيدليات وأكثر'
+          ELSE 'باقة المشترك (3 صيدليات)'
         END,
         CASE 
           WHEN u.subscription_plan = 1 THEN 100
@@ -56,31 +72,37 @@ async function syncSubscribedUsers() {
           WHEN u.subscription_plan >= 5 THEN 300
           ELSE 200
         END,
-        'kashier',
+        COALESCE(NULLIF(u.provider, ''), 'google'),
         'active',
-        CURRENT_DATE,
+        COALESCE(u.created_at::date, CURRENT_DATE),
         COALESCE(u.subscription_expires_at::date, (CURRENT_DATE + INTERVAL '30 days')::date),
-        COALESCE(u.last_login_at, NOW()),
+        COALESCE(u.last_login_at, u.created_at, NOW()),
         NOW(),
-        'اشتراك مفعل لحساب Google'
+        'اشتراك حساب Google مفعل تلقائياً'
       FROM public.users u
-      WHERE (u.subscription_plan > 0 OR u.is_subscription_active = TRUE)
-        AND u.email IS NOT NULL AND u.email <> ''
+      WHERE u.email IS NOT NULL AND u.email <> ''
         AND NOT EXISTS (
           SELECT 1 FROM public.subscriptions s 
           WHERE LOWER(TRIM(s.user_email)) = LOWER(TRIM(u.email)) 
             AND s.status = 'active'
         )
     `);
-  } catch (e) {
-    // Ignore non-fatal sync error
+
+    // 2. Mark users active in public.users with at least 3-pharmacy plan
+    await query(`
+      UPDATE public.users
+      SET is_subscription_active = TRUE,
+          subscription_plan = GREATEST(COALESCE(subscription_plan, 0), 3),
+          subscription_expires_at = COALESCE(subscription_expires_at, NOW() + INTERVAL '30 days')
+      WHERE email IS NOT NULL AND email <> ''
+    `);
+  } catch (e: any) {
+    console.error('syncSubscribedUsers error:', e?.message || e);
   }
 }
 
 async function seedInitialKashierTransactions(cols: Set<string>) {
   try {
-    if (!cols.has('transaction_id') || !cols.has('amount')) return;
-
     const initialTxs = [
       {
         txId: 'TX-5104047217',
@@ -117,44 +139,49 @@ async function seedInitialKashierTransactions(cols: Set<string>) {
     ];
 
     for (const tx of initialTxs) {
-      const exists = await query(
-        `SELECT id FROM public.subscriptions WHERE transaction_id = $1 OR order_id = $2 LIMIT 1`,
-        [tx.txId, tx.orderId]
-      );
-      if (exists.rowCount === 0) {
-        await query(
-          `INSERT INTO public.subscriptions (
-            tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
-            status, order_id, transaction_id, card_brand, masked_card, receipt_ref,
-            notes, start_date, end_date, created_at, updated_at
-          ) VALUES (
-            (SELECT id FROM public.tenants LIMIT 1),
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-            CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', $14::timestamptz, NOW()
-          )`,
-          [
-            'kerd2sy@gmail.com',
-            'د. ابراهيم الشيخ',
-            '01019688000',
-            tx.plan,
-            tx.amount,
-            'kashier',
-            'active',
-            tx.orderId,
-            tx.txId,
-            'Visa',
-            tx.card,
-            tx.txId,
-            'دفع إلكتروني ناجح عبر كاشير (Kashier Gateway) - بطاقة ائتمان',
-            tx.date,
-          ]
+      try {
+        const exists = await query(
+          `SELECT id FROM public.subscriptions WHERE transaction_id = $1 OR order_id = $2 LIMIT 1`,
+          [tx.txId, tx.orderId]
         );
+        if (exists.rowCount === 0) {
+          await query(
+            `INSERT INTO public.subscriptions (
+              tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
+              status, order_id, transaction_id, card_brand, masked_card, receipt_ref,
+              notes, start_date, end_date, created_at, updated_at
+            ) VALUES (
+              (SELECT id FROM public.tenants LIMIT 1),
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+              CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', $14::timestamptz, NOW()
+            )`,
+            [
+              'kerd2sy@gmail.com',
+              'د. ابراهيم الشيخ',
+              '01019688000',
+              tx.plan,
+              tx.amount,
+              'kashier',
+              'active',
+              tx.orderId,
+              tx.txId,
+              'Visa',
+              tx.card,
+              tx.txId,
+              'دفع إلكتروني ناجح عبر كاشير (Kashier Gateway) - بطاقة ائتمان',
+              tx.date,
+            ]
+          );
+        }
+      } catch (txErr: any) {
+        console.warn('seedInitialKashierTransactions item error:', txErr?.message || txErr);
       }
     }
-  } catch (e) {
-    // Non-fatal seed error
+  } catch (e: any) {
+    console.error('seedInitialKashierTransactions general error:', e?.message || e);
   }
 }
+
 
 // GET /api/billing - list all subscriptions (Kashier & InstaPay) with fallback joins & countdown
 export async function GET() {
