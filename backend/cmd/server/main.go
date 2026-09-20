@@ -121,6 +121,7 @@ func main() {
 		subGroup.GET("/upgrade-quote", subscriptionService.GetUpgradeQuote)
 		subGroup.POST("/register-pharmacy", subscriptionService.RegisterPharmacy)
 		subGroup.POST("/record-payment", subscriptionService.RecordPayment)
+		subGroup.POST("/select-active-pharmacies", subscriptionService.SelectActivePharmacies)
 		subGroup.POST("/kashier/initiate", subscriptionService.InitiateSession)
 		subGroup.POST("/kashier/webhook", subscriptionService.HandleWebhook)
 		subGroup.GET("/kashier/redirect", subscriptionService.HandleRedirect)

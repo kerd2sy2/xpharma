@@ -51,40 +51,52 @@ func (s *QueryService) ValidateLinkedPharmacyMiddleware() gin.HandlerFunc {
 		}
 
 		var isLinked bool
+		var isSuspended bool
 		err := s.router.Pool().QueryRow(c.Request.Context(), `
-			SELECT EXISTS(
-				SELECT 1 FROM public.pharmacies p
-				WHERE p.tenant_id = $1 
-				  AND LOWER(p.code) = LOWER($2) 
-				  AND p.is_active = true
-				  AND (
-					p.linked_user_id = $3 
-					OR (LOWER(p.linked_user_id) = LOWER($4) AND $4 <> '')
-					OR p.linked_user_id IN (
-						SELECT id::text FROM public.users 
-						WHERE (id::text = $3 AND $3 <> '') 
-						   OR (google_id = $3 AND $3 <> '') 
-						   OR (apple_id = $3 AND $3 <> '') 
-						   OR (LOWER(email) = LOWER($3) AND $3 <> '')
-						   OR (LOWER(email) = LOWER($4) AND $4 <> '')
-					)
-					OR p.linked_user_id IN (
-						SELECT email FROM public.users 
-						WHERE (id::text = $3 AND $3 <> '') 
-						   OR (google_id = $3 AND $3 <> '') 
-						   OR (apple_id = $3 AND $3 <> '') 
-						   OR (LOWER(email) = LOWER($3) AND $3 <> '')
-						   OR (LOWER(email) = LOWER($4) AND $4 <> '')
-					)
-				  )
-			)
-		`, tenantID, pharmaCode, userID, userEmail).Scan(&isLinked)
+			SELECT 
+				TRUE,
+				COALESCE(p.is_suspended, false)
+			FROM public.pharmacies p
+			WHERE p.tenant_id = $1 
+			  AND LOWER(p.code) = LOWER($2) 
+			  AND p.is_active = true
+			  AND (
+				p.linked_user_id = $3 
+				OR (LOWER(p.linked_user_id) = LOWER($4) AND $4 <> '')
+				OR p.linked_user_id IN (
+					SELECT id::text FROM public.users 
+					WHERE (id::text = $3 AND $3 <> '') 
+					   OR (google_id = $3 AND $3 <> '') 
+					   OR (apple_id = $3 AND $3 <> '') 
+					   OR (LOWER(email) = LOWER($3) AND $3 <> '')
+					   OR (LOWER(email) = LOWER($4) AND $4 <> '')
+				)
+				OR p.linked_user_id IN (
+					SELECT email FROM public.users 
+					WHERE (id::text = $3 AND $3 <> '') 
+					   OR (google_id = $3 AND $3 <> '') 
+					   OR (apple_id = $3 AND $3 <> '') 
+					   OR (LOWER(email) = LOWER($3) AND $3 <> '')
+					   OR (LOWER(email) = LOWER($4) AND $4 <> '')
+				)
+			  )
+			LIMIT 1
+		`, tenantID, pharmaCode, userID, userEmail).Scan(&isLinked, &isSuspended)
 
 		if err != nil || !isLinked {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"error":   "تم إلغاء ربط هذه الصيدلية من قبل إدارة المنصة",
 				"code":    "PHARMACY_UNLINKED",
+			})
+			return
+		}
+
+		if isSuspended {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"error":   "هذه الصيدلية معلقة مؤقتاً لتجاوز الحد المسموح في باقتك الحالية. يمكنك ترقية الباقة أو تفعيلها من شاشة اختيار الصيدليات.",
+				"code":    "PHARMACY_SUSPENDED",
 			})
 			return
 		}

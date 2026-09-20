@@ -54,9 +54,11 @@ export interface SubscriptionStatus {
   isTrialExpired: boolean;
   isSubscribed: boolean;
   subscribedPlan: number; // e.g. 1, 2, 3, 4, 5
-  allowedPharmacies: number; // 2 during trial, or subscribedPlan
+  allowedPharmacies: number; // 1 during trial, or subscribedPlan
   linkedPharmaciesCount: number;
-  uniquePharmacies: Array<{ code: string; name: string }>;
+  uniquePharmacies: Array<{ code: string; name: string; is_suspended?: boolean }>;
+  hasOverflow?: boolean;
+  requiresSelection?: boolean;
 }
 
 export interface UpgradeQuote {
@@ -196,7 +198,9 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
   let daysRemaining = 7;
   let isTrialExpired = false;
   let hasServerSync = false;
-  let serverAllowedPharmacies = 2;
+  let serverAllowedPharmacies = 1;
+  let hasOverflow = false;
+  let requiresSelection = false;
 
   // 1. Authoritative check via /v1/subscription/status
   if (userEmail) {
@@ -210,7 +214,9 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
           daysRemaining = typeof data.trial_days_left === 'number' ? Math.min(30, Math.max(0, data.trial_days_left)) : 30;
           isTrialExpired = !!data.is_trial_expired;
           subscribedPlan = typeof data.subscription_plan === 'number' ? data.subscription_plan : 0;
-          serverAllowedPharmacies = typeof data.allowed_pharmacies === 'number' ? data.allowed_pharmacies : 2;
+          serverAllowedPharmacies = typeof data.allowed_pharmacies === 'number' ? data.allowed_pharmacies : 1;
+          hasOverflow = !!data.has_overflow;
+          requiresSelection = !!data.requires_selection;
 
           // If server reports active subscription, store active plan
           if (data.is_subscribed && subscribedPlan > 0) {
@@ -220,14 +226,19 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
             await setActiveSubscriptionPlan(0);
           }
 
-          // Merge server-linked pharmacies with local cache
+          // Merge server-linked pharmacies with local cache preserving is_suspended
           if (Array.isArray(data.linked_pharmacies) && data.linked_pharmacies.length > 0) {
-            const mergedMap = new Map<string, string>();
-            uniquePharmacies.forEach((p) => mergedMap.set(p.code.toLowerCase(), p.name));
+            const list: Array<{ code: string; name: string; is_suspended?: boolean }> = [];
             data.linked_pharmacies.forEach((p: any) => {
-              if (p.code) mergedMap.set(p.code.toLowerCase(), p.name || p.code);
+              if (p.code) {
+                list.push({
+                  code: p.code,
+                  name: p.name || p.code,
+                  is_suspended: !!p.is_suspended,
+                });
+              }
             });
-            uniquePharmacies = Array.from(mergedMap.entries()).map(([code, name]) => ({ code, name }));
+            uniquePharmacies = list;
             await SecureStore.setItemAsync(GLOBAL_PHARMACIES_KEY, JSON.stringify(uniquePharmacies));
           }
         }
@@ -285,6 +296,8 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
     allowedPharmacies,
     linkedPharmaciesCount: uniquePharmacies.length,
     uniquePharmacies,
+    hasOverflow,
+    requiresSelection,
   };
 }
 
@@ -600,4 +613,31 @@ export async function recordSubscriptionPayment(payload: {
 
   return success;
 }
+
+/**
+ * Select which pharmacies should be active when the user has more linked pharmacies than their current plan allows
+ */
+export async function selectActivePharmacies(
+  email: string,
+  activeCodes: string[]
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch('https://api.xpharma.cloud/v1/subscription/select-active-pharmacies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: email.trim().toLowerCase(),
+        active_codes: activeCodes,
+      }),
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      return { success: true };
+    }
+    return { success: false, error: data.error || 'فشل تفعيل الصيدليات المختارة' };
+  } catch (e: any) {
+    return { success: false, error: e.message || 'فشل الاتصال بالخادم' };
+  }
+}
+
 

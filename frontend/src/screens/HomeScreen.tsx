@@ -44,6 +44,7 @@ import { RequestWarehouseModal } from '@/features/warehouses/components/RequestW
 import SettingsScreen from '@/screens/SettingsScreen';
 import SubscriptionScreen from '@/screens/SubscriptionScreen';
 import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
+import SelectActivePharmaciesModal from '@/components/SelectActivePharmaciesModal';
 import WarehousePortalScreen from '@/screens/WarehousePortalScreen';
 import XLogo, { XLogoHandle } from '@/components/XLogo';
 import PromoBannerCarousel, { BANNER_HEIGHT } from '@/components/PromoBannerCarousel';
@@ -98,6 +99,7 @@ export default function HomeScreen() {
   const [subscriptionRequiredPlan, setSubscriptionRequiredPlan] = useState<number>(2);
   const [isTrialExpired, setIsTrialExpired] = useState(false);
   const [subscriptionStatusInfo, setSubscriptionStatusInfo] = useState<SubscriptionStatus | null>(null);
+  const [selectActiveModalVisible, setSelectActiveModalVisible] = useState(false);
 
   // Verification Modal State
   const [verifyModalVisible, setVerifyModalVisible] = useState(false);
@@ -244,6 +246,9 @@ export default function HomeScreen() {
     const checkTrial = async () => {
       const status = await getSubscriptionStatus(user?.email);
       setSubscriptionStatusInfo(status);
+      if (status.hasOverflow && status.requiresSelection) {
+        setSelectActiveModalVisible(true);
+      }
     };
     checkTrial();
   }, [user?.id, user?.email]);
@@ -252,7 +257,12 @@ export default function HomeScreen() {
     setRefreshing(true);
     loadWarehouses();
     fetchBanners().then(setBanners);
-    getSubscriptionStatus(user?.email).then(setSubscriptionStatusInfo);
+    getSubscriptionStatus(user?.email).then((status) => {
+      setSubscriptionStatusInfo(status);
+      if (status.hasOverflow && status.requiresSelection) {
+        setSelectActiveModalVisible(true);
+      }
+    });
   };
 
   const handleWarehousePress = async (wh: Warehouse) => {
@@ -264,6 +274,11 @@ export default function HomeScreen() {
       setSubscriptionRequiredPlan(1);
       setIsTrialExpired(true);
       setSubscriptionModalVisible(true);
+      return;
+    }
+
+    if (wh.is_suspended) {
+      setSelectActiveModalVisible(true);
       return;
     }
 
@@ -819,6 +834,27 @@ export default function HomeScreen() {
           setRequestModalVisible(false);
           setIsSearchActive(false);
           setSearchQuery('');
+        }}
+      />
+
+      <SelectActivePharmaciesModal
+        visible={selectActiveModalVisible}
+        onClose={() => setSelectActiveModalVisible(false)}
+        userEmail={user?.email || ''}
+        allowedPharmacies={subscriptionStatusInfo?.allowedPharmacies || 1}
+        pharmacies={subscriptionStatusInfo?.uniquePharmacies || []}
+        onSuccess={async () => {
+          setSelectActiveModalVisible(false);
+          await loadWarehouses();
+          const updatedStatus = await getSubscriptionStatus(user?.email);
+          setSubscriptionStatusInfo(updatedStatus);
+          Alert.alert('تم بنجاح', 'تم تفعيل الصيدليات المختارة بنجاح.');
+        }}
+        onUpgradePress={() => {
+          setSelectActiveModalVisible(false);
+          setSubscriptionReason('ترقية باقة الاشتراك لتشغيل جميع الصيدليات والفروع معاً بلا قيود أو تعليق.');
+          setSubscriptionRequiredPlan(Math.min(5, (subscriptionStatusInfo?.uniquePharmacies?.length || 2)));
+          setSubscriptionModalVisible(true);
         }}
       />
     </View>

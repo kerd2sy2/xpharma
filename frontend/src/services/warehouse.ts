@@ -12,6 +12,7 @@ export interface Warehouse {
   logo_url?: string;
   category?: string;
   is_linked: boolean;
+  is_suspended?: boolean;
   linked_pharmacy_id?: string;
   linked_pharmacy_code?: string;
   linked_pharmacy_name?: string;
@@ -101,6 +102,7 @@ export interface LinkedPharmacyAccount {
   pharmacy_code: string;
   pharmacy_name: string;
   tenant_id: string;
+  is_suspended?: boolean;
 }
 
 const PHARMACY_STORAGE_PREFIX = 'xpharma_pharma_';

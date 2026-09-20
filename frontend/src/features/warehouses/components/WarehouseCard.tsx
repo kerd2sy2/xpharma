@@ -116,10 +116,17 @@ export const WarehouseCard = React.memo(({ item, onPress, width, marginBottom }:
 
           <View style={styles.metaRow}>
             {item.is_linked ? (
-              <View style={styles.statusItem}>
-                <Ionicons name="checkmark-circle" size={14} color="#34D399" />
-                <Text style={styles.statusTextLinked}>تم الربط</Text>
-              </View>
+              item.is_suspended ? (
+                <View style={styles.statusItem}>
+                  <Ionicons name="pause-circle" size={14} color="#FBBF24" />
+                  <Text style={[styles.statusTextLinked, { color: '#FDE047' }]}>معلق مؤقتاً</Text>
+                </View>
+              ) : (
+                <View style={styles.statusItem}>
+                  <Ionicons name="checkmark-circle" size={14} color="#34D399" />
+                  <Text style={styles.statusTextLinked}>تم الربط</Text>
+                </View>
+              )
             ) : (
               <View style={styles.statusItem}>
                 <Ionicons name="link" size={13} color="rgba(255, 255, 255, 0.85)" />

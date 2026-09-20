@@ -161,18 +161,19 @@ func (s *WarehouseService) GetWarehouses(c *gin.Context) {
 		if len(candidateIDsList) > 0 {
 			// Query all pharmacies linked to this user in this warehouse
 			pQuery := `
-				SELECT p.id::text, p.code, p.name 
+				SELECT p.id::text, p.code, p.name, COALESCE(p.is_suspended, false)
 				FROM public.pharmacies p
 				WHERE p.tenant_id = $1 
 				  AND p.is_active = true
 				  AND (p.linked_user_id = ANY($2) OR LOWER(p.linked_user_id) = ANY($2))
-				ORDER BY p.updated_at DESC
+				ORDER BY p.is_suspended ASC, p.updated_at DESC
 			`
 			pRows, pErr := s.router.Pool().Query(c.Request.Context(), pQuery, t.id, candidateIDsList)
 			if pErr == nil {
 				for pRows.Next() {
 					var pID, pCode, pName string
-					if err := pRows.Scan(&pID, &pCode, &pName); err == nil {
+					var isSuspended bool
+					if err := pRows.Scan(&pID, &pCode, &pName, &isSuspended); err == nil {
 						tokUID := canonicalDBUserID
 						if tokUID == "" {
 							tokUID = userID
@@ -199,6 +200,7 @@ func (s *WarehouseService) GetWarehouses(c *gin.Context) {
 							"name":          pName,
 							"token":         pToken,
 							"tenant_id":     t.id,
+							"is_suspended":  isSuspended,
 						})
 					}
 				}
@@ -208,12 +210,16 @@ func (s *WarehouseService) GetWarehouses(c *gin.Context) {
 
 		isLinked := len(linkedPharmacies) > 0
 		var linkedPharmaID, linkedPharmaName, linkedPharmaCode, pharmaToken string
+		var isSuspended bool
 		if isLinked {
 			first := linkedPharmacies[0]
 			linkedPharmaID = first["pharmacy_id"].(string)
 			linkedPharmaName = first["pharmacy_name"].(string)
 			linkedPharmaCode = first["pharmacy_code"].(string)
 			pharmaToken = first["token"].(string)
+			if susp, ok := first["is_suspended"].(bool); ok {
+				isSuspended = susp
+			}
 		}
 
 		warehouses = append(warehouses, map[string]interface{}{
@@ -226,6 +232,7 @@ func (s *WarehouseService) GetWarehouses(c *gin.Context) {
 			"logo_url":             t.logoURL,
 			"category":             t.category,
 			"is_linked":            isLinked,
+			"is_suspended":         isSuspended,
 			"linked_pharmacy_id":   linkedPharmaID,
 			"linked_pharmacy_name": linkedPharmaName,
 			"linked_pharmacy_code": linkedPharmaCode,
@@ -424,24 +431,22 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 			).Scan(&warehousePharmaciesCount)
 
 			if !isSubscribed {
-				// Free tier: 1 pharmacy is free in this warehouse. 2 or more requires subscription!
-				if warehousePharmaciesCount >= 1 {
-					c.JSON(http.StatusForbidden, gin.H{
-						"error":         "ربط أكثر من صيدلية واحدة في نفس المخزن يتطلب الاشتراك في إحدى باقات إكس فارما (باقة صيدليتان أو أكثر).",
-						"code":          "SUBSCRIPTION_REQUIRED",
-						"required_plan": 2,
-					})
-					return
-				}
+				// Free trial has expired or no active subscription
+				c.JSON(http.StatusForbidden, gin.H{
+					"error":         "انتهت الفترة التجريبية المجانية. يرجى الاشتراك في إحدى باقات إكس فارما لمتابعة ربط واستخدام الصيدليات.",
+					"code":          "SUBSCRIPTION_REQUIRED",
+					"required_plan": 1,
+				})
+				return
 			} else {
-				// Paid tier: allowed up to purchased plan in this warehouse
+				// Paid / Trial tier: allowed up to purchased plan
 				if warehousePharmaciesCount >= allowedPharmacies {
 					nextPlan := allowedPharmacies + 1
 					if nextPlan > 5 {
 						nextPlan = 5
 					}
 					c.JSON(http.StatusForbidden, gin.H{
-						"error":         fmt.Sprintf("لقد استنفدت الحد الأقصى لباقة اشتراكك في هذا المخزن (%d صيدليات). يرجى ترقية باقتك لإضافة فرع جديد.", allowedPharmacies),
+						"error":         fmt.Sprintf("لقد استنفدت الحد الأقصى لباقة اشتراكك (%d صيدليات). يرجى ترقية باقتك لإضافة فرع جديد.", allowedPharmacies),
 						"code":          "PLAN_LIMIT_REACHED",
 						"required_plan": nextPlan,
 						"current_count": warehousePharmaciesCount,

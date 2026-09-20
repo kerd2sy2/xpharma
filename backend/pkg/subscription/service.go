@@ -47,6 +47,7 @@ func (s *SubscriptionService) ensureSchema() {
 		`ALTER TABLE public.users ADD COLUMN IF NOT EXISTS subscription_plan INT DEFAULT 0`,
 		`ALTER TABLE public.users ADD COLUMN IF NOT EXISTS is_subscription_active BOOLEAN DEFAULT false`,
 		`ALTER TABLE public.users ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMPTZ`,
+		`ALTER TABLE public.pharmacies ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN NOT NULL DEFAULT FALSE`,
 	}
 	for _, stmt := range statements {
 		_, err := s.router.Pool().Exec(context.Background(), stmt)
@@ -58,8 +59,9 @@ func (s *SubscriptionService) ensureSchema() {
 
 // PharmacyItem represents a linked pharmacy
 type PharmacyItem struct {
-	Code string `json:"code"`
-	Name string `json:"name"`
+	Code        string `json:"code"`
+	Name        string `json:"name"`
+	IsSuspended bool   `json:"is_suspended"`
 }
 
 // GetStatus returns the subscription and trial status for a given user email
@@ -178,27 +180,42 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		subscriptionPlan = 0
 	}
 
-	// Fetch distinct linked pharmacies
+	// Fetch distinct linked pharmacies with suspension status
 	rows, err := s.router.Pool().Query(
 		c.Request.Context(),
-		`SELECT DISTINCT COALESCE(code, ''), COALESCE(name, '') 
+		`SELECT DISTINCT COALESCE(code, ''), COALESCE(name, ''), COALESCE(is_suspended, false)
 		 FROM public.pharmacies 
-		 WHERE linked_user_id IN (SELECT id FROM public.users WHERE LOWER(email) = LOWER($1))`,
+		 WHERE linked_user_id IN (
+			SELECT id::text FROM public.users WHERE LOWER(email) = LOWER($1)
+			UNION
+			SELECT email FROM public.users WHERE LOWER(email) = LOWER($1)
+			UNION
+			SELECT google_id FROM public.users WHERE LOWER(email) = LOWER($1) AND google_id IS NOT NULL AND google_id <> ''
+			UNION
+			SELECT apple_id FROM public.users WHERE LOWER(email) = LOWER($1) AND apple_id IS NOT NULL AND apple_id <> ''
+		 ) AND is_active = true
+		 ORDER BY is_suspended ASC, code ASC`,
 		email,
 	)
 	linkedList := make([]PharmacyItem, 0)
+	activeSelectedCount := 0
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var p PharmacyItem
-			if scanErr := rows.Scan(&p.Code, &p.Name); scanErr == nil {
+			if scanErr := rows.Scan(&p.Code, &p.Name, &p.IsSuspended); scanErr == nil {
 				linkedList = append(linkedList, p)
+				if !p.IsSuspended {
+					activeSelectedCount++
+				}
 			}
 		}
 	}
 
 	linkedCount := len(linkedList)
-	canAddPharmacy := isSubscribed && allowedPharmacies > 0
+	canAddPharmacy := isSubscribed && allowedPharmacies > linkedCount
+	hasOverflow := isSubscribed && allowedPharmacies > 0 && linkedCount > allowedPharmacies
+	requiresSelection := hasOverflow && (activeSelectedCount == 0 || activeSelectedCount > allowedPharmacies)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":                 true,
@@ -211,6 +228,8 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		"linked_pharmacies_count": linkedCount,
 		"linked_pharmacies":       linkedList,
 		"can_add_pharmacy":        canAddPharmacy,
+		"has_overflow":            hasOverflow,
+		"requires_selection":      requiresSelection,
 	})
 }
 
@@ -529,6 +548,7 @@ func (s *SubscriptionService) RecordPayment(c *gin.Context) {
 
 	// 3. Update public.users
 	if req.UserEmail != "" {
+		cleanEmail := strings.ToLower(req.UserEmail)
 		_, err := s.router.Pool().Exec(
 			c.Request.Context(),
 			`UPDATE public.users 
@@ -537,10 +557,37 @@ func (s *SubscriptionService) RecordPayment(c *gin.Context) {
 			     subscription_expires_at = NOW() + INTERVAL '30 days',
 			     updated_at = NOW()
 			 WHERE LOWER(email) = LOWER($2)`,
-			plan, strings.ToLower(req.UserEmail),
+			plan, cleanEmail,
 		)
 		if err != nil {
 			log.Printf("[RecordPayment] Update users error: %v", err)
+		}
+
+		// Count user's total pharmacies: if new plan >= total pharmacies, unsuspend all of them!
+		var totalUserPharmacies int
+		_ = s.router.Pool().QueryRow(
+			c.Request.Context(),
+			`SELECT COUNT(DISTINCT code) FROM public.pharmacies
+			 WHERE linked_user_id IN (
+				SELECT id::text FROM public.users WHERE LOWER(email) = LOWER($1)
+				UNION
+				SELECT email FROM public.users WHERE LOWER(email) = LOWER($1)
+			 ) AND is_active = true`,
+			cleanEmail,
+		).Scan(&totalUserPharmacies)
+
+		if plan >= totalUserPharmacies {
+			_, _ = s.router.Pool().Exec(
+				c.Request.Context(),
+				`UPDATE public.pharmacies
+				 SET is_suspended = false, updated_at = NOW()
+				 WHERE linked_user_id IN (
+					SELECT id::text FROM public.users WHERE LOWER(email) = LOWER($1)
+					UNION
+					SELECT email FROM public.users WHERE LOWER(email) = LOWER($1)
+				 )`,
+				cleanEmail,
+			)
 		}
 	}
 
@@ -548,6 +595,140 @@ func (s *SubscriptionService) RecordPayment(c *gin.Context) {
 		"success": true,
 		"message": "تم تسجيل الفاتورة والاشتراك بنجاح",
 		"plan":    plan,
+	})
+}
+
+// SelectActivePharmacies lets a user choose which pharmacies to keep active when plan tier is lower than linked pharmacies count
+func (s *SubscriptionService) SelectActivePharmacies(c *gin.Context) {
+	var req struct {
+		Email       string   `json:"email" binding:"required"`
+		ActiveCodes []string `json:"active_pharmacy_codes" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "بيانات التفعيل غير مكتملة"})
+		return
+	}
+
+	cleanEmail := strings.ToLower(strings.TrimSpace(req.Email))
+	if cleanEmail == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "البريد الإلكتروني مطلوب"})
+		return
+	}
+
+	// 1. Authoritative check of user's allowed pharmacies
+	var activeSubCount int
+	var subPlanType string
+	_ = s.router.Pool().QueryRow(
+		c.Request.Context(),
+		`SELECT 
+			COUNT(*),
+			COALESCE(MAX(plan_type), '')
+		 FROM (
+			SELECT plan_type
+			FROM public.subscriptions 
+			WHERE LOWER(TRIM(user_email)) = LOWER(TRIM($1))
+			  AND status = 'active'
+			  AND (end_date IS NULL OR end_date >= CURRENT_DATE)
+			ORDER BY created_at DESC 
+			LIMIT 1
+		 ) latest_sub`,
+		cleanEmail,
+	).Scan(&activeSubCount, &subPlanType)
+
+	allowedPharmacies := 0
+	if activeSubCount > 0 {
+		if strings.Contains(subPlanType, "5") {
+			allowedPharmacies = 5
+		} else if strings.Contains(subPlanType, "4") {
+			allowedPharmacies = 4
+		} else if strings.Contains(subPlanType, "3") {
+			allowedPharmacies = 3
+		} else if strings.Contains(subPlanType, "2") {
+			allowedPharmacies = 2
+		} else {
+			allowedPharmacies = 1
+		}
+	} else {
+		// Check public.users
+		var userPlan int
+		var isSubActive bool
+		var expiresAt *time.Time
+		_ = s.router.Pool().QueryRow(
+			c.Request.Context(),
+			`SELECT COALESCE(subscription_plan, 0), COALESCE(is_subscription_active, false), subscription_expires_at
+			 FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+			cleanEmail,
+		).Scan(&userPlan, &isSubActive, &expiresAt)
+
+		if isSubActive && expiresAt != nil && expiresAt.After(time.Now()) && userPlan > 0 {
+			allowedPharmacies = userPlan
+		}
+	}
+
+	if allowedPharmacies <= 0 {
+		c.JSON(http.StatusPaymentRequired, gin.H{
+			"error": "انتهت باقة اشتراكك. يرجى تجديد الاشتراك أولاً لتحديد الصيدليات النشطة.",
+		})
+		return
+	}
+
+	if len(req.ActiveCodes) > allowedPharmacies {
+		label := "صيدليات"
+		if allowedPharmacies == 1 {
+			label = "صيدلية واحدة"
+		} else if allowedPharmacies == 2 {
+			label = "صيدليتين"
+		}
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("باقتك الحالية تسمح بتفعيل %d %s فقط. يرجى تقليل الاختيار أو ترقية باقتك.", allowedPharmacies, label),
+		})
+		return
+	}
+
+	userIDsQuery := `
+		SELECT id::text FROM public.users WHERE LOWER(email) = LOWER($1)
+		UNION
+		SELECT email FROM public.users WHERE LOWER(email) = LOWER($1)
+		UNION
+		SELECT google_id FROM public.users WHERE LOWER(email) = LOWER($1) AND google_id IS NOT NULL AND google_id <> ''
+		UNION
+		SELECT apple_id FROM public.users WHERE LOWER(email) = LOWER($1) AND apple_id IS NOT NULL AND apple_id <> ''
+	`
+
+	// First suspend all user's pharmacies
+	_, err := s.router.Pool().Exec(
+		c.Request.Context(),
+		`UPDATE public.pharmacies
+		 SET is_suspended = true, updated_at = NOW()
+		 WHERE linked_user_id IN (`+userIDsQuery+`)`,
+		cleanEmail,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل تحديث حالة الصيدليات"})
+		return
+	}
+
+	// Then activate selected ones
+	if len(req.ActiveCodes) > 0 {
+		_, err = s.router.Pool().Exec(
+			c.Request.Context(),
+			`UPDATE public.pharmacies
+			 SET is_suspended = false, updated_at = NOW()
+			 WHERE linked_user_id IN (`+userIDsQuery+`)
+			   AND code = ANY($2)`,
+			cleanEmail, req.ActiveCodes,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل تفعيل الصيدليات المختارة"})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":            true,
+		"message":            "تم تحديد وتفعيل الصيدليات بنجاح",
+		"active_codes":       req.ActiveCodes,
+		"allowed_pharmacies": allowedPharmacies,
 	})
 }
 

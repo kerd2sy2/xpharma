@@ -25,6 +25,7 @@ import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
 import SubscriptionModal from '@/components/SubscriptionModal';
 import UpgradeProrationModal from '@/components/UpgradeProrationModal';
 import UnlinkedNoticeModal from '@/components/UnlinkedNoticeModal';
+import SelectActivePharmaciesModal from '@/components/SelectActivePharmaciesModal';
 import XLogo from '@/components/XLogo';
 import {
   clearPharmacySession,
@@ -55,6 +56,7 @@ import {
   checkCanAddPharmacyInWarehouse,
   getSubscriptionStatus,
   registerGlobalPharmacy,
+  SubscriptionStatus,
 } from '@/services/subscription';
 import { useAuth } from '@/context/AuthContext';
 
@@ -104,6 +106,8 @@ export default function WarehousePortalScreen({
   const [subscriptionReason, setSubscriptionReason] = useState<string | undefined>();
   const [subscriptionRequiredPlan, setSubscriptionRequiredPlan] = useState<number>(2);
   const [isTrialExpired, setIsTrialExpired] = useState(false);
+  const [showSelectActiveModal, setShowSelectActiveModal] = useState(false);
+  const [subscriptionStatusInfo, setSubscriptionStatusInfo] = useState<SubscriptionStatus | null>(null);
 
   // Animation values for the flying paper effect
   const pan = useRef(new Animated.ValueXY()).current;
@@ -278,10 +282,17 @@ export default function WarehousePortalScreen({
         pharmacy_code: (p as any).pharmacy_code || (p as any).code || '',
         pharmacy_name: (p as any).pharmacy_name || (p as any).name || '',
         tenant_id: warehouse.id,
+        is_suspended: !!(p as any).is_suspended,
       }));
 
       await syncWarehousePharmacies(warehouse.id, serverAccounts);
       setPharmacies(serverAccounts);
+
+      const subStatus = await getSubscriptionStatus(user?.email);
+      setSubscriptionStatusInfo(subStatus);
+      if (subStatus.hasOverflow && subStatus.requiresSelection) {
+        setShowSelectActiveModal(true);
+      }
 
       // Check if current active pharmacy is still in serverAccounts
       const isCurrentStillLinked = serverAccounts.some(
@@ -311,6 +322,17 @@ export default function WarehousePortalScreen({
 
   const loadData = async (targetToken = currentToken, showLoader = true) => {
     if (showLoader) setLoading(true);
+    const activePh = pharmaciesRef.current[activeIndexRef.current];
+    if (activePh && activePh.is_suspended) {
+      setBalance(null);
+      setInvoices([]);
+      setReturns([]);
+      setReceipts([]);
+      setStatement([]);
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
     try {
       const [bal, invs, rets, recs, stmts] = await Promise.all([
         fetchPharmacyBalance(targetToken),
@@ -1500,13 +1522,19 @@ export default function WarehousePortalScreen({
               <Text style={[styles.cleanPharmacyName, { color: colors.text }]} numberOfLines={1}>
                 {activeItem.pharmacy_name || `صيدلية #${activeItem.pharmacy_code}`}
               </Text>
-              {count > 1 && (
+              {activeItem.is_suspended ? (
+                <View style={[styles.cardOrderPill, { backgroundColor: '#FEE2E2', borderColor: '#FECACA', borderWidth: 1 }]}>
+                  <Text style={[styles.cardOrderPillText, { color: '#DC2626', fontWeight: '800' }]}>
+                    معلق مؤقتاً
+                  </Text>
+                </View>
+              ) : count > 1 ? (
                 <View style={[styles.cardOrderPill, { backgroundColor: colors.primarySoft }]}>
                   <Text style={[styles.cardOrderPillText, { color: colors.primary }]}>
                     {activePharmacyIndex + 1}/{count}
                   </Text>
                 </View>
-              )}
+              ) : null}
             </View>
           </Animated.View>
         </View>
@@ -1546,6 +1574,37 @@ export default function WarehousePortalScreen({
             >
               <Ionicons name="chevron-back" size={18} color={colors.secondaryText} />
             </TouchableOpacity>
+          </View>
+        )}
+
+        {/* بطاقة تنبيه التعليق عند اختيار صيدلية معلقة مؤقتاً */}
+        {activeItem.is_suspended && (
+          <View style={styles.suspendedWarningCard}>
+            <View style={styles.suspendedWarningTop}>
+              <Ionicons name="pause-circle" size={22} color="#D97706" />
+              <Text style={styles.suspendedWarningTitle}>هذا الفرع معلق مؤقتاً</Text>
+            </View>
+            <Text style={styles.suspendedWarningDesc}>
+              تم تعليق هذا الفرع لتجاوز الحد الأقصى المسموح به في باقتك الحالية ({subscriptionStatusInfo?.allowedPharmacies || 1} صيدلية).
+              بياناتك وفواتيرك محفوظة بالكامل ولم يُحذف أي منها.
+            </Text>
+            <View style={styles.suspendedWarningActions}>
+              <TouchableOpacity
+                style={styles.suspendedUpgradeBtn}
+                onPress={() => setShowUpgradeModal(true)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="flash" size={15} color="#1A0A33" />
+                <Text style={styles.suspendedUpgradeBtnText}>ترقية الباقة ⚡</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.suspendedSelectBtn}
+                onPress={() => setShowSelectActiveModal(true)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.suspendedSelectBtnText}>اختيار الفروع النشطة</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
       </View>
@@ -1688,6 +1747,25 @@ export default function WarehousePortalScreen({
         onSubscribed={(plan) => {
           setShowSubscriptionModal(false);
           setIsTrialExpired(false);
+        }}
+      />
+
+      {/* نافذة تحديد وتفعيل الصيدليات النشطة */}
+      <SelectActivePharmaciesModal
+        visible={showSelectActiveModal}
+        onClose={() => setShowSelectActiveModal(false)}
+        userEmail={user?.email || ''}
+        allowedPharmacies={subscriptionStatusInfo?.allowedPharmacies || 1}
+        pharmacies={subscriptionStatusInfo?.uniquePharmacies || []}
+        onSuccess={async () => {
+          setShowSelectActiveModal(false);
+          await checkAndSyncPharmacies();
+          await loadData(currentToken, false);
+          Alert.alert('تم بنجاح', 'تم تحديث الصيدليات النشطة بنجاح.');
+        }}
+        onUpgradePress={() => {
+          setShowSelectActiveModal(false);
+          setShowUpgradeModal(true);
         }}
       />
 
@@ -2244,5 +2322,66 @@ const styles = StyleSheet.create({
   endOfListText: {
     fontSize: 11,
     fontWeight: '600',
+  },
+  suspendedWarningCard: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 14,
+    marginTop: 12,
+  },
+  suspendedWarningTop: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  suspendedWarningTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#92400E',
+    textAlign: 'right',
+  },
+  suspendedWarningDesc: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#B45309',
+    textAlign: 'right',
+    marginBottom: 10,
+  },
+  suspendedWarningActions: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 8,
+  },
+  suspendedUpgradeBtn: {
+    flex: 1,
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: '#FBBF24',
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
+  suspendedUpgradeBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#1A0A33',
+  },
+  suspendedSelectBtn: {
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+  },
+  suspendedSelectBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#92400E',
   },
 });
