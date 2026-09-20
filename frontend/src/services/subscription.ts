@@ -201,7 +201,7 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
         const data = await res.json();
         if (data.success) {
           hasServerSync = true;
-          daysRemaining = typeof data.trial_days_left === 'number' ? data.trial_days_left : 30;
+          daysRemaining = typeof data.trial_days_left === 'number' ? Math.min(30, Math.max(0, data.trial_days_left)) : 30;
           isTrialExpired = !!data.is_trial_expired;
           subscribedPlan = typeof data.subscription_plan === 'number' ? data.subscription_plan : 0;
           serverAllowedPharmacies = typeof data.allowed_pharmacies === 'number' ? data.allowed_pharmacies : 2;
@@ -236,7 +236,7 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
     try {
       const serverCheck = await checkDeviceSession(userEmail);
       if (serverCheck.success && typeof serverCheck.trialDaysLeft === 'number') {
-        daysRemaining = serverCheck.trialDaysLeft;
+        daysRemaining = Math.min(30, Math.max(0, serverCheck.trialDaysLeft));
         isTrialExpired = !!serverCheck.isTrialExpired;
         hasServerSync = true;
         if (typeof serverCheck.subscriptionPlan === 'number' && serverCheck.subscriptionPlan > 0) {
@@ -254,7 +254,7 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
     const startMs = new Date(trialStartDate).getTime();
     const nowMs = Date.now();
     const elapsedDays = (nowMs - startMs) / (1000 * 60 * 60 * 24);
-    daysRemaining = Math.max(0, Math.ceil(TRIAL_DURATION_DAYS - elapsedDays));
+    daysRemaining = Math.max(0, Math.min(30, Math.ceil(TRIAL_DURATION_DAYS - elapsedDays)));
     isTrialExpired = false;
   }
 

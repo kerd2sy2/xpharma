@@ -76,7 +76,7 @@ export async function GET() {
         s.status,
         COALESCE(s.start_date, s.created_at::date, CURRENT_DATE) AS start_date,
         COALESCE(s.end_date, (COALESCE(s.start_date, s.created_at::date, CURRENT_DATE) + INTERVAL '30 days')::date) AS end_date,
-        GREATEST(0, (COALESCE(s.end_date, (COALESCE(s.start_date, s.created_at::date, CURRENT_DATE) + INTERVAL '30 days')::date) - CURRENT_DATE)) AS days_left,
+        LEAST(30, GREATEST(0, (COALESCE(s.end_date, (COALESCE(s.start_date, s.created_at::date, CURRENT_DATE) + INTERVAL '30 days')::date) - CURRENT_DATE))) AS days_left,
         s.receipt_url,
         COALESCE(s.receipt_ref, ${cols.has('transaction_id') ? 's.transaction_id' : "NULL"}, ${cols.has('order_id') ? 's.order_id' : "NULL"}) AS receipt_ref,
         s.notes,
@@ -101,14 +101,22 @@ export async function GET() {
 
     let rowsToProcess = result.rows;
 
-    // Ensure calculated days_left is attached accurately
-    const todayMs = new Date().setHours(0, 0, 0, 0);
+    // Ensure calculated days_left is attached accurately (strictly capped at 30, no timezone distortion)
+    const now = new Date();
+    const utcNow = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
     const enriched = rowsToProcess.map((row: any) => {
-      const endMs = row.end_date ? new Date(row.end_date).getTime() : todayMs + 30 * 86400000;
-      const diffDays = Math.ceil((endMs - todayMs) / (1000 * 60 * 60 * 24));
+      let diffDays = 30;
+      if (row.end_date) {
+        const end = new Date(row.end_date);
+        const utcEnd = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+        diffDays = Math.ceil((utcEnd - utcNow) / (1000 * 60 * 60 * 24));
+      }
+      const daysLeft = row.status === 'active'
+        ? Math.min(30, Math.max(0, diffDays))
+        : (row.status === 'pending_approval' ? 30 : 0);
       return {
         ...row,
-        days_left: row.status === 'active' ? Math.max(0, diffDays) : (row.status === 'pending_approval' ? 30 : 0),
+        days_left: daysLeft,
         is_expired: row.status === 'active' ? diffDays <= 0 : false,
       };
     });

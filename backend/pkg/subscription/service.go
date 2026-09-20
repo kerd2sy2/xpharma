@@ -138,12 +138,14 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		allowedPharmacies = subscriptionPlan
 
 		if !subEndDate.IsZero() {
-			trialDaysLeft = int(time.Until(subEndDate).Hours() / 24)
-			if trialDaysLeft < 0 {
+			hoursLeft := time.Until(subEndDate).Hours()
+			if hoursLeft <= 0 {
 				trialDaysLeft = 0
-			}
-			if trialDaysLeft > 30 {
-				trialDaysLeft = 30
+			} else {
+				trialDaysLeft = int(math.Ceil(hoursLeft / 24.0))
+				if trialDaysLeft > 30 {
+					trialDaysLeft = 30
+				}
 			}
 		} else {
 			trialDaysLeft = 30
@@ -271,12 +273,14 @@ func (s *SubscriptionService) GetUpgradeQuote(c *gin.Context) {
 
 	if currentPlan > 0 && !subEndDate.IsZero() && subEndDate.After(time.Now()) {
 		isUpgrade = true
-		daysRemaining = int(time.Until(subEndDate).Hours() / 24)
-		if daysRemaining < 0 {
+		hoursLeft := time.Until(subEndDate).Hours()
+		if hoursLeft <= 0 {
 			daysRemaining = 0
-		}
-		if daysRemaining > 30 {
-			daysRemaining = 30
+		} else {
+			daysRemaining = int(math.Ceil(hoursLeft / 24.0))
+			if daysRemaining > 30 {
+				daysRemaining = 30
+			}
 		}
 
 		currentPlanPrice = getPlanPrice(currentPlan)

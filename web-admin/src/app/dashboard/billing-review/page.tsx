@@ -58,7 +58,7 @@ interface Subscription {
   transaction_id: string | null;
   card_brand: string | null;
   masked_card: string | null;
-  status: 'active' | 'pending_approval' | 'rejected' | 'expired';
+  status: 'active' | 'pending_approval' | 'rejected' | 'expired' | 'superseded' | (string & {});
   start_date: string;
   end_date: string;
   days_left?: number;
@@ -179,12 +179,16 @@ export default function BillingReviewPage() {
   };
 
   const getCountdownInfo = (s: Subscription) => {
+    // Rely on the server-calculated days_left, strictly bounded between 0 and 30
     let days = typeof s.days_left === 'number' ? s.days_left : 30;
-    if (s.end_date) {
-      const endMs = new Date(s.end_date).getTime();
-      const todayMs = new Date().setHours(0, 0, 0, 0);
-      days = Math.ceil((endMs - todayMs) / (1000 * 60 * 60 * 24));
+    if (s.end_date && typeof s.days_left !== 'number') {
+      const end = new Date(s.end_date);
+      const now = new Date();
+      const utcNow = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+      const utcEnd = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+      days = Math.ceil((utcEnd - utcNow) / (1000 * 60 * 60 * 24));
     }
+    days = Math.min(30, Math.max(0, days));
 
     if (s.status === 'pending_approval') {
       return {
@@ -198,6 +202,13 @@ export default function BillingReviewPage() {
         label: 'مرفوض',
         days: 0,
         variant: 'rejected',
+      };
+    }
+    if (s.status === 'superseded') {
+      return {
+        label: 'منتهي (ترقية سابقة)',
+        days: 0,
+        variant: 'expired',
       };
     }
     if (days <= 0 || s.status === 'expired') {
