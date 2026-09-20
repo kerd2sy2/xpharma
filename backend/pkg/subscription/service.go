@@ -606,7 +606,7 @@ func (s *SubscriptionService) SelectActivePharmacies(c *gin.Context) {
 		ActivePharmacyCodes []string `json:"active_pharmacy_codes"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "بيانات التفعيل غير مكتملة"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "بيانات التفعيل غير مكتملة", "details": err.Error()})
 		return
 	}
 
