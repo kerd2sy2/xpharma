@@ -168,7 +168,7 @@ export default function HomeScreen() {
 
   const loadWarehouses = async () => {
     try {
-      const list = await fetchWarehouses(user?.id);
+      const list = await fetchWarehouses(user?.id, user?.email);
 
       const updatedList: Warehouse[] = await Promise.all(
         list.map(async (wh) => {

@@ -37,7 +37,8 @@ func (s *QueryService) ValidateLinkedPharmacyMiddleware() gin.HandlerFunc {
 
 		tenantID := claims.TenantID
 		pharmaCode := claims.PharmaCode
-		userID := claims.UserID
+		userID := strings.TrimSpace(claims.UserID)
+		userEmail := strings.ToLower(strings.TrimSpace(claims.Email))
 
 		if tenantID == "" || pharmaCode == "" {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
@@ -54,10 +55,29 @@ func (s *QueryService) ValidateLinkedPharmacyMiddleware() gin.HandlerFunc {
 				SELECT 1 FROM public.pharmacies p
 				WHERE p.tenant_id = $1 
 				  AND LOWER(p.code) = LOWER($2) 
-				  AND (p.linked_user_id = $3 OR p.linked_user_id = (SELECT email FROM public.users WHERE id::text = $3 LIMIT 1))
 				  AND p.is_active = true
+				  AND (
+					p.linked_user_id = $3 
+					OR (LOWER(p.linked_user_id) = LOWER($4) AND $4 <> '')
+					OR p.linked_user_id IN (
+						SELECT id::text FROM public.users 
+						WHERE (id::text = $3 AND $3 <> '') 
+						   OR (google_id = $3 AND $3 <> '') 
+						   OR (apple_id = $3 AND $3 <> '') 
+						   OR (LOWER(email) = LOWER($3) AND $3 <> '')
+						   OR (LOWER(email) = LOWER($4) AND $4 <> '')
+					)
+					OR p.linked_user_id IN (
+						SELECT email FROM public.users 
+						WHERE (id::text = $3 AND $3 <> '') 
+						   OR (google_id = $3 AND $3 <> '') 
+						   OR (apple_id = $3 AND $3 <> '') 
+						   OR (LOWER(email) = LOWER($3) AND $3 <> '')
+						   OR (LOWER(email) = LOWER($4) AND $4 <> '')
+					)
+				  )
 			)
-		`, tenantID, pharmaCode, userID).Scan(&isLinked)
+		`, tenantID, pharmaCode, userID, userEmail).Scan(&isLinked)
 
 		if err != nil || !isLinked {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{

@@ -109,10 +109,15 @@ const PHARMACIES_LIST_PREFIX = 'xpharma_pharmacies_list_';
 /**
  * Fetch all active warehouses and their link status for the current user
  */
-export async function fetchWarehouses(userId?: string): Promise<Warehouse[]> {
+export async function fetchWarehouses(userId?: string, email?: string): Promise<Warehouse[]> {
   try {
-    const url = userId 
-      ? `${API_BASE_URL}/v1/warehouses?user_id=${encodeURIComponent(userId)}`
+    const params = new URLSearchParams();
+    if (userId) params.append('user_id', userId.trim());
+    if (email) params.append('email', email.trim().toLowerCase());
+
+    const queryString = params.toString();
+    const url = queryString 
+      ? `${API_BASE_URL}/v1/warehouses?${queryString}`
       : `${API_BASE_URL}/v1/warehouses`;
     
     const res = await fetch(url);

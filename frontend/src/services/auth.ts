@@ -234,7 +234,7 @@ export async function signInWithGoogle(): Promise<AuthResponse> {
 
       const profile = resData.profile || {};
       const user: UserProfile = {
-        id: profile.sub || 'user',
+        id: resData.user?.id || profile.sub || 'user',
         name: profile.name || response.data?.user?.name || 'مستخدم',
         email: profile.email || response.data?.user?.email || '',
         photo: profile.picture || response.data?.user?.photo || undefined,
@@ -382,7 +382,7 @@ export async function signInWithApple(): Promise<AuthResponse> {
     }
 
     const user: UserProfile = {
-      id: credential.user,
+      id: resData.user?.id || credential.user,
       name: fullName || resData.name || 'مستخدم Apple',
       email: credential.email || resData.email || '',
       role: resData.role || 'client',

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   BackHandler,
   FlatList,
@@ -24,15 +25,19 @@ import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
 import SubscriptionModal from '@/components/SubscriptionModal';
 import XLogo from '@/components/XLogo';
 import {
+  clearPharmacySession,
+  fetchInvoiceDetails,
   fetchPharmacyBalance,
   fetchPharmacyPurchases,
-  fetchInvoiceDetails,
-  fetchReturnDetails,
   fetchPharmacyReceipts,
   fetchPharmacyReturns,
   fetchPharmacyStatement,
+  fetchReturnDetails,
+  fetchWarehouses,
   getWarehousePharmacies,
+  savePharmacySession,
   saveWarehousePharmacy,
+  syncWarehousePharmacies,
   InvoiceItem,
   InvoiceLineItem,
   LinkedPharmacyAccount,
@@ -212,6 +217,57 @@ export default function WarehousePortalScreen({
     };
     initPharmacies();
   }, [warehouse.id, token, pharmacyCode, pharmacyName]);
+
+  const checkAndSyncPharmacies = async () => {
+    if (!user?.email && !user?.id) return;
+    try {
+      const whList = await fetchWarehouses(user?.id, user?.email);
+      const currentWh = whList.find((w) => w.id === warehouse.id);
+      const serverPharmacies = (currentWh?.linked_pharmacies || []) as LinkedPharmacyAccount[];
+
+      if (!currentWh?.is_linked || serverPharmacies.length === 0) {
+        // All pharmacies in this warehouse were unlinked
+        await clearPharmacySession(warehouse.id);
+        Alert.alert('تنبيه', 'تم إلغاء ربط صيدلياتك في هذا المستودع من قبل إدارة المنصة.', [
+          { text: 'حسناً', onPress: onBack },
+        ]);
+        return;
+      }
+
+      // Format server accounts
+      const serverAccounts: LinkedPharmacyAccount[] = serverPharmacies.map((p) => ({
+        token: p.token || '',
+        pharmacy_code: (p as any).pharmacy_code || (p as any).code || '',
+        pharmacy_name: (p as any).pharmacy_name || (p as any).name || '',
+        tenant_id: warehouse.id,
+      }));
+
+      await syncWarehousePharmacies(warehouse.id, serverAccounts);
+      setPharmacies(serverAccounts);
+
+      // Check if current active pharmacy is still in serverAccounts
+      const isCurrentStillLinked = serverAccounts.some(
+        (a) => a.pharmacy_code === currentPharmacyCode
+      );
+
+      if (!isCurrentStillLinked) {
+        // The active pharmacy was unlinked! Switch to the first available linked pharmacy!
+        const nextPharma = serverAccounts[0];
+        await savePharmacySession(warehouse.id, nextPharma);
+        setActivePharmacyIndex(0);
+        setCurrentToken(nextPharma.token);
+        setCurrentPharmacyCode(nextPharma.pharmacy_code);
+        setCurrentPharmacyName(nextPharma.pharmacy_name);
+        Alert.alert(
+          'تحديث بيانات الفرع',
+          `تم فك ربط صيدلية "${currentPharmacyName}"، وتم التحويل تلقائياً لفرعك الآخر "${nextPharma.pharmacy_name}".`
+        );
+        loadData(nextPharma.token, false);
+      }
+    } catch (e) {
+      console.warn('Failed to check and sync warehouse pharmacies:', e);
+    }
+  };
 
   const loadData = async (targetToken = currentToken, showLoader = true) => {
     if (showLoader) setLoading(true);
@@ -405,6 +461,7 @@ export default function WarehousePortalScreen({
 
   const onRefresh = async () => {
     setRefreshing(true);
+    await checkAndSyncPharmacies();
     if (selectedInvoice) {
       const targetId = selectedInvoice.id || selectedInvoice.remote_id || selectedInvoice.invoice_number;
       try {

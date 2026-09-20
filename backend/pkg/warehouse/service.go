@@ -74,6 +74,53 @@ func NewWarehouseService(router *db.TenantRouter, tokenService *auth.TokenServic
 // GetWarehouses returns the list of active warehouses, annotating linked status and all linked pharmacies for the requested user
 func (s *WarehouseService) GetWarehouses(c *gin.Context) {
 	userID := strings.TrimSpace(c.Query("user_id"))
+	userEmail := strings.ToLower(strings.TrimSpace(c.Query("email")))
+
+	candidateUserIDs := make(map[string]bool)
+	var canonicalDBUserID, canonicalEmail string
+
+	if userID != "" || userEmail != "" {
+		if userID != "" {
+			candidateUserIDs[userID] = true
+		}
+		if userEmail != "" {
+			candidateUserIDs[userEmail] = true
+		}
+
+		uQuery := `
+			SELECT id::text, COALESCE(google_id, ''), COALESCE(apple_id, ''), email
+			FROM public.users
+			WHERE (id::text = $1 AND $1 <> '')
+			   OR (google_id = $1 AND $1 <> '')
+			   OR (apple_id = $1 AND $1 <> '')
+			   OR (LOWER(email) = LOWER($1) AND $1 <> '')
+			   OR (LOWER(email) = LOWER($2) AND $2 <> '')
+			LIMIT 1
+		`
+		var uID, gID, aID, em string
+		if err := s.router.Pool().QueryRow(c.Request.Context(), uQuery, userID, userEmail).Scan(&uID, &gID, &aID, &em); err == nil {
+			canonicalDBUserID = uID
+			canonicalEmail = em
+			if uID != "" {
+				candidateUserIDs[uID] = true
+			}
+			if gID != "" {
+				candidateUserIDs[gID] = true
+			}
+			if aID != "" {
+				candidateUserIDs[aID] = true
+			}
+			if em != "" {
+				candidateUserIDs[strings.ToLower(em)] = true
+				candidateUserIDs[em] = true
+			}
+		}
+	}
+
+	var candidateIDsList []string
+	for k := range candidateUserIDs {
+		candidateIDsList = append(candidateIDsList, k)
+	}
 
 	query := `
 		SELECT 
@@ -111,23 +158,32 @@ func (s *WarehouseService) GetWarehouses(c *gin.Context) {
 	for _, t := range tenants {
 		var linkedPharmacies []map[string]interface{}
 
-		if userID != "" {
+		if len(candidateIDsList) > 0 {
 			// Query all pharmacies linked to this user in this warehouse
 			pQuery := `
 				SELECT p.id::text, p.code, p.name 
 				FROM public.pharmacies p
 				WHERE p.tenant_id = $1 
-				  AND (p.linked_user_id = $2 OR p.linked_user_id = (SELECT email FROM public.users WHERE id::text = $2 LIMIT 1))
 				  AND p.is_active = true
+				  AND (p.linked_user_id = ANY($2) OR LOWER(p.linked_user_id) = ANY($2))
 				ORDER BY p.updated_at DESC
 			`
-			pRows, pErr := s.router.Pool().Query(c.Request.Context(), pQuery, t.id, userID)
+			pRows, pErr := s.router.Pool().Query(c.Request.Context(), pQuery, t.id, candidateIDsList)
 			if pErr == nil {
 				for pRows.Next() {
 					var pID, pCode, pName string
 					if err := pRows.Scan(&pID, &pCode, &pName); err == nil {
+						tokUID := canonicalDBUserID
+						if tokUID == "" {
+							tokUID = userID
+						}
+						tokEmail := canonicalEmail
+						if tokEmail == "" {
+							tokEmail = userEmail
+						}
 						pToken, _ := s.tokenService.GenerateToken(auth.Claims{
-							UserID:     userID,
+							UserID:     tokUID,
+							Email:      tokEmail,
 							TenantID:   t.id,
 							PharmacyID: pID,
 							PharmaCode: pCode,
