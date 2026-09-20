@@ -34,12 +34,30 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		return
 	}
 
+	// 1. Direct authoritative check against public.subscriptions
+	var activeSubCount int
+	var subPlanType string
+	var subEndDate time.Time
+	_ = s.router.Pool().QueryRow(
+		c.Request.Context(),
+		`SELECT 
+			COUNT(*),
+			COALESCE(MAX(plan_type), '3 صيدليات'),
+			COALESCE(MAX(end_date), CURRENT_DATE + INTERVAL '30 days')
+		 FROM public.subscriptions 
+		 WHERE LOWER(TRIM(user_email)) = LOWER(TRIM($1))
+		   AND status = 'active'
+		   AND (end_date IS NULL OR end_date >= CURRENT_DATE)`,
+		email,
+	).Scan(&activeSubCount, &subPlanType, &subEndDate)
+
+	// 2. Check public.users
 	var trialStartedAt time.Time
 	var subscriptionPlan int
 	var subscriptionExpiresAt *time.Time
 	var isSubscriptionActive bool
 
-	err := s.router.Pool().QueryRow(
+	_ = s.router.Pool().QueryRow(
 		c.Request.Context(),
 		`SELECT 
 			COALESCE(trial_started_at, NOW()), 
@@ -51,39 +69,65 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		email,
 	).Scan(&trialStartedAt, &subscriptionPlan, &subscriptionExpiresAt, &isSubscriptionActive)
 
-	if err != nil {
-		// New or uncreated user: default 7 days trial, 2 pharmacies allowed
-		c.JSON(http.StatusOK, gin.H{
-			"success":                 true,
-			"trial_days_left":         7,
-			"is_trial_expired":        false,
-			"is_subscribed":           false,
-			"subscription_plan":       0,
-			"allowed_pharmacies":      2,
-			"linked_pharmacies_count": 0,
-			"linked_pharmacies":       []PharmacyItem{},
-			"can_add_pharmacy":        true,
-		})
-		return
-	}
-
-	trialDaysPassed := int(time.Since(trialStartedAt).Hours() / 24)
-	trialDaysLeft := 7 - trialDaysPassed
-	if trialDaysLeft < 0 {
-		trialDaysLeft = 0
-	}
-
-	isSubscribed := (isSubscriptionActive || subscriptionPlan > 0)
-	if subscriptionExpiresAt != nil && subscriptionExpiresAt.Before(time.Now()) {
+	isSubscribed := isSubscriptionActive || subscriptionPlan > 0 || activeSubCount > 0
+	if subscriptionExpiresAt != nil && subscriptionExpiresAt.Before(time.Now()) && activeSubCount == 0 {
 		isSubscribed = false
+	}
+
+	if activeSubCount > 0 && subscriptionPlan <= 0 {
+		subscriptionPlan = 3
+		if strings.Contains(subPlanType, "1") {
+			subscriptionPlan = 1
+		} else if strings.Contains(subPlanType, "2") {
+			subscriptionPlan = 2
+		} else if strings.Contains(subPlanType, "4") {
+			subscriptionPlan = 4
+		} else if strings.Contains(subPlanType, "5") {
+			subscriptionPlan = 5
+		}
+	}
+
+	// If active in public.subscriptions, keep public.users table in sync
+	if activeSubCount > 0 {
+		_, _ = s.router.Pool().Exec(
+			c.Request.Context(),
+			`UPDATE public.users 
+			 SET is_subscription_active = TRUE,
+			     subscription_plan = GREATEST(COALESCE(subscription_plan, 0), $1),
+			     subscription_expires_at = COALESCE(subscription_expires_at, NOW() + INTERVAL '30 days'),
+			     updated_at = NOW()
+			 WHERE LOWER(email) = LOWER($2)`,
+			subscriptionPlan, email,
+		)
+	}
+
+	// Calculate remaining days
+	trialDaysLeft := 30
+	if activeSubCount > 0 {
+		trialDaysLeft = int(time.Until(subEndDate).Hours() / 24)
+		if trialDaysLeft < 0 {
+			trialDaysLeft = 0
+		}
+		if trialDaysLeft > 30 {
+			trialDaysLeft = 30
+		}
+	} else if !trialStartedAt.IsZero() {
+		passed := int(time.Since(trialStartedAt).Hours() / 24)
+		trialDaysLeft = 30 - passed
+		if trialDaysLeft < 0 {
+			trialDaysLeft = 30
+		}
 	}
 
 	isTrialExpired := false
 
-	// Allowed pharmacies: 2 during trial, or subscribedPlan count when subscribed
+	// Allowed pharmacies: up to 2 pharmacies free initially, or subscriptionPlan count when subscribed
 	allowedPharmacies := 2
-	if isSubscribed && subscriptionPlan > 0 {
+	if isSubscribed {
 		allowedPharmacies = subscriptionPlan
+		if allowedPharmacies < 3 {
+			allowedPharmacies = 3
+		}
 	}
 
 	// Fetch distinct linked pharmacies
@@ -120,6 +164,7 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		"can_add_pharmacy":        canAddPharmacy,
 	})
 }
+
 
 // RegisterPharmacy registers a pharmacy code globally for subscription management
 func (s *SubscriptionService) RegisterPharmacy(c *gin.Context) {

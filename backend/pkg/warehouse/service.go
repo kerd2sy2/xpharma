@@ -248,7 +248,7 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 		var isSubActive bool
 		var dbUID string
 
-		err := s.router.Pool().QueryRow(
+		_ = s.router.Pool().QueryRow(
 			c.Request.Context(),
 			`SELECT id, COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0), subscription_expires_at, COALESCE(is_subscription_active, false)
 			 FROM public.users 
@@ -257,18 +257,49 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 			linkedUID, cleanEmail,
 		).Scan(&dbUID, &trialStartedAt, &subPlan, &subExpiresAt, &isSubActive)
 
-		if err == nil {
+		if dbUID != "" {
 			linkedUID = dbUID
-			isSubscribed := isSubActive || subPlan > 0
-			if subExpiresAt != nil && subExpiresAt.Before(time.Now()) {
-				isSubscribed = false
-			}
+		}
 
-			// 1. Allowed pharmacies: up to 2 pharmacies free initially, or subPlan when subscribed
-			allowedPharmacies := 2
-			if isSubscribed && subPlan > 0 {
-				allowedPharmacies = subPlan
+		// Also check public.subscriptions table directly
+		var activeSubCount int
+		var subPlanType string
+		_ = s.router.Pool().QueryRow(
+			c.Request.Context(),
+			`SELECT COUNT(*), COALESCE(MAX(plan_type), '3 صيدليات')
+			 FROM public.subscriptions 
+			 WHERE (LOWER(TRIM(user_email)) = LOWER(TRIM($1)) OR (user_id::text = $2 AND $2 <> ''))
+			   AND status = 'active'
+			   AND (end_date IS NULL OR end_date >= CURRENT_DATE)`,
+			cleanEmail, linkedUID,
+		).Scan(&activeSubCount, &subPlanType)
+
+		isSubscribed := isSubActive || subPlan > 0 || activeSubCount > 0
+		if subExpiresAt != nil && subExpiresAt.Before(time.Now()) && activeSubCount == 0 {
+			isSubscribed = false
+		}
+
+		if activeSubCount > 0 && subPlan <= 0 {
+			subPlan = 3
+			if strings.Contains(subPlanType, "1") {
+				subPlan = 1
+			} else if strings.Contains(subPlanType, "2") {
+				subPlan = 2
+			} else if strings.Contains(subPlanType, "4") {
+				subPlan = 4
+			} else if strings.Contains(subPlanType, "5") {
+				subPlan = 5
 			}
+		}
+
+		// 1. Allowed pharmacies: up to 2 pharmacies free initially, or subPlan when subscribed
+		allowedPharmacies := 2
+		if isSubscribed {
+			allowedPharmacies = subPlan
+			if allowedPharmacies < 3 {
+				allowedPharmacies = 3
+			}
+		}
 
 			// 2. Check if this specific pharmacy code is already linked to this user
 			var alreadyLinked bool
@@ -329,7 +360,6 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 							"allowed_count":  allowedPharmacies,
 						})
 						return
-					}
 				}
 			}
 		}

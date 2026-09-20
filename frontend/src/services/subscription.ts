@@ -189,13 +189,17 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
         const data = await res.json();
         if (data.success) {
           hasServerSync = true;
-          daysRemaining = typeof data.trial_days_left === 'number' ? data.trial_days_left : 7;
+          daysRemaining = typeof data.trial_days_left === 'number' ? data.trial_days_left : 30;
           isTrialExpired = !!data.is_trial_expired;
           subscribedPlan = typeof data.subscription_plan === 'number' ? data.subscription_plan : 0;
-          serverAllowedPharmacies = typeof data.allowed_pharmacies === 'number' ? data.allowed_pharmacies : (subscribedPlan > 0 ? subscribedPlan : 2);
+          serverAllowedPharmacies = typeof data.allowed_pharmacies === 'number' ? data.allowed_pharmacies : 2;
 
-          // Update local plan cache
-          if (subscribedPlan > 0) {
+          // If server reports active subscription, activate plan and elevate limits
+          if (data.is_subscribed) {
+            if (subscribedPlan <= 0) subscribedPlan = 3;
+            if (serverAllowedPharmacies < 3) serverAllowedPharmacies = 3;
+            await setActiveSubscriptionPlan(subscribedPlan);
+          } else if (subscribedPlan > 0) {
             await setActiveSubscriptionPlan(subscribedPlan);
           }
 
@@ -247,8 +251,8 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
   isTrialExpired = false;
 
   const isSubscribed = subscribedPlan > 0;
-  // Allowed pharmacies: up to 2 pharmacies free initially, or subscribedPlan count when subscribed
-  const allowedPharmacies = isSubscribed ? subscribedPlan : 2;
+  // Allowed pharmacies: up to 2 pharmacies free initially, or subscribedPlan count when subscribed (at least 3)
+  const allowedPharmacies = isSubscribed ? Math.max(subscribedPlan, serverAllowedPharmacies, 3) : 2;
 
   return {
     trialStartDate,
