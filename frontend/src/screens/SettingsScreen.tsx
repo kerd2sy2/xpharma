@@ -29,7 +29,7 @@ interface SettingsScreenProps {
     provider?: string;
   } | null;
   subscriptionStatusInfo: SubscriptionStatus | null;
-  onOpenSubscriptionModal: () => void;
+  onOpenSubscriptionModal?: () => void;
   onLogout: () => Promise<void>;
   onBack: () => void;
 }
@@ -37,7 +37,6 @@ interface SettingsScreenProps {
 export default function SettingsScreen({
   user,
   subscriptionStatusInfo,
-  onOpenSubscriptionModal,
   onLogout,
   onBack,
 }: SettingsScreenProps) {
@@ -219,23 +218,6 @@ export default function SettingsScreen({
                 <Text style={styles.subMetricLbl}>كافة المخازن</Text>
               </View>
             </View>
-
-            {/* Upgrade / Change Plan Button */}
-            <TouchableOpacity
-              style={styles.subUpgradeBtn}
-              onPress={onOpenSubscriptionModal}
-              activeOpacity={0.85}
-            >
-              <LinearGradient
-                colors={['#7C3AED', '#5B21B6']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={styles.subUpgradeBtnGradient}
-              >
-                <Ionicons name="arrow-up-circle-outline" size={18} color="#FFFFFF" />
-                <Text style={styles.subUpgradeBtnText}>ترقية أو تغيير الباقة</Text>
-              </LinearGradient>
-            </TouchableOpacity>
           </LinearGradient>
         </View>
 

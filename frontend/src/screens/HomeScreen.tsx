@@ -444,10 +444,6 @@ export default function HomeScreen() {
       <SettingsScreen
         user={user}
         subscriptionStatusInfo={subscriptionStatusInfo}
-        onOpenSubscriptionModal={() => {
-          setProfileModalVisible(false);
-          setSubscriptionModalVisible(true);
-        }}
         onLogout={logout}
         onBack={() => setProfileModalVisible(false)}
       />

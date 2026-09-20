@@ -53,6 +53,19 @@ export interface SubscriptionStatus {
   uniquePharmacies: Array<{ code: string; name: string }>;
 }
 
+export interface UpgradeQuote {
+  currentPlan: number;
+  currentPlanPrice: number;
+  daysRemaining: number;
+  unusedCredit: number;
+  targetPlan: number;
+  targetPlanPrice: number;
+  finalAmount: number;
+  currency: string;
+  isUpgrade: boolean;
+  newDurationDays: number;
+}
+
 /**
  * Get or initialize trial start date
  */
@@ -330,6 +343,86 @@ export async function checkCanAddPharmacyInWarehouse(
   return { canAdd: true, isTrialExpired: false };
 }
 
+/**
+ * Calculate prorated upgrade pricing with credit rollover and 30 fresh days
+ */
+export async function calculateUpgradeQuote(
+  email: string,
+  targetPlan: number
+): Promise<UpgradeQuote> {
+  const cleanEmail = (email || '').trim().toLowerCase();
+
+  // 1. Authoritative Backend Calculation
+  if (cleanEmail) {
+    try {
+      const url = `https://api.xpharma.cloud/v1/subscription/upgrade-quote?email=${encodeURIComponent(cleanEmail)}&target_plan=${targetPlan}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          return {
+            currentPlan: data.current_plan,
+            currentPlanPrice: data.current_plan_price,
+            daysRemaining: data.days_remaining,
+            unusedCredit: data.unused_credit,
+            targetPlan: data.target_plan,
+            targetPlanPrice: data.target_plan_price,
+            finalAmount: data.final_amount,
+            currency: data.currency || 'EGP',
+            isUpgrade: !!data.is_upgrade,
+            newDurationDays: data.new_duration_days || 30,
+          };
+        }
+      }
+    } catch (e) {
+      console.warn('Backend upgrade-quote fetch error, using local fallback:', e);
+    }
+  }
+
+  // 2. Local Fallback Calculation
+  const status = await getSubscriptionStatus(cleanEmail);
+  const currentPlan = status.isSubscribed ? status.subscribedPlan : 0;
+  let currentPlanPrice = 0;
+  if (currentPlan === 1) currentPlanPrice = 100;
+  else if (currentPlan === 2) currentPlanPrice = 150;
+  else if (currentPlan === 3) currentPlanPrice = 200;
+  else if (currentPlan === 4) currentPlanPrice = 250;
+  else if (currentPlan === 5) currentPlanPrice = 300;
+
+  let resolvedTargetPlan = targetPlan;
+  if (currentPlan > 0 && resolvedTargetPlan <= currentPlan) {
+    resolvedTargetPlan = Math.min(5, currentPlan + 1);
+  }
+
+  let targetPlanPrice = 200;
+  if (resolvedTargetPlan === 1) targetPlanPrice = 100;
+  else if (resolvedTargetPlan === 2) targetPlanPrice = 150;
+  else if (resolvedTargetPlan === 3) targetPlanPrice = 200;
+  else if (resolvedTargetPlan === 4) targetPlanPrice = 250;
+  else if (resolvedTargetPlan === 5) targetPlanPrice = 300;
+
+  const daysRemaining = Math.max(0, Math.min(30, status.daysRemaining || 0));
+  const isUpgrade = currentPlan > 0 && daysRemaining > 0;
+  const dailyRate = currentPlanPrice / 30;
+  const unusedCredit = isUpgrade ? Math.round(dailyRate * daysRemaining) : 0;
+  const rawDiff = targetPlanPrice - unusedCredit;
+  let finalAmount = Math.round(rawDiff / 5) * 5;
+  if (finalAmount < 50) finalAmount = 50;
+
+  return {
+    currentPlan,
+    currentPlanPrice,
+    daysRemaining,
+    unusedCredit,
+    targetPlan: resolvedTargetPlan,
+    targetPlanPrice,
+    finalAmount,
+    currency: 'EGP',
+    isUpgrade,
+    newDurationDays: 30,
+  };
+}
+
 import CryptoJS from 'crypto-js';
 
 const KASHIER_MID = 'MID-51040-472';
@@ -341,6 +434,7 @@ const KASHIER_PAYMENT_API_KEY = 'c64c4651-40c5-4a07-afc3-81ecdd5ed324';
 export async function initiateKashierPayment(params: {
   email: string;
   plan: number;
+  customAmount?: number;
   userName?: string;
   phone?: string;
 }): Promise<{
@@ -354,9 +448,11 @@ export async function initiateKashierPayment(params: {
     const cleanEmail = (params.email || '').trim().toLowerCase();
     const plan = params.plan || 3;
     
-    // Determine price
+    // Determine price (custom amount for prorated upgrades or default plan price)
     let amount = 200;
-    if (plan === 1) amount = 100;
+    if (params.customAmount && params.customAmount > 0) {
+      amount = params.customAmount;
+    } else if (plan === 1) amount = 100;
     else if (plan === 2) amount = 150;
     else if (plan === 3) amount = 200;
     else if (plan === 4) amount = 250;
@@ -364,7 +460,7 @@ export async function initiateKashierPayment(params: {
 
     const timestamp = Date.now();
     const emailPrefix = cleanEmail.split('@')[0].replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) || 'user';
-    const orderId = `XPH-SUB-${emailPrefix}-P${plan}-${timestamp}`;
+    const orderId = `XPH-SUB-${emailPrefix}-P${plan}-A${Math.round(amount)}-${timestamp}`;
     const currency = 'EGP';
 
     // 1. First try Backend endpoint (if backend is live)
@@ -375,6 +471,7 @@ export async function initiateKashierPayment(params: {
         body: JSON.stringify({
           email: cleanEmail,
           plan: plan,
+          amount: amount,
           user_name: params.userName || 'دكتور صيدلي',
           phone: params.phone || '',
         }),

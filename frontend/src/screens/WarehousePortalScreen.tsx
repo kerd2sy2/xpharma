@@ -23,6 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
 import SubscriptionModal from '@/components/SubscriptionModal';
+import UpgradeProrationModal from '@/components/UpgradeProrationModal';
 import UnlinkedNoticeModal from '@/components/UnlinkedNoticeModal';
 import XLogo from '@/components/XLogo';
 import {
@@ -99,6 +100,7 @@ export default function WarehousePortalScreen({
 
   // Subscription & Trial state
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [subscriptionReason, setSubscriptionReason] = useState<string | undefined>();
   const [subscriptionRequiredPlan, setSubscriptionRequiredPlan] = useState<number>(2);
   const [isTrialExpired, setIsTrialExpired] = useState(false);
@@ -173,7 +175,11 @@ export default function WarehousePortalScreen({
         setShowReturnInfoModal(false);
         return true;
       }
-      // 1. If subscription modal is open and trial not strictly expired, close it
+      // 1. If upgrade or subscription modal is open, close it
+      if (showUpgradeModal) {
+        setShowUpgradeModal(false);
+        return true;
+      }
       if (showSubscriptionModal && !isTrialExpired) {
         setShowSubscriptionModal(false);
         return true;
@@ -210,6 +216,7 @@ export default function WarehousePortalScreen({
   }, [
     unlinkNoticeVisible,
     unlinkNoticeConfig,
+    showUpgradeModal,
     showSubscriptionModal,
     isTrialExpired,
     showAddModal,
@@ -601,9 +608,9 @@ export default function WarehousePortalScreen({
     const check = await checkCanAddPharmacyInWarehouse(warehouse.id, pharmacies.length, user?.email);
     if (!check.canAdd) {
       setSubscriptionReason(check.reason);
-      setSubscriptionRequiredPlan(check.requiredPlan || 2);
+      setSubscriptionRequiredPlan(check.requiredPlan || Math.min(5, pharmacies.length + 1));
       setIsTrialExpired(false);
-      setShowSubscriptionModal(true);
+      setShowUpgradeModal(true);
       return;
     }
     setShowAddModal(true);
@@ -1656,6 +1663,19 @@ export default function WarehousePortalScreen({
         warehouse={warehouse}
         onClose={() => setShowAddModal(false)}
         onSuccess={handleAddSuccess}
+      />
+
+      {/* نافذة ترقية الاشتراك التناسبية واحتساب الرصيد الدائن لبدء شهر جديد */}
+      <UpgradeProrationModal
+        visible={showUpgradeModal}
+        warehouseName={warehouse.name}
+        currentPharmacyCount={pharmacies.length}
+        targetPlan={subscriptionRequiredPlan}
+        onClose={() => setShowUpgradeModal(false)}
+        onUpgradeSuccess={async () => {
+          setShowUpgradeModal(false);
+          setShowAddModal(true);
+        }}
       />
 
       {/* نافذة خطط وباقات الاشتراك والفترة التجريبية */}
