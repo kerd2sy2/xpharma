@@ -82,29 +82,31 @@ export default function SubscriptionModal({
 
       // Immediately persist selected plan locally and notify servers
       await setActiveSubscriptionPlan(selectedPlan);
-      recordSubscriptionPayment({
-        user_email: user?.email || '',
-        user_name: user?.name || 'دكتور صيدلي',
-        user_phone: user?.phone || '',
-        plan_type: `${selectedPlan} صيدليات`,
-        amount: activePlanObj.price,
-        payment_method: 'kashier',
-        status: 'active',
-        order_id: res.order_id || '',
-        notes: `تفعيل فوري لاشتراك باقة ${activePlanObj.label} عبر تطبيق XPharma`,
-      }).catch((err) => console.warn('Record payment error:', err));
+      try {
+        await recordSubscriptionPayment({
+          user_email: user?.email || '',
+          user_name: user?.name || 'دكتور صيدلي',
+          user_phone: user?.phone || '',
+          plan_type: `${selectedPlan} صيدليات`,
+          amount: activePlanObj.price,
+          payment_method: 'kashier',
+          status: 'active',
+          order_id: res.order_id || '',
+          notes: `تفعيل فوري لاشتراك باقة ${activePlanObj.label} عبر تطبيق XPharma`,
+        });
+      } catch (err) {
+        console.warn('Record payment error:', err);
+      }
 
       // Fetch fresh status and activate plan UI
       setIsCheckingServer(true);
-      setTimeout(async () => {
-        try {
-          await getSubscriptionStatus(user.email);
-        } catch {}
-        setActivatedPlanObj(activePlanObj);
-        setShowSuccess(true);
-        if (onSubscribed) onSubscribed(selectedPlan);
-        setIsCheckingServer(false);
-      }, 500);
+      try {
+        await getSubscriptionStatus(user.email);
+      } catch {}
+      setActivatedPlanObj(activePlanObj);
+      setShowSuccess(true);
+      if (onSubscribed) onSubscribed(selectedPlan);
+      setIsCheckingServer(false);
     } catch (e: any) {
       Alert.alert('خطأ', 'حدث خطأ أثناء فتح بوابة الدفع: ' + (e.message || 'يرجى المحاولة لاحقاً'));
     } finally {

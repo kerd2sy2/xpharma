@@ -240,114 +240,132 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 	linkedUID := req.UserID
 	cleanEmail := strings.ToLower(strings.TrimSpace(req.Email))
 
-	// Enforce Subscription & Trial limits before linking a pharmacy
+	// Enforce Subscription & SaaS limits before linking a pharmacy
 	if linkedUID != "" || cleanEmail != "" {
-		var subPlan int
 		var dbUID string
+		var userPlan int
+		var isSubActiveInUser bool
+		var userSubExpiresAt *time.Time
 
 		_ = s.router.Pool().QueryRow(
 			c.Request.Context(),
-			`SELECT id::text, COALESCE(subscription_plan, 3)
+			`SELECT id::text, COALESCE(subscription_plan, 0), COALESCE(is_subscription_active, false), subscription_expires_at
 			 FROM public.users 
 			 WHERE (id::text = $1 AND $1 <> '') OR (LOWER(email) = LOWER($2) AND $2 <> '') 
 			 LIMIT 1`,
 			linkedUID, cleanEmail,
-		).Scan(&dbUID, &subPlan)
+		).Scan(&dbUID, &userPlan, &isSubActiveInUser, &userSubExpiresAt)
 
 		if dbUID != "" {
 			linkedUID = dbUID
 		}
 
-		if subPlan < 3 {
-			subPlan = 3
-		}
-
-		// Also check public.subscriptions table directly for any elevated plan (4 or 5)
+		// Also check public.subscriptions table directly for active paid subscription
 		var activeSubCount int
 		var subPlanType string
 		_ = s.router.Pool().QueryRow(
 			c.Request.Context(),
-			`SELECT COUNT(*), COALESCE(MAX(plan_type), '3 صيدليات')
-			 FROM public.subscriptions 
-			 WHERE (LOWER(TRIM(user_email)) = LOWER(TRIM($1)) OR (user_id::text = $2 AND $2 <> ''))
-			   AND status = 'active'
-			   AND (end_date IS NULL OR end_date >= CURRENT_DATE)`,
+			`SELECT COUNT(*), COALESCE(MAX(plan_type), '')
+			 FROM (
+				SELECT plan_type
+				FROM public.subscriptions 
+				WHERE (LOWER(TRIM(user_email)) = LOWER(TRIM($1)) OR (user_id::text = $2 AND $2 <> ''))
+				  AND status = 'active'
+				  AND (end_date IS NULL OR end_date >= CURRENT_DATE)
+				ORDER BY created_at DESC 
+				LIMIT 1
+			 ) latest_sub`,
 			cleanEmail, linkedUID,
 		).Scan(&activeSubCount, &subPlanType)
 
+		isSubscribed := false
+		subPlan := 0
+
 		if activeSubCount > 0 {
-			if strings.Contains(subPlanType, "4") {
-				subPlan = 4
-			} else if strings.Contains(subPlanType, "5") {
+			isSubscribed = true
+			if strings.Contains(subPlanType, "5") {
 				subPlan = 5
+			} else if strings.Contains(subPlanType, "4") {
+				subPlan = 4
+			} else if strings.Contains(subPlanType, "3") {
+				subPlan = 3
+			} else if strings.Contains(subPlanType, "2") {
+				subPlan = 2
+			} else if strings.Contains(subPlanType, "1") {
+				subPlan = 1
 			}
+		} else if isSubActiveInUser && userSubExpiresAt != nil && userSubExpiresAt.After(time.Now()) && userPlan > 0 {
+			isSubscribed = true
+			subPlan = userPlan
 		}
 
-		isSubscribed := true
-		allowedPharmacies := subPlan
-		if allowedPharmacies < 3 {
-			allowedPharmacies = 3
+		allowedPharmacies := 2
+		if isSubscribed {
+			if subPlan <= 0 {
+				subPlan = 1
+			}
+			allowedPharmacies = subPlan
 		}
 
-			// 2. Check if this specific pharmacy code is already linked to this user
-			var alreadyLinked bool
+		// 1. Check if this specific pharmacy code is already linked to this user
+		var alreadyLinked bool
+		_ = s.router.Pool().QueryRow(
+			c.Request.Context(),
+			`SELECT EXISTS(SELECT 1 FROM public.pharmacies WHERE linked_user_id = $1 AND LOWER(code) = LOWER($2))`,
+			linkedUID, code,
+		).Scan(&alreadyLinked)
+
+		// 2. Rule for Free tier: in the SAME warehouse, more than 1 pharmacy requires an active subscription
+		if !alreadyLinked && !isSubscribed {
+			var warehousePharmaciesCount int
 			_ = s.router.Pool().QueryRow(
 				c.Request.Context(),
-				`SELECT EXISTS(SELECT 1 FROM public.pharmacies WHERE linked_user_id = $1 AND LOWER(code) = LOWER($2))`,
-				linkedUID, code,
-			).Scan(&alreadyLinked)
+				`SELECT COUNT(DISTINCT code) FROM public.pharmacies WHERE linked_user_id = $1 AND tenant_id = $2`,
+				linkedUID, req.TenantID,
+			).Scan(&warehousePharmaciesCount)
 
-			// 3. Rule: In the same warehouse, more than 1 pharmacy requires an active subscription
-			if !alreadyLinked && !isSubscribed {
-				var warehousePharmaciesCount int
-				_ = s.router.Pool().QueryRow(
-					c.Request.Context(),
-					`SELECT COUNT(DISTINCT code) FROM public.pharmacies WHERE linked_user_id = $1 AND tenant_id = $2`,
-					linkedUID, req.TenantID,
-				).Scan(&warehousePharmaciesCount)
+			if warehousePharmaciesCount >= 1 {
+				c.JSON(http.StatusForbidden, gin.H{
+					"error":         "إضافة أكثر من صيدلية في نفس المخزن تتطلب الاشتراك في إحدى باقات إكس فارما.",
+					"code":          "SUBSCRIPTION_REQUIRED",
+					"required_plan": 2,
+				})
+				return
+			}
+		}
 
-				if warehousePharmaciesCount >= 1 {
+		// 3. If it's a NEW distinct pharmacy code, check if user has reached their overall limit
+		if !alreadyLinked {
+			var currentDistinctCount int
+			_ = s.router.Pool().QueryRow(
+				c.Request.Context(),
+				`SELECT COUNT(DISTINCT code) FROM public.pharmacies WHERE linked_user_id = $1`,
+				linkedUID,
+			).Scan(&currentDistinctCount)
+
+			if currentDistinctCount >= allowedPharmacies {
+				if !isSubscribed {
 					c.JSON(http.StatusForbidden, gin.H{
-						"error":          "إضافة أكثر من صيدلية في نفس المخزن تتطلب الاشتراك في إحدى باقات إكس فارما.",
-						"code":           "SUBSCRIPTION_REQUIRED",
-						"required_plan":  2,
+						"error":         "النظام يتيح ربط حتى صيدليتين (2) مجاناً. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في باقة مناسبة.",
+						"code":          "SUBSCRIPTION_REQUIRED",
+						"required_plan": 3,
+						"current_count": currentDistinctCount,
+						"allowed_count": allowedPharmacies,
 					})
 					return
-				}
-			}
-
-			// 4. If it's a NEW distinct pharmacy code, check if user has reached their overall limit (2 free pharmacies)
-			if !alreadyLinked {
-				var currentDistinctCount int
-				_ = s.router.Pool().QueryRow(
-					c.Request.Context(),
-					`SELECT COUNT(DISTINCT code) FROM public.pharmacies WHERE linked_user_id = $1`,
-					linkedUID,
-				).Scan(&currentDistinctCount)
-
-				if currentDistinctCount >= allowedPharmacies {
-					if !isSubscribed {
-						c.JSON(http.StatusForbidden, gin.H{
-							"error":          "النظام يتيح ربط حتى صيدليتين (2) مجاناً. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في باقة مناسبة.",
-							"code":           "SUBSCRIPTION_REQUIRED",
-							"required_plan":  3,
-							"current_count":  currentDistinctCount,
-							"allowed_count":  allowedPharmacies,
-						})
-						return
-					} else {
-						nextPlan := allowedPharmacies + 1
-						if nextPlan > 5 {
-							nextPlan = 5
-						}
-						c.JSON(http.StatusForbidden, gin.H{
-							"error":          fmt.Sprintf("لقد استنفدت الحد الأقصى لباقة اشتراكك الحالية (%d صيدليات). يرجى ترقية باقتك لإضافة فرع جديد.", allowedPharmacies),
-							"code":           "PLAN_LIMIT_REACHED",
-							"required_plan":  nextPlan,
-							"current_count":  currentDistinctCount,
-							"allowed_count":  allowedPharmacies,
-						})
-						return
+				} else {
+					nextPlan := allowedPharmacies + 1
+					if nextPlan > 5 {
+						nextPlan = 5
+					}
+					c.JSON(http.StatusForbidden, gin.H{
+						"error":         fmt.Sprintf("لقد استنفدت الحد الأقصى لباقة اشتراكك الحالية (%d صيدليات). يرجى ترقية باقتك لإضافة فرع جديد.", allowedPharmacies),
+						"code":          "PLAN_LIMIT_REACHED",
+						"required_plan": nextPlan,
+						"current_count": currentDistinctCount,
+						"allowed_count": allowedPharmacies,
+					})
+					return
 				}
 			}
 		}
@@ -402,6 +420,136 @@ func (s *WarehouseService) LinkPharmacy(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "كود الربط غير صحيح أو الصيدلية غير مفعلة"})
 		return
+	}
+
+	linkedUID := req.UserID
+	cleanEmail := strings.ToLower(strings.TrimSpace(req.Email))
+
+	// Enforce Subscription & SaaS limits in LinkPharmacy as well
+	if linkedUID != "" || cleanEmail != "" {
+		var dbUID string
+		var userPlan int
+		var isSubActiveInUser bool
+		var userSubExpiresAt *time.Time
+
+		_ = s.router.Pool().QueryRow(
+			c.Request.Context(),
+			`SELECT id::text, COALESCE(subscription_plan, 0), COALESCE(is_subscription_active, false), subscription_expires_at
+			 FROM public.users 
+			 WHERE (id::text = $1 AND $1 <> '') OR (LOWER(email) = LOWER($2) AND $2 <> '') 
+			 LIMIT 1`,
+			linkedUID, cleanEmail,
+		).Scan(&dbUID, &userPlan, &isSubActiveInUser, &userSubExpiresAt)
+
+		if dbUID != "" {
+			linkedUID = dbUID
+		}
+
+		var activeSubCount int
+		var subPlanType string
+		_ = s.router.Pool().QueryRow(
+			c.Request.Context(),
+			`SELECT COUNT(*), COALESCE(MAX(plan_type), '')
+			 FROM (
+				SELECT plan_type
+				FROM public.subscriptions 
+				WHERE (LOWER(TRIM(user_email)) = LOWER(TRIM($1)) OR (user_id::text = $2 AND $2 <> ''))
+				  AND status = 'active'
+				  AND (end_date IS NULL OR end_date >= CURRENT_DATE)
+				ORDER BY created_at DESC 
+				LIMIT 1
+			 ) latest_sub`,
+			cleanEmail, linkedUID,
+		).Scan(&activeSubCount, &subPlanType)
+
+		isSubscribed := false
+		subPlan := 0
+
+		if activeSubCount > 0 {
+			isSubscribed = true
+			if strings.Contains(subPlanType, "5") {
+				subPlan = 5
+			} else if strings.Contains(subPlanType, "4") {
+				subPlan = 4
+			} else if strings.Contains(subPlanType, "3") {
+				subPlan = 3
+			} else if strings.Contains(subPlanType, "2") {
+				subPlan = 2
+			} else if strings.Contains(subPlanType, "1") {
+				subPlan = 1
+			}
+		} else if isSubActiveInUser && userSubExpiresAt != nil && userSubExpiresAt.After(time.Now()) && userPlan > 0 {
+			isSubscribed = true
+			subPlan = userPlan
+		}
+
+		allowedPharmacies := 2
+		if isSubscribed {
+			if subPlan <= 0 {
+				subPlan = 1
+			}
+			allowedPharmacies = subPlan
+		}
+
+		var alreadyLinked bool
+		_ = s.router.Pool().QueryRow(
+			c.Request.Context(),
+			`SELECT EXISTS(SELECT 1 FROM public.pharmacies WHERE linked_user_id = $1 AND LOWER(code) = LOWER($2))`,
+			linkedUID, code,
+		).Scan(&alreadyLinked)
+
+		if !alreadyLinked && !isSubscribed {
+			var warehousePharmaciesCount int
+			_ = s.router.Pool().QueryRow(
+				c.Request.Context(),
+				`SELECT COUNT(DISTINCT code) FROM public.pharmacies WHERE linked_user_id = $1 AND tenant_id = $2`,
+				linkedUID, tenantID,
+			).Scan(&warehousePharmaciesCount)
+
+			if warehousePharmaciesCount >= 1 {
+				c.JSON(http.StatusForbidden, gin.H{
+					"error":         "إضافة أكثر من صيدلية في نفس المخزن تتطلب الاشتراك في إحدى باقات إكس فارما.",
+					"code":          "SUBSCRIPTION_REQUIRED",
+					"required_plan": 2,
+				})
+				return
+			}
+		}
+
+		if !alreadyLinked {
+			var currentDistinctCount int
+			_ = s.router.Pool().QueryRow(
+				c.Request.Context(),
+				`SELECT COUNT(DISTINCT code) FROM public.pharmacies WHERE linked_user_id = $1`,
+				linkedUID,
+			).Scan(&currentDistinctCount)
+
+			if currentDistinctCount >= allowedPharmacies {
+				if !isSubscribed {
+					c.JSON(http.StatusForbidden, gin.H{
+						"error":         "النظام يتيح ربط حتى صيدليتين (2) مجاناً. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في باقة مناسبة.",
+						"code":          "SUBSCRIPTION_REQUIRED",
+						"required_plan": 3,
+						"current_count": currentDistinctCount,
+						"allowed_count": allowedPharmacies,
+					})
+					return
+				} else {
+					nextPlan := allowedPharmacies + 1
+					if nextPlan > 5 {
+						nextPlan = 5
+					}
+					c.JSON(http.StatusForbidden, gin.H{
+						"error":         fmt.Sprintf("لقد استنفدت الحد الأقصى لباقة اشتراكك الحالية (%d صيدليات). يرجى ترقية باقتك لإضافة فرع جديد.", allowedPharmacies),
+						"code":          "PLAN_LIMIT_REACHED",
+						"required_plan": nextPlan,
+						"current_count": currentDistinctCount,
+						"allowed_count": allowedPharmacies,
+					})
+					return
+				}
+			}
+		}
 	}
 
 	updateQuery := `UPDATE public.pharmacies SET linked_user_id = $1, updated_at = NOW() WHERE id = $2`

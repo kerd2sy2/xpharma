@@ -36,49 +36,6 @@ async function ensureColumns() {
   }
 }
 
-async function syncSubscribedUsers() {
-  try {
-    // 1. Auto-sync EVERY registered user from public.users into public.subscriptions
-    await query(`
-      INSERT INTO public.subscriptions (
-        tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
-        status, start_date, end_date, created_at, updated_at, notes
-      )
-      SELECT 
-        (SELECT id FROM public.tenants LIMIT 1),
-        LOWER(TRIM(u.email)),
-        COALESCE(NULLIF(u.name, ''), 'مشترك Google'),
-        COALESCE(NULLIF(u.phone, ''), NULLIF(u.device_name, ''), '01019688000'),
-        'باقة المشترك (3 صيدليات)',
-        200,
-        COALESCE(NULLIF(u.provider, ''), 'google'),
-        'active',
-        COALESCE(u.created_at::date, CURRENT_DATE),
-        (CURRENT_DATE + INTERVAL '30 days')::date,
-        COALESCE(u.last_login_at, u.created_at, NOW()),
-        NOW(),
-        'اشتراك حساب Google مفعل تلقائياً'
-      FROM public.users u
-      WHERE u.email IS NOT NULL AND u.email <> ''
-        AND NOT EXISTS (
-          SELECT 1 FROM public.subscriptions s 
-          WHERE LOWER(TRIM(s.user_email)) = LOWER(TRIM(u.email)) 
-            AND s.status = 'active'
-        )
-    `);
-
-    // 2. Mark users active in public.users
-    await query(`
-      UPDATE public.users
-      SET is_subscription_active = TRUE,
-          subscription_plan = 3,
-          subscription_expires_at = (NOW() + INTERVAL '30 days')
-      WHERE email IS NOT NULL AND email <> ''
-    `);
-  } catch (e: any) {
-    console.error('syncSubscribedUsers error:', e?.message || e);
-  }
-}
 
 
 async function seedInitialKashierTransactions(cols: Set<string>) {
@@ -169,10 +126,7 @@ export async function GET() {
     // 1. Ensure table columns exist
     await ensureColumns();
 
-    // 2. Sync subscribed users from users table
-    await syncSubscribedUsers();
-
-    // 3. Query available columns dynamically to avoid any missing-column crash
+    // 2. Query available columns dynamically to avoid any missing-column crash
     const colRes = await query(`
       SELECT column_name 
       FROM information_schema.columns 
@@ -180,7 +134,7 @@ export async function GET() {
     `);
     const cols = new Set(colRes.rows.map((r: any) => r.column_name));
 
-    // 4. Seed historical Kashier test transactions if missing
+    // 3. Seed historical Kashier transactions if table empty
     await seedInitialKashierTransactions(cols);
 
     const selectUserEmail = cols.has('user_email') ? 's.user_email' : "NULL::VARCHAR AS user_email";
@@ -231,55 +185,6 @@ export async function GET() {
     `);
 
     let rowsToProcess = result.rows;
-
-    // Fallback: If subscriptions table is currently empty, synthesize records directly from public.users so Google users immediately appear
-    if (rowsToProcess.length === 0) {
-      try {
-        const usersFallback = await query(`
-          SELECT 
-            u.id AS user_id,
-            u.email AS user_email,
-            u.name AS user_name,
-            COALESCE(NULLIF(u.phone, ''), NULLIF(u.device_name, ''), '01019688000') AS user_phone,
-            COALESCE(u.created_at, NOW()) AS created_at
-          FROM public.users u
-          WHERE u.email IS NOT NULL AND u.email <> ''
-        `);
-
-        if (usersFallback.rows.length > 0) {
-          rowsToProcess = usersFallback.rows.map((u: any, idx: number) => ({
-            id: u.user_id,
-            tenant_id: null,
-            tenant_name: 'الاشتراك العام للتطبيق',
-            tenant_slug: 'general',
-            pharmacy_id: null,
-            pharmacy_name: u.user_name || 'د. مشترك Google',
-            pharmacy_code: 'XPH-ACC-' + (idx + 1),
-            pharmacy_phone: u.user_phone,
-            plan_type: 'باقة المشترك (3 صيدليات)',
-            status: 'active',
-            start_date: new Date(u.created_at).toISOString().split('T')[0],
-            end_date: new Date(new Date(u.created_at).getTime() + 30 * 86400000).toISOString().split('T')[0],
-            receipt_url: null,
-            receipt_ref: 'SUB-GOOGLE-' + (u.user_email.split('@')[0] || 'ACC'),
-            notes: 'اشتراك حساب Google مفعل تلقائياً - صلاحية 30 يوماً',
-            amount: 200,
-            payment_method: 'kashier',
-            user_email: u.user_email,
-            user_name: u.user_name,
-            user_phone: u.user_phone,
-            order_id: 'ORD-GOOGLE-' + (idx + 1),
-            transaction_id: 'TX-GOOGLE-' + (idx + 1),
-            card_brand: 'Visa',
-            masked_card: '**** 1019',
-            created_at: u.created_at,
-            updated_at: u.created_at,
-          }));
-        }
-      } catch (fbErr: any) {
-        console.warn('Fallback users query warning:', fbErr?.message || fbErr);
-      }
-    }
 
     // Ensure calculated days_left is attached accurately
     const todayMs = new Date().setHours(0, 0, 0, 0);

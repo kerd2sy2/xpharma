@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -131,7 +132,7 @@ func (s *SubscriptionService) InitiateSession(c *gin.Context) {
 		"merchantId":       cfg.MID,
 		"order":            orderRef,
 		"type":             "one-time",
-		"merchantRedirect": "https://api.xpharma.cloud/v1/subscription/kashier/redirect",
+		"merchantRedirect": fmt.Sprintf("https://api.xpharma.cloud/v1/subscription/kashier/redirect?email=%s&plan=%d", url.QueryEscape(cleanEmail), req.Plan),
 		"display":          "ar",
 		"allowedMethods":   "card,wallet",
 		"customer": map[string]interface{}{
@@ -352,8 +353,45 @@ func (s *SubscriptionService) HandleRedirect(c *gin.Context) {
 		}
 
 		price := getPlanPrice(plan)
+		queryEmail := strings.ToLower(strings.TrimSpace(c.Query("email")))
 
-		if emailPrefix != "" {
+		if queryEmail != "" {
+			_, _ = s.router.Pool().Exec(
+				c.Request.Context(),
+				`UPDATE public.users 
+				 SET subscription_plan = $1, 
+				     is_subscription_active = true, 
+				     subscription_expires_at = NOW() + INTERVAL '30 days',
+				     updated_at = NOW()
+				 WHERE LOWER(email) = LOWER($2)`,
+				plan, queryEmail,
+			)
+
+			_, _ = s.router.Pool().Exec(
+				c.Request.Context(),
+				`UPDATE public.subscriptions SET status = 'superseded', updated_at = NOW() 
+				 WHERE LOWER(user_email) = LOWER($1) AND status = 'active'`,
+				queryEmail,
+			)
+
+			_, _ = s.router.Pool().Exec(
+				c.Request.Context(),
+				`INSERT INTO public.subscriptions (
+					tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
+					status, order_id, transaction_id, receipt_ref, notes,
+					start_date, end_date, created_at, updated_at
+				) VALUES (
+					(SELECT id FROM public.tenants LIMIT 1),
+					$1,
+					COALESCE((SELECT name FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1), 'مشترك تطبيق XPharma'),
+					COALESCE((SELECT device_name FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1), '-'),
+					$2, $3, 'kashier', 'active', $4, $4, $4,
+					'دفع إلكتروني ناجح عبر بوابة كاشير (Kashier Redirect)',
+					CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', NOW(), NOW()
+				)`,
+				queryEmail, fmt.Sprintf("%d صيدليات", plan), price, orderID,
+			)
+		} else if emailPrefix != "" {
 			_, _ = s.router.Pool().Exec(
 				c.Request.Context(),
 				`UPDATE public.users 

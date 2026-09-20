@@ -194,13 +194,12 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
           subscribedPlan = typeof data.subscription_plan === 'number' ? data.subscription_plan : 0;
           serverAllowedPharmacies = typeof data.allowed_pharmacies === 'number' ? data.allowed_pharmacies : 2;
 
-          // If server reports active subscription, activate plan and elevate limits
-          if (data.is_subscribed) {
-            if (subscribedPlan <= 0) subscribedPlan = 3;
-            if (serverAllowedPharmacies < 3) serverAllowedPharmacies = 3;
+          // If server reports active subscription, store active plan
+          if (data.is_subscribed && subscribedPlan > 0) {
             await setActiveSubscriptionPlan(subscribedPlan);
-          } else if (subscribedPlan > 0) {
-            await setActiveSubscriptionPlan(subscribedPlan);
+          } else if (!data.is_subscribed) {
+            subscribedPlan = 0;
+            await setActiveSubscriptionPlan(0);
           }
 
           // Merge server-linked pharmacies with local cache
@@ -250,12 +249,9 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
   // Free tier: no trial expiration locking
   isTrialExpired = false;
 
-  // Subscribed account: any user with email or active plan has at least 3 pharmacies allowed
-  const isSubscribed = subscribedPlan > 0 || (!!userEmail && userEmail.trim().length > 0);
-  if (isSubscribed && subscribedPlan < 3) {
-    subscribedPlan = 3;
-  }
-  const allowedPharmacies = isSubscribed ? Math.max(subscribedPlan, serverAllowedPharmacies, 3) : 2;
+  // Subscription check: strictly based on active paid plan (Plan > 0)
+  const isSubscribed = subscribedPlan > 0;
+  const allowedPharmacies = isSubscribed ? subscribedPlan : 2;
 
   return {
     trialStartDate,
