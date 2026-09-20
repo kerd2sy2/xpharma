@@ -256,14 +256,6 @@ export default function HomeScreen() {
         pharmacyName: activeName,
       });
     } else {
-      const check = await checkCanAddPharmacy(user?.email);
-      if (!check.canAdd) {
-        setSubscriptionReason(check.reason || 'يرجى ترقية الباقة لإضافة صيدليات جديدة.');
-        setSubscriptionRequiredPlan(check.requiredPlan || 3);
-        setIsTrialExpired(false);
-        setSubscriptionModalVisible(true);
-        return;
-      }
       setSelectedWarehouseForModal(wh);
       setVerifyModalVisible(true);
     }
@@ -271,28 +263,6 @@ export default function HomeScreen() {
 
   const handleVerificationSuccess = async (result: VerifyPharmacyResult) => {
     if (!selectedWarehouseForModal || !result.token) return;
-
-    // Check if adding this unique pharmacy branch is allowed within subscription plan
-    const uniqueList = await getGlobalLinkedPharmacies();
-    const cleanCode = (result.pharmacy_code || '').trim().toLowerCase();
-    const cleanName = (result.pharmacy_name || '').trim().toLowerCase();
-    const isExisting = uniqueList.some(
-      (p) =>
-        (cleanCode && p.code.trim().toLowerCase() === cleanCode) ||
-        (cleanName && p.name.trim().toLowerCase() === cleanName)
-    );
-
-    if (!isExisting) {
-      const check = await checkCanAddPharmacy(user?.email);
-      if (!check.canAdd) {
-        setVerifyModalVisible(false);
-        setSubscriptionReason(check.reason);
-        setSubscriptionRequiredPlan(check.requiredPlan || 3);
-        setIsTrialExpired(check.isTrialExpired);
-        setSubscriptionModalVisible(true);
-        return;
-      }
-    }
 
     await registerGlobalPharmacy(result.pharmacy_code || '', result.pharmacy_name || '', user?.email);
     const updatedStatus = await getSubscriptionStatus(user?.email);

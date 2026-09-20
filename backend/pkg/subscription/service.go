@@ -147,9 +147,9 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 			trialDaysLeft = 30
 		}
 	} else {
-		// Free Tier: allows up to 2 pharmacies globally, max 1 in the same warehouse
+		// Free Tier: 1 pharmacy per warehouse free ("1 عادي")
 		subscriptionPlan = 0
-		allowedPharmacies = 2
+		allowedPharmacies = 1
 		trialDaysLeft = 0
 	}
 
@@ -173,7 +173,8 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 	}
 
 	linkedCount := len(linkedList)
-	canAddPharmacy := linkedCount < allowedPharmacies
+	// Can always open and link new warehouses ("انما يفتح كل المخازن عادى")
+	canAddPharmacy := true
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":                 true,

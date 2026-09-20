@@ -251,7 +251,8 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
 
   // Subscription check: strictly based on active paid plan (Plan > 0)
   const isSubscribed = subscribedPlan > 0;
-  const allowedPharmacies = isSubscribed ? subscribedPlan : 2;
+  // Per warehouse quota: 1 pharmacy free ("1 عادي"), or subscribed plan ("2 فما فوق باشتراك")
+  const allowedPharmacies = isSubscribed ? subscribedPlan : 1;
 
   return {
     trialStartDate,
@@ -266,7 +267,8 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
 }
 
 /**
- * Check if the user can add another pharmacy globally
+ * Check if the user can add another pharmacy / warehouse globally
+ * Rule: User can open and link to all warehouses freely ("انما يفتح كل المخازن عادى")
  */
 export async function checkCanAddPharmacy(userEmail?: string): Promise<{
   canAdd: boolean;
@@ -278,25 +280,6 @@ export async function checkCanAddPharmacy(userEmail?: string): Promise<{
 }> {
   const status = await getSubscriptionStatus(userEmail);
 
-  // If adding another pharmacy will exceed the allowed limit (2 free pharmacies):
-  if (status.linkedPharmaciesCount >= status.allowedPharmacies) {
-    const nextRequiredPlan = !status.isSubscribed
-      ? 3 // 2 pharmacies free initially; adding 3rd requires Plan 3
-      : Math.min(5, status.allowedPharmacies + 1);
-
-    return {
-      canAdd: false,
-      reason:
-        !status.isSubscribed
-          ? 'النظام يتيح ربط حتى صيدليتين (2) مجاناً. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في باقة مناسبة.'
-          : `لقد استنفدت باقتك الحالية (${status.allowedPharmacies} صيدليات). لإضافة فرع جديد يرجى ترقية الباقة.`,
-      requiredPlan: nextRequiredPlan,
-      currentCount: status.linkedPharmaciesCount,
-      allowedCount: status.allowedPharmacies,
-      isTrialExpired: false,
-    };
-  }
-
   return {
     canAdd: true,
     currentCount: status.linkedPharmaciesCount,
@@ -307,8 +290,8 @@ export async function checkCanAddPharmacy(userEmail?: string): Promise<{
 
 /**
  * Check if pharmacist can add a pharmacy inside a specific warehouse:
- * Rule: Only 1 pharmacy is allowed free in the SAME warehouse.
- * Adding a 2nd pharmacy in the same warehouse requires an active subscription!
+ * Rule: 1 pharmacy is free / normal ("1 عادي").
+ * 2 or more pharmacies in the SAME warehouse requires an active subscription ("2 باشتراك فما فوق")!
  */
 export async function checkCanAddPharmacyInWarehouse(
   warehouseId: string,
@@ -324,10 +307,10 @@ export async function checkCanAddPharmacyInWarehouse(
 
   // If user is already subscribed to a paid plan:
   if (status.isSubscribed) {
-    if (status.linkedPharmaciesCount >= status.allowedPharmacies) {
+    if (warehousePharmaciesCount >= status.allowedPharmacies) {
       return {
         canAdd: false,
-        reason: `لقد استنفدت الحد الأقصى لباقة اشتراكك الحالية (${status.allowedPharmacies} صيدليات). يرجى ترقية باقتك لإضافة فرع جديد.`,
+        reason: `لقد استنفدت الحد الأقصى لباقة اشتراكك في هذا المخزن (${status.allowedPharmacies} صيدليات). يرجى ترقية باقتك لإضافة فرع جديد.`,
         requiredPlan: Math.min(5, status.allowedPharmacies + 1),
         isTrialExpired: false,
       };
@@ -335,23 +318,12 @@ export async function checkCanAddPharmacyInWarehouse(
     return { canAdd: true, isTrialExpired: false };
   }
 
-  // Not subscribed:
-  // 1. Check if user is trying to add more than 1 pharmacy in the SAME warehouse:
+  // Free Tier: 1 pharmacy is free in this warehouse. 2 or more requires subscription!
   if (warehousePharmaciesCount >= 1) {
     return {
       canAdd: false,
-      reason: 'إضافة أكثر من صيدلية في نفس المخزن تتطلب الاشتراك في إحدى باقات إكس فارما.',
+      reason: 'ربط أكثر من صيدلية واحدة في نفس المخزن يتطلب الاشتراك في إحدى باقات إكس فارما (باقة صيدليتان أو أكثر).',
       requiredPlan: 2,
-      isTrialExpired: false,
-    };
-  }
-
-  // 2. Check if overall user already linked 2 pharmacies across all warehouses:
-  if (status.linkedPharmaciesCount >= 2) {
-    return {
-      canAdd: false,
-      reason: 'النظام يتيح ربط حتى صيدليتين (2) مجاناً. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في باقة مناسبة.',
-      requiredPlan: 3,
       isTrialExpired: false,
     };
   }

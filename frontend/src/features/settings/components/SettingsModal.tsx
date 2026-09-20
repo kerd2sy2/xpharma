@@ -47,14 +47,17 @@ export function SettingsModal({
     ? subscriptionStatusInfo.subscribedPlan
     : 3;
 
+  const isSubscribed = !!subscriptionStatusInfo?.isSubscribed && currentPlanNumber > 0;
   const matchedPlan = PRICING_PLANS.find((p) => p.pharmacies === currentPlanNumber);
-  const planLabel = matchedPlan ? matchedPlan.label : `باقة ${currentPlanNumber} صيدليات`;
-  const planSubtitle = matchedPlan
-    ? matchedPlan.subtitle
-    : `إدارة حتى ${currentPlanNumber} صيدليات عبر كافة المخازن المسجلة`;
+  const planLabel = isSubscribed
+    ? (matchedPlan ? matchedPlan.label : `باقة ${currentPlanNumber} صيدليات`)
+    : 'الباقة المجانية (مخازن مفتوحة)';
+  const planSubtitle = isSubscribed
+    ? `حتى ${currentPlanNumber} صيدليات في المخزن الواحد، ومتاح فتح كل المخازن مجاناً`
+    : 'صيدلية واحدة في كل مخزن مجاناً (متاح فتح وربط كافة المخازن)';
   const daysRemaining = subscriptionStatusInfo?.daysRemaining ?? 30;
   const linkedCount = subscriptionStatusInfo?.linkedPharmaciesCount ?? 0;
-  const allowedPharmacies = Math.max(subscriptionStatusInfo?.allowedPharmacies ?? currentPlanNumber, currentPlanNumber);
+  const allowedPharmacies = isSubscribed ? currentPlanNumber : 1;
 
   const {
     checkingUpdate,
@@ -180,8 +183,9 @@ export function SettingsModal({
                     {/* Top row: Active status badge + Tag */}
                     <View style={styles.subCardTopRow}>
                       <View style={styles.subActiveBadge}>
-                        <View style={styles.pulseDot} />
-                        <Text style={styles.subActiveBadgeText}>اشتراك نشط ومفعل</Text>
+                        <Text style={styles.subActiveBadgeText}>
+                          {isSubscribed ? 'اشتراك نشط ومفعل' : 'باقة مجانية مفتوحة'}
+                        </Text>
                       </View>
 
                       <View style={styles.subPlanPill}>

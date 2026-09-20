@@ -315,8 +315,9 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 			linkedUID, code,
 		).Scan(&alreadyLinked)
 
-		// 2. Rule for Free tier: in the SAME warehouse, more than 1 pharmacy requires an active subscription
-		if !alreadyLinked && !isSubscribed {
+		// 2. Rule: User subscribes per single warehouse based on pharmacy count (1 is free, 2+ requires subscription)
+		// All warehouses are open and can be linked freely ("انما يفتح كل المخازن عادى")
+		if !alreadyLinked {
 			var warehousePharmaciesCount int
 			_ = s.router.Pool().QueryRow(
 				c.Request.Context(),
@@ -324,45 +325,28 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 				linkedUID, req.TenantID,
 			).Scan(&warehousePharmaciesCount)
 
-			if warehousePharmaciesCount >= 1 {
-				c.JSON(http.StatusForbidden, gin.H{
-					"error":         "إضافة أكثر من صيدلية في نفس المخزن تتطلب الاشتراك في إحدى باقات إكس فارما.",
-					"code":          "SUBSCRIPTION_REQUIRED",
-					"required_plan": 2,
-				})
-				return
-			}
-		}
-
-		// 3. If it's a NEW distinct pharmacy code, check if user has reached their overall limit
-		if !alreadyLinked {
-			var currentDistinctCount int
-			_ = s.router.Pool().QueryRow(
-				c.Request.Context(),
-				`SELECT COUNT(DISTINCT code) FROM public.pharmacies WHERE linked_user_id = $1`,
-				linkedUID,
-			).Scan(&currentDistinctCount)
-
-			if currentDistinctCount >= allowedPharmacies {
-				if !isSubscribed {
+			if !isSubscribed {
+				// Free tier: 1 pharmacy is free in this warehouse. 2 or more requires subscription!
+				if warehousePharmaciesCount >= 1 {
 					c.JSON(http.StatusForbidden, gin.H{
-						"error":         "النظام يتيح ربط حتى صيدليتين (2) مجاناً. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في باقة مناسبة.",
+						"error":         "ربط أكثر من صيدلية واحدة في نفس المخزن يتطلب الاشتراك في إحدى باقات إكس فارما (باقة صيدليتان أو أكثر).",
 						"code":          "SUBSCRIPTION_REQUIRED",
-						"required_plan": 3,
-						"current_count": currentDistinctCount,
-						"allowed_count": allowedPharmacies,
+						"required_plan": 2,
 					})
 					return
-				} else {
+				}
+			} else {
+				// Paid tier: allowed up to purchased plan in this warehouse
+				if warehousePharmaciesCount >= allowedPharmacies {
 					nextPlan := allowedPharmacies + 1
 					if nextPlan > 5 {
 						nextPlan = 5
 					}
 					c.JSON(http.StatusForbidden, gin.H{
-						"error":         fmt.Sprintf("لقد استنفدت الحد الأقصى لباقة اشتراكك الحالية (%d صيدليات). يرجى ترقية باقتك لإضافة فرع جديد.", allowedPharmacies),
+						"error":         fmt.Sprintf("لقد استنفدت الحد الأقصى لباقة اشتراكك في هذا المخزن (%d صيدليات). يرجى ترقية باقتك لإضافة فرع جديد.", allowedPharmacies),
 						"code":          "PLAN_LIMIT_REACHED",
 						"required_plan": nextPlan,
-						"current_count": currentDistinctCount,
+						"current_count": warehousePharmaciesCount,
 						"allowed_count": allowedPharmacies,
 					})
 					return
@@ -498,7 +482,7 @@ func (s *WarehouseService) LinkPharmacy(c *gin.Context) {
 			linkedUID, code,
 		).Scan(&alreadyLinked)
 
-		if !alreadyLinked && !isSubscribed {
+		if !alreadyLinked {
 			var warehousePharmaciesCount int
 			_ = s.router.Pool().QueryRow(
 				c.Request.Context(),
@@ -506,44 +490,28 @@ func (s *WarehouseService) LinkPharmacy(c *gin.Context) {
 				linkedUID, tenantID,
 			).Scan(&warehousePharmaciesCount)
 
-			if warehousePharmaciesCount >= 1 {
-				c.JSON(http.StatusForbidden, gin.H{
-					"error":         "إضافة أكثر من صيدلية في نفس المخزن تتطلب الاشتراك في إحدى باقات إكس فارما.",
-					"code":          "SUBSCRIPTION_REQUIRED",
-					"required_plan": 2,
-				})
-				return
-			}
-		}
-
-		if !alreadyLinked {
-			var currentDistinctCount int
-			_ = s.router.Pool().QueryRow(
-				c.Request.Context(),
-				`SELECT COUNT(DISTINCT code) FROM public.pharmacies WHERE linked_user_id = $1`,
-				linkedUID,
-			).Scan(&currentDistinctCount)
-
-			if currentDistinctCount >= allowedPharmacies {
-				if !isSubscribed {
+			if !isSubscribed {
+				// Free tier: 1 pharmacy is free in this warehouse. 2 or more requires subscription!
+				if warehousePharmaciesCount >= 1 {
 					c.JSON(http.StatusForbidden, gin.H{
-						"error":         "النظام يتيح ربط حتى صيدليتين (2) مجاناً. لإضافة 3 صيدليات أو أكثر يرجى الاشتراك في باقة مناسبة.",
+						"error":         "ربط أكثر من صيدلية واحدة في نفس المخزن يتطلب الاشتراك في إحدى باقات إكس فارما (باقة صيدليتان أو أكثر).",
 						"code":          "SUBSCRIPTION_REQUIRED",
-						"required_plan": 3,
-						"current_count": currentDistinctCount,
-						"allowed_count": allowedPharmacies,
+						"required_plan": 2,
 					})
 					return
-				} else {
+				}
+			} else {
+				// Paid tier: allowed up to purchased plan in this warehouse
+				if warehousePharmaciesCount >= allowedPharmacies {
 					nextPlan := allowedPharmacies + 1
 					if nextPlan > 5 {
 						nextPlan = 5
 					}
 					c.JSON(http.StatusForbidden, gin.H{
-						"error":         fmt.Sprintf("لقد استنفدت الحد الأقصى لباقة اشتراكك الحالية (%d صيدليات). يرجى ترقية باقتك لإضافة فرع جديد.", allowedPharmacies),
+						"error":         fmt.Sprintf("لقد استنفدت الحد الأقصى لباقة اشتراكك في هذا المخزن (%d صيدليات). يرجى ترقية باقتك لإضافة فرع جديد.", allowedPharmacies),
 						"code":          "PLAN_LIMIT_REACHED",
 						"required_plan": nextPlan,
-						"current_count": currentDistinctCount,
+						"current_count": warehousePharmaciesCount,
 						"allowed_count": allowedPharmacies,
 					})
 					return
