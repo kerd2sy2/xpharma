@@ -92,6 +92,17 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		email,
 	).Scan(&activeSubCount, &subPlanType, &subEndDate)
 
+	var isPaused bool
+	_ = s.router.Pool().QueryRow(
+		c.Request.Context(),
+		`SELECT EXISTS(
+			SELECT 1 FROM public.subscriptions 
+			WHERE LOWER(TRIM(user_email)) = LOWER(TRIM($1))
+			  AND status = 'paused'
+		)`,
+		email,
+	).Scan(&isPaused)
+
 	// 2. Safe check against public.users
 	var userExists bool
 	var subscriptionPlan int
@@ -185,6 +196,7 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		"trial_days_left":         trialDaysLeft,
 		"is_trial_expired":        false,
 		"is_subscribed":           isSubscribed,
+		"is_paused":               isPaused,
 		"subscription_plan":       subscriptionPlan,
 		"allowed_pharmacies":      allowedPharmacies,
 		"linked_pharmacies_count": linkedCount,

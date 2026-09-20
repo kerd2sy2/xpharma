@@ -139,10 +139,11 @@ export async function POST(req: NextRequest) {
       user_email,
       user_name,
       user_phone,
-      plan_type,
-      amount,
-      payment_method = 'kashier',
+      plan_type = '3 صيدليات',
+      amount = 0,
+      payment_method = 'admin_grant',
       status = 'active',
+      duration_days = 30,
       order_id,
       transaction_id,
       card_brand,
@@ -158,6 +159,9 @@ export async function POST(req: NextRequest) {
       WHERE table_schema = 'public' AND table_name = 'subscriptions'
     `);
     const cols = new Set(colRes.rows.map((r: any) => r.column_name));
+
+    const finalOrderId = order_id || `XPH-ADMIN-${Date.now()}`;
+    const daysNum = Math.max(1, Number(duration_days) || 30);
 
     // Idempotency: avoid duplicate rows for the same order_id
     if (order_id) {
@@ -214,7 +218,7 @@ export async function POST(req: NextRequest) {
           COALESCE($1::uuid, (SELECT id FROM public.tenants LIMIT 1)),
           $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
           CURRENT_DATE,
-          CURRENT_DATE + INTERVAL '30 days',
+          CURRENT_DATE + ($16 || 30) * INTERVAL '1 day',
           NOW(),
           NOW()
         )
@@ -225,17 +229,18 @@ export async function POST(req: NextRequest) {
         user_email || '',
         user_name || 'دكتور صيدلي',
         user_phone || '',
-        String(plan_type || 'monthly'),
+        String(plan_type || '3 صيدليات'),
         Number(amount) || 0,
         payment_method,
         status,
-        order_id || null,
+        finalOrderId,
         transaction_id || null,
         card_brand || null,
         masked_card || null,
-        receipt_ref || transaction_id || order_id || null,
+        receipt_ref || transaction_id || finalOrderId,
         receipt_url || null,
-        notes || `دفع إلكتروني عبر كاشير - مرجع: ${transaction_id || order_id || ''}`,
+        notes || (payment_method === 'admin_grant' ? 'اشتراك ممنوح بقرار الإدارة' : `دفع إلكتروني: ${finalOrderId}`),
+        daysNum,
       ];
     } else {
       // Fallback if custom columns not added
@@ -255,7 +260,7 @@ export async function POST(req: NextRequest) {
           COALESCE($1::uuid, (SELECT id FROM public.tenants LIMIT 1)),
           $2, $3, $4, $5, $6,
           CURRENT_DATE,
-          CURRENT_DATE + INTERVAL '30 days',
+          CURRENT_DATE + ($7 || 30) * INTERVAL '1 day',
           NOW(),
           NOW()
         )
@@ -263,18 +268,19 @@ export async function POST(req: NextRequest) {
       `;
       params = [
         tenant_id || null,
-        String(plan_type || 'monthly'),
+        String(plan_type || '3 صيدليات'),
         status,
-        receipt_ref || transaction_id || order_id || null,
+        receipt_ref || transaction_id || finalOrderId,
         receipt_url || null,
         notes || `دفع إلكتروني: ${user_email || ''} - ${amount || 0} ج.م`,
+        daysNum,
       ];
     }
 
     const result = await query(queryText, params);
 
     // Also update public.users table if email is present
-    if (user_email) {
+    if (user_email && status === 'active') {
       let planCount = 3;
       if (typeof plan_type === 'number') {
         planCount = plan_type;
@@ -288,10 +294,10 @@ export async function POST(req: NextRequest) {
            SET subscription_plan = $1, 
                is_active = TRUE,
                is_subscription_active = TRUE,
-               subscription_expires_at = NOW() + INTERVAL '30 days',
+               subscription_expires_at = NOW() + ($3 || 30) * INTERVAL '1 day',
                updated_at = NOW() 
            WHERE LOWER(email) = LOWER($2)`,
-          [planCount, user_email]
+          [planCount, user_email, daysNum]
         );
       } catch (userUpdateErr) {
         console.warn('Failed to sync user table subscription:', userUpdateErr);
@@ -301,7 +307,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       subscription: result.rows[0],
-      message: 'Payment recorded successfully',
+      message: 'تم تسجيل وتفعيل الاشتراك بنجاح',
     });
   } catch (error: any) {
     console.error('Error recording subscription payment:', error);
@@ -310,97 +316,250 @@ export async function POST(req: NextRequest) {
 }
 
 
-// PATCH /api/billing - approve or reject subscription
+// PATCH /api/billing - manage subscription lifecycle (approve, reject, change plan, pause, resume, cancel, extend)
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
-    const { id, status, notes } = body;
+    const {
+      id,
+      action,
+      status,
+      plan_type,
+      days,
+      renew_cycle,
+      amount,
+      notes,
+    } = body;
 
-    if (!id || !['active', 'rejected'].includes(status)) {
-      return NextResponse.json({ success: false, error: 'Valid id and status (active/rejected) required' }, { status: 400 });
+    if (!id) {
+      return NextResponse.json({ success: false, error: 'Subscription ID is required' }, { status: 400 });
     }
 
-    let queryText = '';
-    let params = [];
-
-    if (status === 'active') {
-      // Approve: set active and renew end_date for 30 days from now
-      queryText = `
-        UPDATE public.subscriptions
-        SET status = 'active',
-            start_date = CURRENT_DATE,
-            end_date = CURRENT_DATE + INTERVAL '30 days',
-            notes = COALESCE($2, notes),
-            updated_at = NOW()
-        WHERE id = $1
-        RETURNING *
-      `;
-      params = [id, notes || 'تم الاعتماد عبر لوحة الإدارة'];
-    } else {
-      // Reject
-      queryText = `
-        UPDATE public.subscriptions
-        SET status = 'rejected',
-            notes = COALESCE($2, 'تم الرفض بواسطة الإدارة'),
-            updated_at = NOW()
-        WHERE id = $1
-        RETURNING *
-      `;
-      params = [id, notes];
-    }
-
-    const result = await query(queryText, params);
-
-    if (result.rowCount === 0) {
+    // Fetch existing subscription
+    const existingRes = await query(`SELECT * FROM public.subscriptions WHERE id = $1 LIMIT 1`, [id]);
+    if (existingRes.rows.length === 0) {
       return NextResponse.json({ success: false, error: 'Subscription not found' }, { status: 404 });
     }
+    const currentSub = existingRes.rows[0];
+    const targetEmail = currentSub.user_email;
+    const targetUserId = currentSub.user_id;
 
-    const updatedSub = result.rows[0];
+    let updatedSub = currentSub;
+    let message = 'تم التحديث بنجاح';
 
-    // Atomically synchronize public.users table so the mobile app activates immediately!
-    const targetEmail = updatedSub.user_email;
-    const targetUserId = updatedSub.user_id;
+    // 1. CHANGE PLAN (1, 2, 3, 4, 5 pharmacies)
+    if (action === 'change_plan' || plan_type) {
+      const newPlanStr = String(plan_type || currentSub.plan_type || '3 صيدليات');
+      let planCount = 3;
+      const match = newPlanStr.match(/(\d+)/);
+      if (match) planCount = parseInt(match[1], 10);
 
-    if (targetEmail || targetUserId) {
-      if (status === 'active') {
-        let planCount = 3;
-        const planStr = String(updatedSub.plan_type || '');
-        const match = planStr.match(/(\d+)/);
-        if (match) {
-          planCount = parseInt(match[1], 10);
-        } else if (Number(updatedSub.amount) >= 300) {
-          planCount = 5;
-        } else if (Number(updatedSub.amount) >= 250) {
-          planCount = 4;
-        } else if (Number(updatedSub.amount) >= 200) {
-          planCount = 3;
-        } else if (Number(updatedSub.amount) >= 150) {
-          planCount = 2;
-        } else if (Number(updatedSub.amount) >= 100) {
-          planCount = 1;
-        }
+      const daysNum = Number(days) || 30;
+      let dateUpdateSql = '';
+      let dateParams: any[] = [];
 
-        try {
-          await query(
-            `UPDATE public.users 
-             SET subscription_plan = $1, 
-                 is_active = TRUE,
-                 is_subscription_active = TRUE,
-                 subscription_expires_at = NOW() + INTERVAL '30 days',
-                 updated_at = NOW() 
-             WHERE (LOWER(email) = LOWER($2) AND $2 <> '') OR id = $3`,
-            [planCount, targetEmail || '', targetUserId || null]
-          );
-        } catch (uErr) {
-          console.warn('Failed to sync approved user status:', uErr);
-        }
+      if (renew_cycle) {
+        dateUpdateSql = `, start_date = CURRENT_DATE, end_date = CURRENT_DATE + ($${dateParams.length + 5}::int) * INTERVAL '1 day'`;
+        dateParams.push(daysNum);
       }
+
+      const updateQuery = `
+        UPDATE public.subscriptions
+        SET plan_type = $2,
+            amount = COALESCE($3, amount),
+            notes = COALESCE($4, notes),
+            status = 'active',
+            updated_at = NOW()
+            ${dateUpdateSql}
+        WHERE id = $1
+        RETURNING *
+      `;
+      const res = await query(updateQuery, [id, newPlanStr, amount !== undefined ? Number(amount) : null, notes || `تعديل الباقة إلى ${newPlanStr} من قبل الإدارة`, ...dateParams]);
+      updatedSub = res.rows[0];
+
+      if (targetEmail || targetUserId) {
+        let expireSql = '';
+        let expireParams: any[] = [];
+        if (renew_cycle) {
+          expireSql = `, subscription_expires_at = NOW() + ($${expireParams.length + 4}::int) * INTERVAL '1 day'`;
+          expireParams.push(daysNum);
+        }
+        await query(
+          `UPDATE public.users 
+           SET subscription_plan = $1, 
+               is_active = TRUE,
+               is_subscription_active = TRUE,
+               updated_at = NOW()
+               ${expireSql}
+           WHERE (LOWER(email) = LOWER($2) AND $2 <> '') OR id = $3`,
+          [planCount, targetEmail || '', targetUserId || null, ...expireParams]
+        );
+      }
+      message = `تم تغيير الباقة إلى ${newPlanStr} وتحديث الحساب فورياً`;
+    }
+
+    // 2. PAUSE / FREEZE SUBSCRIPTION
+    else if (action === 'pause' || status === 'paused') {
+      const res = await query(
+        `UPDATE public.subscriptions
+         SET status = 'paused',
+             notes = COALESCE($2, notes),
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [id, notes || 'تم إيقاف الاشتراك مؤقتاً بواسطة الإدارة']
+      );
+      updatedSub = res.rows[0];
+
+      if (targetEmail || targetUserId) {
+        await query(
+          `UPDATE public.users 
+           SET is_subscription_active = FALSE,
+               updated_at = NOW()
+           WHERE (LOWER(email) = LOWER($1) AND $1 <> '') OR id = $2`,
+          [targetEmail || '', targetUserId || null]
+        );
+      }
+      message = 'تم إيقاف الاشتراك مؤقتاً وتجميده في تطبيق المستخدم';
+    }
+
+    // 3. RESUME / UNFREEZE SUBSCRIPTION
+    else if (action === 'resume' || (status === 'active' && currentSub.status === 'paused')) {
+      const res = await query(
+        `UPDATE public.subscriptions
+         SET status = 'active',
+             notes = COALESCE($2, notes),
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [id, notes || 'تم استئناف تفعيل الاشتراك بواسطة الإدارة']
+      );
+      updatedSub = res.rows[0];
+
+      let planCount = 3;
+      const match = String(updatedSub.plan_type || '').match(/(\d+)/);
+      if (match) planCount = parseInt(match[1], 10);
+
+      if (targetEmail || targetUserId) {
+        await query(
+          `UPDATE public.users 
+           SET is_subscription_active = TRUE,
+               subscription_plan = $1,
+               updated_at = NOW()
+           WHERE (LOWER(email) = LOWER($2) AND $2 <> '') OR id = $3`,
+          [planCount, targetEmail || '', targetUserId || null]
+        );
+      }
+      message = 'تم استئناف الاشتراك وتفعيله في تطبيق المستخدم بنجاح';
+    }
+
+    // 4. CANCEL SUBSCRIPTION
+    else if (action === 'cancel' || status === 'cancelled') {
+      const res = await query(
+        `UPDATE public.subscriptions
+         SET status = 'cancelled',
+             notes = COALESCE($2, notes),
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [id, notes || 'تم إلغاء الاشتراك بالكامل بواسطة الإدارة']
+      );
+      updatedSub = res.rows[0];
+
+      if (targetEmail || targetUserId) {
+        await query(
+          `UPDATE public.users 
+           SET is_subscription_active = FALSE,
+               subscription_plan = 0,
+               updated_at = NOW()
+           WHERE (LOWER(email) = LOWER($1) AND $1 <> '') OR id = $2`,
+          [targetEmail || '', targetUserId || null]
+        );
+      }
+      message = 'تم إلغاء الاشتراك وإعادة حساب المستخدم للباقة المجانية (0 صيدليات مدفوعة)';
+    }
+
+    // 5. EXTEND DURATION (add days)
+    else if (action === 'extend') {
+      const addDays = Math.max(1, Number(days) || 30);
+      const res = await query(
+        `UPDATE public.subscriptions
+         SET end_date = GREATEST(CURRENT_DATE, end_date) + ($2::int) * INTERVAL '1 day',
+             status = 'active',
+             notes = COALESCE($3, notes),
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [id, addDays, notes || `تمديد الاشتراك بمقدار ${addDays} يوماً من قبل الإدارة`]
+      );
+      updatedSub = res.rows[0];
+
+      if (targetEmail || targetUserId) {
+        await query(
+          `UPDATE public.users 
+           SET is_subscription_active = TRUE,
+               subscription_expires_at = GREATEST(NOW(), subscription_expires_at) + ($2::int) * INTERVAL '1 day',
+               updated_at = NOW()
+           WHERE (LOWER(email) = LOWER($1) AND $1 <> '') OR id = $3`,
+          [targetEmail || '', addDays, targetUserId || null]
+        );
+      }
+      message = `تم تمديد صلاحية الاشتراك بمقدار ${addDays} يوماً إضافية بنجاح`;
+    }
+
+    // 6. APPROVE PENDING
+    else if (status === 'active' || action === 'approve') {
+      const res = await query(
+        `UPDATE public.subscriptions
+         SET status = 'active',
+             start_date = CURRENT_DATE,
+             end_date = CURRENT_DATE + INTERVAL '30 days',
+             notes = COALESCE($2, notes),
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [id, notes || 'تم الاعتماد والتفعيل عبر لوحة الإدارة']
+      );
+      updatedSub = res.rows[0];
+
+      let planCount = 3;
+      const match = String(updatedSub.plan_type || '').match(/(\d+)/);
+      if (match) planCount = parseInt(match[1], 10);
+
+      if (targetEmail || targetUserId) {
+        await query(
+          `UPDATE public.users 
+           SET subscription_plan = $1, 
+               is_active = TRUE,
+               is_subscription_active = TRUE,
+               subscription_expires_at = NOW() + INTERVAL '30 days',
+               updated_at = NOW() 
+           WHERE (LOWER(email) = LOWER($2) AND $2 <> '') OR id = $3`,
+          [planCount, targetEmail || '', targetUserId || null]
+        );
+      }
+      message = 'تم اعتماد وتفعيل الاشتراك بنجاح (30 يوماً)';
+    }
+
+    // 7. REJECT PENDING
+    else if (status === 'rejected' || action === 'reject') {
+      const res = await query(
+        `UPDATE public.subscriptions
+         SET status = 'rejected',
+             notes = COALESCE($2, 'تم الرفض بواسطة الإدارة'),
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [id, notes]
+      );
+      updatedSub = res.rows[0];
+      message = 'تم رفض الطلب بنجاح';
     }
 
     return NextResponse.json({
       success: true,
       subscription: updatedSub,
-      message: `تم تحديث وتفعيل الاشتراك بنجاح`
+      message,
     });
   } catch (error: any) {
     console.error('Error updating subscription:', error);
