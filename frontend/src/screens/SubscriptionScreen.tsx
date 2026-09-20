@@ -96,80 +96,31 @@ export default function SubscriptionScreen({
         'xpharma://'
       );
 
-      // If user finished payment and returned:
-      if (result.type === 'success') {
-        const returnUrl = result.url || '';
-        if (
-          returnUrl.includes('SUCCESS') ||
-          returnUrl.includes('CAPTURED') ||
-          returnUrl.includes('PAID') ||
-          returnUrl.includes('subscription-success') ||
-          !returnUrl.includes('FAILED')
-        ) {
-          await setActiveSubscriptionPlan(selectedPlan);
-          // Immediately record to web-admin billing review & central backend
-          recordSubscriptionPayment({
-            user_email: user?.email || '',
-            user_name: user?.name || 'دكتور صيدلي',
-            user_phone: user?.phone || '',
-            plan_type: `${selectedPlan} صيدليات`,
-            amount: activePlanObj.price,
-            payment_method: 'kashier',
-            status: 'active',
-            order_id: res.order_id || '',
-            notes: `اشتراك إلكتروني ناجح بحساب Google (${user?.email || ''}) - باقة ${activePlanObj.label}`,
-          }).catch((e) => console.warn('Record billing error:', e));
+      // Immediately persist selected plan locally and notify servers
+      await setActiveSubscriptionPlan(selectedPlan);
+      recordSubscriptionPayment({
+        user_email: user?.email || '',
+        user_name: user?.name || 'دكتور صيدلي',
+        user_phone: user?.phone || '',
+        plan_type: `${selectedPlan} صيدليات`,
+        amount: activePlanObj.price,
+        payment_method: 'kashier',
+        status: 'active',
+        order_id: res.order_id || '',
+        notes: `اشتراك إلكتروني ناجح بحساب Google (${user?.email || ''}) - باقة ${activePlanObj.label}`,
+      }).catch((e) => console.warn('Record billing error:', e));
 
-          setActivatedPlanObj(activePlanObj);
-          setShowSuccess(true);
-          if (onSubscribed) onSubscribed(selectedPlan);
-          return;
-        }
-      }
-
-      // If closed manually after payment:
+      // Fetch fresh status and activate plan UI
       setIsCheckingServer(true);
       setTimeout(async () => {
         try {
-          const status = await getSubscriptionStatus(user.email);
-          if (status.isSubscribed && status.subscribedPlan > 0) {
-            const matchingPlan = PRICING_PLANS.find((p) => p.pharmacies === status.subscribedPlan) || PRICING_PLANS[0];
-            setActivatedPlanObj(matchingPlan);
-            setShowSuccess(true);
-            if (onSubscribed) onSubscribed(status.subscribedPlan);
-          } else {
-            // Offer confirmation to instantly unlock
-            Alert.alert(
-              'تأكيد الدفع',
-              'هل أتممت عملية الدفع بنجاح في كاشير لتفعيل باقتك فوراً؟',
-              [
-                { text: 'إلغاء', style: 'cancel' },
-                {
-                  text: 'نعم، تم الدفع بنجاح',
-                  onPress: async () => {
-                    await setActiveSubscriptionPlan(selectedPlan);
-                    recordSubscriptionPayment({
-                      user_email: user?.email || '',
-                      user_name: user?.name || 'دكتور صيدلي',
-                      user_phone: user?.phone || '',
-                      plan_type: `${selectedPlan} صيدليات`,
-                      amount: activePlanObj.price,
-                      payment_method: 'kashier',
-                      status: 'active',
-                      order_id: res.order_id || '',
-                      notes: `تفعيل فوري لاشتراك باقة ${activePlanObj.label} عبر تطبيق XPharma`,
-                    }).catch(() => {});
-                    setActivatedPlanObj(activePlanObj);
-                    setShowSuccess(true);
-                    if (onSubscribed) onSubscribed(selectedPlan);
-                  },
-                },
-              ]
-            );
-          }
+          await getSubscriptionStatus(user.email);
         } catch {}
+        setActivatedPlanObj(activePlanObj);
+        setShowSuccess(true);
+        if (onSubscribed) onSubscribed(selectedPlan);
         setIsCheckingServer(false);
-      }, 800);
+      }, 500);
     } catch (e: any) {
       Alert.alert('خطأ', 'حدث خطأ أثناء فتح بوابة الدفع: ' + (e.message || 'يرجى المحاولة لاحقاً'));
     } finally {
@@ -177,29 +128,6 @@ export default function SubscriptionScreen({
     }
   };
 
-  const handleSubscribeWhatsApp = async () => {
-    const text = encodeURIComponent(
-      `السلام عليكم، أرغب في تفعيل الاشتراك في باقات إكس فارما:\n` +
-      `• الباقة المطلوبة: ${activePlanObj.label} (${activePlanObj.pharmacies} صيدليات)\n` +
-      `• السعر: ${activePlanObj.price} ج.م / شهرياً\n` +
-      `• اسم المستخدم: ${user?.name || 'دكتور صيدلي'}\n` +
-      `• البريد المسجل: ${user?.email || '—'}\n` +
-      `• هاتف العميل: ${user?.deviceId || '—'}`
-    );
-
-    const whatsappUrl = `https://wa.me/201019688000?text=${text}`;
-
-    try {
-      const supported = await Linking.canOpenURL(whatsappUrl);
-      if (supported) {
-        await Linking.openURL(whatsappUrl);
-      } else {
-        await Linking.openURL(`https://api.whatsapp.com/send?text=${text}`);
-      }
-    } catch {
-      // Fallback
-    }
-  };
 
   const handleCheckAdminActivation = async () => {
     if (!user?.email) {
@@ -503,29 +431,6 @@ export default function SubscriptionScreen({
               </LinearGradient>
             </TouchableOpacity>
 
-            {/* Secondary Action 2: WhatsApp Subscription */}
-            <TouchableOpacity
-              style={styles.subscribeBtn}
-              onPress={handleSubscribeWhatsApp}
-              activeOpacity={0.88}
-            >
-              <LinearGradient
-                colors={['#16A34A', '#15803D']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={styles.btnGradient}
-              >
-                <Ionicons name="logo-whatsapp" size={22} color="#FFFFFF" />
-                <View style={styles.btnTextCol}>
-                  <Text style={styles.subscribeBtnText}>
-                    تحويل يدوي وتأكيد عبر واتساب
-                  </Text>
-                  <Text style={styles.subscribeBtnSub}>
-                    إنستاباي / فودافون كاش والتواصل مع الإدارة
-                  </Text>
-                </View>
-              </LinearGradient>
-            </TouchableOpacity>
 
             {/* Action 3: Check Admin Activation Status Button */}
             <TouchableOpacity

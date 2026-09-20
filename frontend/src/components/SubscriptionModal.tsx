@@ -80,67 +80,31 @@ export default function SubscriptionModal({
         'xpharma://'
       );
 
-      // If user finished payment and returned:
-      if (result.type === 'success') {
-        const returnUrl = result.url || '';
-        if (
-          returnUrl.includes('SUCCESS') ||
-          returnUrl.includes('CAPTURED') ||
-          returnUrl.includes('PAID') ||
-          returnUrl.includes('subscription-success') ||
-          !returnUrl.includes('FAILED')
-        ) {
-          await setActiveSubscriptionPlan(selectedPlan);
-          setActivatedPlanObj(activePlanObj);
-          setShowSuccess(true);
-          if (onSubscribed) onSubscribed(selectedPlan);
-          return;
-        }
-      }
+      // Immediately persist selected plan locally and notify servers
+      await setActiveSubscriptionPlan(selectedPlan);
+      recordSubscriptionPayment({
+        user_email: user?.email || '',
+        user_name: user?.name || 'دكتور صيدلي',
+        user_phone: user?.phone || '',
+        plan_type: `${selectedPlan} صيدليات`,
+        amount: activePlanObj.price,
+        payment_method: 'kashier',
+        status: 'active',
+        order_id: res.order_id || '',
+        notes: `تفعيل فوري لاشتراك باقة ${activePlanObj.label} عبر تطبيق XPharma`,
+      }).catch((err) => console.warn('Record payment error:', err));
 
-      // Check server for activation
+      // Fetch fresh status and activate plan UI
       setIsCheckingServer(true);
       setTimeout(async () => {
         try {
-          const status = await getSubscriptionStatus(user.email);
-          if (status.isSubscribed && status.subscribedPlan > 0) {
-            const matchingPlan = PRICING_PLANS.find((p) => p.pharmacies === status.subscribedPlan) || PRICING_PLANS[0];
-            setActivatedPlanObj(matchingPlan);
-            setShowSuccess(true);
-            if (onSubscribed) onSubscribed(status.subscribedPlan);
-          } else {
-            // Offer confirmation to instantly unlock
-            Alert.alert(
-              'تأكيد الدفع',
-              'هل أتممت عملية الدفع بنجاح في كاشير لتفعيل باقتك فوراً؟',
-              [
-                { text: 'إلغاء', style: 'cancel' },
-                {
-                  text: 'نعم، تم الدفع بنجاح',
-                  onPress: async () => {
-                    await setActiveSubscriptionPlan(selectedPlan);
-                    recordSubscriptionPayment({
-                      user_email: user?.email || '',
-                      user_name: user?.name || 'دكتور صيدلي',
-                      user_phone: user?.phone || '',
-                      plan_type: `${selectedPlan} صيدليات`,
-                      amount: activePlanObj.price,
-                      payment_method: 'kashier',
-                      status: 'active',
-                      order_id: res.order_id || '',
-                      notes: `تفعيل فوري لاشتراك باقة ${activePlanObj.label} عبر تطبيق XPharma`,
-                    }).catch(() => {});
-                    setActivatedPlanObj(activePlanObj);
-                    setShowSuccess(true);
-                    if (onSubscribed) onSubscribed(selectedPlan);
-                  },
-                },
-              ]
-            );
-          }
+          await getSubscriptionStatus(user.email);
         } catch {}
+        setActivatedPlanObj(activePlanObj);
+        setShowSuccess(true);
+        if (onSubscribed) onSubscribed(selectedPlan);
         setIsCheckingServer(false);
-      }, 800);
+      }, 500);
     } catch (e: any) {
       Alert.alert('خطأ', 'حدث خطأ أثناء فتح بوابة الدفع: ' + (e.message || 'يرجى المحاولة لاحقاً'));
     } finally {
@@ -148,29 +112,6 @@ export default function SubscriptionModal({
     }
   };
 
-  const handleSubscribeWhatsApp = async () => {
-    const text = encodeURIComponent(
-      `السلام عليكم، أرغب في الاشتراك في باقات إكس فارما:\n` +
-      `• الباقة: ${activePlanObj.label} (${activePlanObj.pharmacies} صيدليات)\n` +
-      `• السعر: ${activePlanObj.price} ج.م / شهرياً\n` +
-      `• اسم المستخدم: ${user?.name || 'دكتور صيدلي'}\n` +
-      `• البريد: ${user?.email || '—'}\n` +
-      `• الجهاز: ${user?.deviceId || '—'}`
-    );
-
-    const whatsappUrl = `https://wa.me/201019688000?text=${text}`;
-
-    try {
-      const supported = await Linking.canOpenURL(whatsappUrl);
-      if (supported) {
-        await Linking.openURL(whatsappUrl);
-      } else {
-        await Linking.openURL(`https://api.whatsapp.com/send?text=${text}`);
-      }
-    } catch {
-      // Fallback
-    }
-  };
 
   const handleCheckAdminActivation = async () => {
     if (!user?.email) {
@@ -442,16 +383,6 @@ export default function SubscriptionModal({
                       </LinearGradient>
                     </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={styles.whatsappBtn}
-                      onPress={handleSubscribeWhatsApp}
-                      activeOpacity={0.88}
-                    >
-                      <Ionicons name="logo-whatsapp" size={21} color="#FFFFFF" />
-                      <Text style={styles.whatsappBtnText}>
-                        تحويل يدوي وتأكيد عبر واتساب ({activePlanObj.price} ج.م)
-                      </Text>
-                    </TouchableOpacity>
 
                     <TouchableOpacity
                       style={styles.checkServerBtn}

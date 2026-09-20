@@ -325,6 +325,73 @@ func (s *SubscriptionService) HandleWebhook(c *gin.Context) {
 
 // Redirect page shown when Kashier returns after browser checkout
 func (s *SubscriptionService) HandleRedirect(c *gin.Context) {
+	paymentStatus := strings.ToUpper(strings.TrimSpace(c.Query("paymentStatus")))
+	orderID := strings.TrimSpace(c.Query("orderId"))
+	if orderID == "" {
+		orderID = strings.TrimSpace(c.Query("order"))
+	}
+	if paymentStatus == "" {
+		paymentStatus = strings.ToUpper(strings.TrimSpace(c.Query("status")))
+	}
+
+	isSuccess := paymentStatus == "SUCCESS" || paymentStatus == "CAPTURED" || paymentStatus == "PAID" || strings.Contains(paymentStatus, "SUCCESS") || paymentStatus == ""
+
+	if isSuccess && orderID != "" {
+		plan := 3
+		parts := strings.Split(orderID, "-")
+		var emailPrefix string
+		for i, part := range parts {
+			if strings.HasPrefix(part, "P") && len(part) >= 2 {
+				if val, err := strconv.Atoi(part[1:]); err == nil && val > 0 {
+					plan = val
+				}
+			}
+			if part == "SUB" && i+1 < len(parts) {
+				emailPrefix = parts[i+1]
+			}
+		}
+
+		price := getPlanPrice(plan)
+
+		if emailPrefix != "" {
+			_, _ = s.router.Pool().Exec(
+				c.Request.Context(),
+				`UPDATE public.users 
+				 SET subscription_plan = $1, 
+				     is_subscription_active = true, 
+				     subscription_expires_at = NOW() + INTERVAL '30 days',
+				     updated_at = NOW()
+				 WHERE LOWER(email) LIKE LOWER($2) || '%'`,
+				plan, emailPrefix,
+			)
+
+			_, _ = s.router.Pool().Exec(
+				c.Request.Context(),
+				`UPDATE public.subscriptions SET status = 'superseded', updated_at = NOW() 
+				 WHERE LOWER(user_email) LIKE LOWER($1) || '%' AND status = 'active'`,
+				emailPrefix,
+			)
+
+			_, _ = s.router.Pool().Exec(
+				c.Request.Context(),
+				`INSERT INTO public.subscriptions (
+					tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
+					status, order_id, transaction_id, receipt_ref, notes,
+					start_date, end_date, created_at, updated_at
+				) VALUES (
+					(SELECT id FROM public.tenants LIMIT 1),
+					COALESCE((SELECT email FROM public.users WHERE LOWER(email) LIKE LOWER($1) || '%' LIMIT 1), $1),
+					COALESCE((SELECT name FROM public.users WHERE LOWER(email) LIKE LOWER($1) || '%' LIMIT 1), 'مشترك تطبيق XPharma'),
+					COALESCE((SELECT device_name FROM public.users WHERE LOWER(email) LIKE LOWER($1) || '%' LIMIT 1), '-'),
+					$2, $3, 'kashier', 'active', $4, $4, $4,
+					'دفع إلكتروني ناجح عبر بوابة كاشير (Kashier Redirect)',
+					CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', NOW(), NOW()
+				)`,
+				emailPrefix, fmt.Sprintf("%d صيدليات", plan), price, orderID,
+			)
+		}
+	}
+
 	html := `<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>

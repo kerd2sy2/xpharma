@@ -18,7 +18,7 @@ import { Ionicons, FontAwesome } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useOTAUpdates } from '@/features/settings/hooks/useOTAUpdates';
 import UpdateModal from '@/components/UpdateModal';
-import { SubscriptionStatus } from '@/services/subscription';
+import { SubscriptionStatus, PRICING_PLANS } from '@/services/subscription';
 
 interface SettingsScreenProps {
   user: {
@@ -43,6 +43,19 @@ export default function SettingsScreen({
 }: SettingsScreenProps) {
   const insets = useSafeAreaInsets();
   const topInset = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 0);
+
+  const currentPlanNumber = subscriptionStatusInfo?.subscribedPlan && subscriptionStatusInfo.subscribedPlan > 0
+    ? subscriptionStatusInfo.subscribedPlan
+    : 3;
+
+  const matchedPlan = PRICING_PLANS.find((p) => p.pharmacies === currentPlanNumber);
+  const planLabel = matchedPlan ? matchedPlan.label : `باقة ${currentPlanNumber} صيدليات`;
+  const planSubtitle = matchedPlan
+    ? matchedPlan.subtitle
+    : `إدارة حتى ${currentPlanNumber} صيدليات عبر كافة المخازن المسجلة`;
+  const daysRemaining = subscriptionStatusInfo?.daysRemaining ?? 30;
+  const linkedCount = subscriptionStatusInfo?.linkedPharmaciesCount ?? 0;
+  const allowedPharmacies = Math.max(subscriptionStatusInfo?.allowedPharmacies ?? currentPlanNumber, currentPlanNumber);
 
   const {
     checkingUpdate,
@@ -152,6 +165,70 @@ export default function SettingsScreen({
             </View>
           </View>
         </LinearGradient>
+
+        {/* 1.5. Current Subscription Plan Card - توضيح باقة الاشتراك في الملف الشخصي */}
+        <View style={styles.subscriptionCard}>
+          <LinearGradient
+            colors={['#17062E', '#2A084E', '#3D0D70']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.subscriptionGradient}
+          >
+            {/* Top row: Active status badge + Tag */}
+            <View style={styles.subCardTopRow}>
+              <View style={styles.subActiveBadge}>
+                <View style={styles.pulseDot} />
+                <Text style={styles.subActiveBadgeText}>اشتراك نشط ومفعل</Text>
+              </View>
+
+              <View style={styles.subPlanPill}>
+                <Ionicons name="sparkles" size={13} color="#FBBF24" />
+                <Text style={styles.subPlanPillText}>باقتك الحالية</Text>
+              </View>
+            </View>
+
+            {/* Plan Title & Badge Icon */}
+            <View style={styles.subMainRow}>
+              <View style={styles.subTextGroup}>
+                <Text style={styles.subPlanBigTitle}>{planLabel}</Text>
+                <Text style={styles.subPlanSubText}>{planSubtitle}</Text>
+              </View>
+              <View style={styles.subIconWrapper}>
+                <Ionicons name="ribbon-outline" size={26} color="#A78BFA" />
+              </View>
+            </View>
+
+            {/* Metrics: Remaining Days & Pharmacy Count */}
+            <View style={styles.subMetricsRow}>
+              <View style={styles.subMetricCol}>
+                <Text style={styles.subMetricVal}>{daysRemaining} يوم</Text>
+                <Text style={styles.subMetricLbl}>المدة المتبقية</Text>
+              </View>
+              <View style={styles.subMetricSep} />
+              <View style={styles.subMetricCol}>
+                <Text style={styles.subMetricVal}>{linkedCount} / {allowedPharmacies}</Text>
+                <Text style={styles.subMetricLbl}>الصيدليات المربوطة</Text>
+              </View>
+            </View>
+
+            {/* Upgrade / Change Plan Button */}
+            <TouchableOpacity
+              style={styles.subUpgradeBtn}
+              onPress={onOpenSubscriptionModal}
+              activeOpacity={0.85}
+            >
+              <LinearGradient
+                colors={['#7C3AED', '#5B21B6']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.subUpgradeBtnGradient}
+              >
+                <Ionicons name="arrow-up-circle-outline" size={18} color="#FFFFFF" />
+                <Text style={styles.subUpgradeBtnText}>ترقية أو تغيير الباقة</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </LinearGradient>
+        </View>
 
         {/* 2. Settings Group 1: Features & System Actions */}
         <Text style={styles.sectionHeaderLabel}>الخدمات وتحديثات النظام</Text>
@@ -405,66 +482,145 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   subscriptionCard: {
-    borderRadius: 20,
+    borderRadius: 22,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 4,
+    marginTop: 14,
+    marginBottom: 8,
+    shadowColor: '#3F0082',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 6,
   },
   subscriptionGradient: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    padding: 16,
-    gap: 12,
+    padding: 18,
+    borderRadius: 22,
   },
-  subIconBadge: {
-    width: 44,
-    height: 44,
+  subCardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  subActiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderRadius: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.4)',
   },
-  subDetailsCol: {
-    flex: 1,
-    alignItems: 'flex-end',
-    gap: 3,
+  pulseDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#10B981',
   },
-  subTitleRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 8,
-  },
-  subTitleText: {
-    color: '#FFFFFF',
-    fontSize: 14.5,
+  subActiveBadgeText: {
+    color: '#34D399',
+    fontSize: 11,
     fontWeight: '800',
   },
-  subStatusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 8,
+  subPlanPill: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(245, 158, 11, 0.18)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.35)',
   },
-  badgeSuccess: {
-    backgroundColor: 'rgba(16, 185, 129, 0.25)',
-  },
-  badgeWarning: {
-    backgroundColor: 'rgba(245, 158, 11, 0.25)',
-  },
-  badgeDanger: {
-    backgroundColor: 'rgba(239, 68, 68, 0.25)',
-  },
-  subStatusBadgeText: {
-    color: '#FFFFFF',
+  subPlanPillText: {
+    color: '#FBBF24',
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '800',
   },
-  subSubtitleText: {
-    color: 'rgba(255, 255, 255, 0.8)',
-    fontSize: 12,
+  subMainRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    gap: 12,
+  },
+  subIconWrapper: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  subTextGroup: {
+    flex: 1,
+    alignItems: 'flex-end',
+  },
+  subPlanBigTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#FFFFFF',
     textAlign: 'right',
+    marginBottom: 3,
+  },
+  subPlanSubText: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.75)',
+    textAlign: 'right',
+    lineHeight: 18,
+  },
+  subMetricsRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  subMetricCol: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  subMetricVal: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#F8FAFC',
+    marginBottom: 2,
+  },
+  subMetricLbl: {
+    fontSize: 11,
+    color: '#94A3B8',
+    fontWeight: '600',
+  },
+  subMetricSep: {
+    width: 1,
+    height: 28,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  subUpgradeBtn: {
+    borderRadius: 14,
+    overflow: 'hidden',
+    marginTop: 2,
+  },
+  subUpgradeBtnGradient: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 11,
+    gap: 8,
+  },
+  subUpgradeBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13.5,
+    fontWeight: '800',
   },
   sectionHeaderLabel: {
     fontSize: 13,

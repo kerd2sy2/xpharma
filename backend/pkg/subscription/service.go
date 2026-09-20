@@ -42,7 +42,7 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		c.Request.Context(),
 		`SELECT 
 			COUNT(*),
-			COALESCE(MAX(plan_type), '3 صيدليات'),
+			COALESCE(MAX(plan_type), ''),
 			COALESCE(MAX(end_date), CURRENT_DATE + INTERVAL '30 days')
 		 FROM public.subscriptions 
 		 WHERE LOWER(TRIM(user_email)) = LOWER(TRIM($1))
@@ -66,39 +66,48 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		email,
 	).Scan(&userExists, &userProvider, &subscriptionPlan)
 
-	// All registered/Google accounts in XPharma are active subscribers on the 3-pharmacy package
-	isSubscribed := true
-	if subscriptionPlan < 3 {
-		subscriptionPlan = 3
-	}
-
-	// If a higher plan is recorded in public.subscriptions, elevate it
-	if activeSubCount > 0 {
-		if strings.Contains(subPlanType, "4") {
-			subscriptionPlan = 4
-		} else if strings.Contains(subPlanType, "5") {
+	// Determine effective plan: check if public.subscriptions specifies an explicit plan
+	if activeSubCount > 0 && subPlanType != "" {
+		if strings.Contains(subPlanType, "5") {
 			subscriptionPlan = 5
+		} else if strings.Contains(subPlanType, "4") {
+			subscriptionPlan = 4
+		} else if strings.Contains(subPlanType, "3") {
+			subscriptionPlan = 3
+		} else if strings.Contains(subPlanType, "2") {
+			subscriptionPlan = 2
+		} else if strings.Contains(subPlanType, "1") {
+			subscriptionPlan = 1
 		}
 	}
 
+	// If no paid plan was specifically recorded yet, default registered/Google users to 3
+	if subscriptionPlan <= 0 {
+		subscriptionPlan = 3
+	}
+
+	isSubscribed := true
+
 	// Ensure public.subscriptions and public.users are synchronized
-	_, _ = s.router.Pool().Exec(
-		c.Request.Context(),
-		`INSERT INTO public.subscriptions (
-			tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
-			status, start_date, end_date, created_at, updated_at, notes
-		) VALUES (
-			(SELECT id FROM public.tenants LIMIT 1),
-			$1, 'مشترك تطبيق XPharma', '01019688000', 'باقة المشترك (3 صيدليات)', 200, 'kashier',
-			'active', CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', NOW(), NOW(), 'اشتراك مفعل تلقائياً'
-		) ON CONFLICT DO NOTHING`,
-		email,
-	)
+	if activeSubCount == 0 {
+		_, _ = s.router.Pool().Exec(
+			c.Request.Context(),
+			`INSERT INTO public.subscriptions (
+				tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
+				status, start_date, end_date, created_at, updated_at, notes
+			) VALUES (
+				(SELECT id FROM public.tenants LIMIT 1),
+				$1, 'مشترك تطبيق XPharma', '01019688000', $2, 200, 'kashier',
+				'active', CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', NOW(), NOW(), 'اشتراك مفعل تلقائياً'
+			) ON CONFLICT DO NOTHING`,
+			email, fmt.Sprintf("%d صيدليات", subscriptionPlan),
+		)
+	}
 
 	_, _ = s.router.Pool().Exec(
 		c.Request.Context(),
 		`UPDATE public.users 
-		 SET subscription_plan = GREATEST(COALESCE(subscription_plan, 0), $1),
+		 SET subscription_plan = $1,
 		     updated_at = NOW()
 		 WHERE LOWER(email) = LOWER($2)`,
 		subscriptionPlan, email,
@@ -237,6 +246,16 @@ func (s *SubscriptionService) RecordPayment(c *gin.Context) {
 		if _, err := fmt.Sscanf(req.PlanType, "P%d", &p); err == nil && p > 0 {
 			plan = p
 		}
+	} else if strings.Contains(req.PlanType, "5") {
+		plan = 5
+	} else if strings.Contains(req.PlanType, "4") {
+		plan = 4
+	} else if strings.Contains(req.PlanType, "3") {
+		plan = 3
+	} else if strings.Contains(req.PlanType, "2") {
+		plan = 2
+	} else if strings.Contains(req.PlanType, "1") {
+		plan = 1
 	} else if req.Amount >= 300 {
 		plan = 5
 	} else if req.Amount >= 250 {
@@ -249,7 +268,16 @@ func (s *SubscriptionService) RecordPayment(c *gin.Context) {
 		plan = 1
 	}
 
-	// 1. Insert into public.subscriptions
+	// 1. Supersede any older active subscriptions for this email so new plan takes priority
+	if req.UserEmail != "" {
+		_, _ = s.router.Pool().Exec(
+			c.Request.Context(),
+			`UPDATE public.subscriptions SET status = 'superseded', updated_at = NOW() WHERE LOWER(user_email) = LOWER($1) AND status = 'active'`,
+			req.UserEmail,
+		)
+	}
+
+	// 2. Insert new active subscription into public.subscriptions
 	_, _ = s.router.Pool().Exec(
 		c.Request.Context(),
 		`INSERT INTO public.subscriptions (
