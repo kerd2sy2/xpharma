@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -189,6 +191,130 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 	})
 }
 
+// GetUpgradeQuote calculates prorated upgrade pricing with credit rollover and 30 fresh days
+func (s *SubscriptionService) GetUpgradeQuote(c *gin.Context) {
+	email := strings.ToLower(strings.TrimSpace(c.Query("email")))
+	targetPlanStr := strings.TrimSpace(c.Query("target_plan"))
+	targetPlan, _ := strconv.Atoi(targetPlanStr)
+	if targetPlan <= 0 {
+		targetPlan = 3
+	}
+
+	if email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "البريد الإلكتروني مطلوب"})
+		return
+	}
+
+	// 1. Check authoritative subscription in public.subscriptions
+	var activeSubCount int
+	var subPlanType string
+	var subEndDate time.Time
+	_ = s.router.Pool().QueryRow(
+		c.Request.Context(),
+		`SELECT 
+			COUNT(*),
+			COALESCE(MAX(plan_type), ''),
+			COALESCE(MAX(end_date), CURRENT_DATE + INTERVAL '30 days')
+		 FROM (
+			SELECT plan_type, end_date
+			FROM public.subscriptions 
+			WHERE LOWER(TRIM(user_email)) = LOWER(TRIM($1))
+			  AND status = 'active'
+			  AND (end_date IS NULL OR end_date >= CURRENT_DATE)
+			ORDER BY created_at DESC 
+			LIMIT 1
+		 ) latest_sub`,
+		email,
+	).Scan(&activeSubCount, &subPlanType, &subEndDate)
+
+	// 2. Fallback check against public.users
+	var subscriptionPlan int
+	var isSubActiveInUser bool
+	var userSubExpiresAt *time.Time
+	_ = s.router.Pool().QueryRow(
+		c.Request.Context(),
+		`SELECT 
+			COALESCE(subscription_plan, 0),
+			COALESCE(is_subscription_active, false),
+			subscription_expires_at
+		 FROM public.users 
+		 WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+		email,
+	).Scan(&subscriptionPlan, &isSubActiveInUser, &userSubExpiresAt)
+
+	currentPlan := 0
+	if activeSubCount > 0 {
+		if strings.Contains(subPlanType, "5") {
+			currentPlan = 5
+		} else if strings.Contains(subPlanType, "4") {
+			currentPlan = 4
+		} else if strings.Contains(subPlanType, "3") {
+			currentPlan = 3
+		} else if strings.Contains(subPlanType, "2") {
+			currentPlan = 2
+		} else if strings.Contains(subPlanType, "1") {
+			currentPlan = 1
+		} else if subscriptionPlan > 0 {
+			currentPlan = subscriptionPlan
+		}
+	} else if isSubActiveInUser && userSubExpiresAt != nil && userSubExpiresAt.After(time.Now()) && subscriptionPlan > 0 {
+		currentPlan = subscriptionPlan
+		subEndDate = *userSubExpiresAt
+	}
+
+	daysRemaining := 0
+	currentPlanPrice := 0.0
+	unusedCredit := 0.0
+	isUpgrade := false
+
+	targetPrice := getPlanPrice(targetPlan)
+
+	if currentPlan > 0 && !subEndDate.IsZero() && subEndDate.After(time.Now()) {
+		isUpgrade = true
+		daysRemaining = int(time.Until(subEndDate).Hours() / 24)
+		if daysRemaining < 0 {
+			daysRemaining = 0
+		}
+		if daysRemaining > 30 {
+			daysRemaining = 30
+		}
+
+		currentPlanPrice = getPlanPrice(currentPlan)
+		dailyRate := currentPlanPrice / 30.0
+		unusedCredit = math.Round(dailyRate * float64(daysRemaining))
+
+		// If user targets same or lower plan, bump target to current + 1
+		if targetPlan <= currentPlan {
+			targetPlan = currentPlan + 1
+			if targetPlan > 5 {
+				targetPlan = 5
+			}
+			targetPrice = getPlanPrice(targetPlan)
+		}
+	}
+
+	rawFinal := targetPrice - unusedCredit
+	// Round to neat 5 EGP increments for pleasant pricing (e.g. 216.6 -> 215)
+	finalAmount := math.Round(rawFinal/5.0) * 5.0
+	if finalAmount < 50.0 {
+		finalAmount = 50.0 // Minimum floor
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":            true,
+		"email":              email,
+		"current_plan":       currentPlan,
+		"current_plan_price": currentPlanPrice,
+		"days_remaining":     daysRemaining,
+		"unused_credit":      unusedCredit,
+		"target_plan":        targetPlan,
+		"target_plan_price":  targetPrice,
+		"final_amount":       finalAmount,
+		"currency":           "EGP",
+		"is_upgrade":         isUpgrade,
+		"new_duration_days":  30,
+	})
+}
 
 // RegisterPharmacy registers a pharmacy code globally for subscription management
 func (s *SubscriptionService) RegisterPharmacy(c *gin.Context) {

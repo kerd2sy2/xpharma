@@ -118,6 +118,7 @@ func main() {
 	subGroup := r.Group("/v1/subscription")
 	{
 		subGroup.GET("/status", subscriptionService.GetStatus)
+		subGroup.GET("/upgrade-quote", subscriptionService.GetUpgradeQuote)
 		subGroup.POST("/register-pharmacy", subscriptionService.RegisterPharmacy)
 		subGroup.POST("/record-payment", subscriptionService.RecordPayment)
 		subGroup.POST("/kashier/initiate", subscriptionService.InitiateSession)

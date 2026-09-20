@@ -89,10 +89,11 @@ func getPlanPrice(plan int) float64 {
 
 // InitiateKashierSessionRequest
 type InitiateKashierSessionRequest struct {
-	Email    string `json:"email" binding:"required"`
-	Plan     int    `json:"plan" binding:"required"`
-	UserName string `json:"user_name"`
-	Phone    string `json:"phone"`
+	Email    string  `json:"email" binding:"required"`
+	Plan     int     `json:"plan" binding:"required"`
+	Amount   float64 `json:"amount"`
+	UserName string  `json:"user_name"`
+	Phone    string  `json:"phone"`
 }
 
 // InitiateSession creates a secure Kashier v3 payment session and returns sessionUrl
@@ -111,15 +112,18 @@ func (s *SubscriptionService) InitiateSession(c *gin.Context) {
 
 	cfg := getKashierConfig()
 	price := getPlanPrice(req.Plan)
+	if req.Amount > 0 {
+		price = req.Amount
+	}
 	amountStr := fmt.Sprintf("%.2f", price)
 
-	// Order Reference: e.g. XPH-SUB-user-P3-1726712345
+	// Order Reference: e.g. XPH-SUB-user-P3-A150-1726712345
 	timestamp := time.Now().Unix()
 	emailPrefix := strings.Split(cleanEmail, "@")[0]
 	if len(emailPrefix) > 10 {
 		emailPrefix = emailPrefix[:10]
 	}
-	orderRef := fmt.Sprintf("XPH-SUB-%s-P%d-%d", emailPrefix, req.Plan, timestamp)
+	orderRef := fmt.Sprintf("XPH-SUB-%s-P%d-A%d-%d", emailPrefix, req.Plan, int(price), timestamp)
 
 	userName := strings.TrimSpace(req.UserName)
 	if userName == "" {
