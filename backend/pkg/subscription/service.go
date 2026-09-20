@@ -601,8 +601,9 @@ func (s *SubscriptionService) RecordPayment(c *gin.Context) {
 // SelectActivePharmacies lets a user choose which pharmacies to keep active when plan tier is lower than linked pharmacies count
 func (s *SubscriptionService) SelectActivePharmacies(c *gin.Context) {
 	var req struct {
-		Email       string   `json:"email" binding:"required"`
-		ActiveCodes []string `json:"active_pharmacy_codes" binding:"required"`
+		Email               string   `json:"email" binding:"required"`
+		ActiveCodes         []string `json:"active_codes"`
+		ActivePharmacyCodes []string `json:"active_pharmacy_codes"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "بيانات التفعيل غير مكتملة"})
@@ -612,6 +613,15 @@ func (s *SubscriptionService) SelectActivePharmacies(c *gin.Context) {
 	cleanEmail := strings.ToLower(strings.TrimSpace(req.Email))
 	if cleanEmail == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "البريد الإلكتروني مطلوب"})
+		return
+	}
+
+	activeCodes := req.ActiveCodes
+	if len(activeCodes) == 0 {
+		activeCodes = req.ActivePharmacyCodes
+	}
+	if len(activeCodes) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "يجب تحديد كود صيدلية واحدة نشطة على الأقل"})
 		return
 	}
 
@@ -672,7 +682,7 @@ func (s *SubscriptionService) SelectActivePharmacies(c *gin.Context) {
 		return
 	}
 
-	if len(req.ActiveCodes) > allowedPharmacies {
+	if len(activeCodes) > allowedPharmacies {
 		label := "صيدليات"
 		if allowedPharmacies == 1 {
 			label = "صيدلية واحدة"
@@ -709,14 +719,14 @@ func (s *SubscriptionService) SelectActivePharmacies(c *gin.Context) {
 	}
 
 	// Then activate selected ones
-	if len(req.ActiveCodes) > 0 {
+	if len(activeCodes) > 0 {
 		_, err = s.router.Pool().Exec(
 			c.Request.Context(),
 			`UPDATE public.pharmacies
 			 SET is_suspended = false, updated_at = NOW()
 			 WHERE linked_user_id IN (`+userIDsQuery+`)
 			   AND code = ANY($2)`,
-			cleanEmail, req.ActiveCodes,
+			cleanEmail, activeCodes,
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل تفعيل الصيدليات المختارة"})
@@ -727,7 +737,7 @@ func (s *SubscriptionService) SelectActivePharmacies(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success":            true,
 		"message":            "تم تحديد وتفعيل الصيدليات بنجاح",
-		"active_codes":       req.ActiveCodes,
+		"active_codes":       activeCodes,
 		"allowed_pharmacies": allowedPharmacies,
 	})
 }
