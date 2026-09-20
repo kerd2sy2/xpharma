@@ -23,6 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import PharmacyVerifyModal from '@/components/PharmacyVerifyModal';
 import SubscriptionModal from '@/components/SubscriptionModal';
+import UnlinkedNoticeModal from '@/components/UnlinkedNoticeModal';
 import XLogo from '@/components/XLogo';
 import {
   clearPharmacySession,
@@ -88,6 +89,13 @@ export default function WarehousePortalScreen({
   const [currentPharmacyName, setCurrentPharmacyName] = useState(pharmacyName);
   const [pharmacies, setPharmacies] = useState<LinkedPharmacyAccount[]>([]);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [unlinkNoticeVisible, setUnlinkNoticeVisible] = useState(false);
+  const [unlinkNoticeConfig, setUnlinkNoticeConfig] = useState<{
+    message?: string;
+    isSwitchBranch?: boolean;
+    pharmacyName?: string;
+    switchedToName?: string;
+  }>({});
 
   // Subscription & Trial state
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
@@ -148,6 +156,14 @@ export default function WarehousePortalScreen({
   // Handle Android hardware/gesture back button: step back hierarchically
   useEffect(() => {
     const onBackPress = () => {
+      // 0a. If unlinked notice modal is open, close it (and exit if not branch switch)
+      if (unlinkNoticeVisible) {
+        setUnlinkNoticeVisible(false);
+        if (!unlinkNoticeConfig.isSwitchBranch) {
+          onBack();
+        }
+        return true;
+      }
       // 0. If invoice/return info modal is open, close it
       if (showInvoiceInfoModal) {
         setShowInvoiceInfoModal(false);
@@ -191,7 +207,19 @@ export default function WarehousePortalScreen({
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => subscription.remove();
-  }, [showSubscriptionModal, isTrialExpired, showAddModal, selectedInvoice, selectedReturn, showInvoiceInfoModal, showReturnInfoModal, selectedSection, onBack]);
+  }, [
+    unlinkNoticeVisible,
+    unlinkNoticeConfig,
+    showSubscriptionModal,
+    isTrialExpired,
+    showAddModal,
+    selectedInvoice,
+    selectedReturn,
+    showInvoiceInfoModal,
+    showReturnInfoModal,
+    selectedSection,
+    onBack,
+  ]);
 
   // Initialize and load saved pharmacies for this warehouse
   useEffect(() => {
@@ -228,9 +256,12 @@ export default function WarehousePortalScreen({
       if (!currentWh?.is_linked || serverPharmacies.length === 0) {
         // All pharmacies in this warehouse were unlinked
         await clearPharmacySession(warehouse.id);
-        Alert.alert('تنبيه', 'تم إلغاء ربط صيدلياتك في هذا المستودع من قبل إدارة المنصة.', [
-          { text: 'حسناً', onPress: onBack },
-        ]);
+        setUnlinkNoticeConfig({
+          message: 'تم إلغاء ربط صيدليتك في هذا المخزن من قبل إدارة المنصة.',
+          isSwitchBranch: false,
+          pharmacyName: currentPharmacyName,
+        });
+        setUnlinkNoticeVisible(true);
         return;
       }
 
@@ -258,10 +289,12 @@ export default function WarehousePortalScreen({
         setCurrentToken(nextPharma.token);
         setCurrentPharmacyCode(nextPharma.pharmacy_code);
         setCurrentPharmacyName(nextPharma.pharmacy_name);
-        Alert.alert(
-          'تحديث بيانات الفرع',
-          `تم فك ربط صيدلية "${currentPharmacyName}"، وتم التحويل تلقائياً لفرعك الآخر "${nextPharma.pharmacy_name}".`
-        );
+        setUnlinkNoticeConfig({
+          isSwitchBranch: true,
+          pharmacyName: currentPharmacyName,
+          switchedToName: nextPharma.pharmacy_name,
+        });
+        setUnlinkNoticeVisible(true);
         loadData(nextPharma.token, false);
       }
     } catch (e) {
@@ -1600,6 +1633,22 @@ export default function WarehousePortalScreen({
           <Ionicons name="chevron-back" size={18} color={colors.primary} />
         </TouchableOpacity>
       </ScrollView>
+
+      {/* مودال تنبيه فك الارتباط من الأسفل (Bottom Sheet) */}
+      <UnlinkedNoticeModal
+        visible={unlinkNoticeVisible}
+        warehouseName={warehouse.name}
+        pharmacyName={unlinkNoticeConfig.pharmacyName || currentPharmacyName}
+        message={unlinkNoticeConfig.message}
+        isSwitchBranch={unlinkNoticeConfig.isSwitchBranch}
+        switchedToName={unlinkNoticeConfig.switchedToName}
+        onClose={() => {
+          setUnlinkNoticeVisible(false);
+          if (!unlinkNoticeConfig.isSwitchBranch) {
+            onBack();
+          }
+        }}
+      />
 
       {/* نافذة التحقق وإضافة صيدلية أخرى لنفس المخزن */}
       <PharmacyVerifyModal
