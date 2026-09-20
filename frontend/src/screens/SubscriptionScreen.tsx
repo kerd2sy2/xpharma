@@ -47,11 +47,19 @@ export default function SubscriptionScreen({
   const insets = useSafeAreaInsets();
   const topInset = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 0);
   const { user } = useAuth();
-  const [selectedPlan, setSelectedPlan] = useState<number>(suggestedPlan || 3);
+  const [selectedPlan, setSelectedPlan] = useState<number>(suggestedPlan || (isTrialExpired ? 1 : 3));
   const [showSuccess, setShowSuccess] = useState(false);
   const [activatedPlanObj, setActivatedPlanObj] = useState<PricingPlan | null>(null);
   const [isCheckingServer, setIsCheckingServer] = useState(false);
   const [isProcessingKashier, setIsProcessingKashier] = useState(false);
+
+  useEffect(() => {
+    if (suggestedPlan) {
+      setSelectedPlan(suggestedPlan);
+    } else if (isTrialExpired) {
+      setSelectedPlan(1);
+    }
+  }, [suggestedPlan, isTrialExpired]);
 
   const activePlanObj = PRICING_PLANS.find((p) => p.pharmacies === selectedPlan) || PRICING_PLANS[0];
 
@@ -345,7 +353,11 @@ export default function SubscriptionScreen({
                         {plan.label}
                       </Text>
                       <Text style={styles.planLimitText}>
-                        ربط حتى {plan.pharmacies} صيدليات في المخزن الواحد
+                        {plan.pharmacies === 1
+                          ? 'ربط صيدلية واحدة في المخزن الواحد'
+                          : plan.pharmacies === 2
+                          ? 'ربط حتى صيدليتين في المخزن الواحد'
+                          : `ربط حتى ${plan.pharmacies} صيدليات في المخزن الواحد`}
                       </Text>
                     </View>
 
@@ -368,7 +380,11 @@ export default function SubscriptionScreen({
             <View style={styles.featureLine}>
               <Ionicons name="checkmark-circle" size={18} color="#10B981" />
               <Text style={styles.featureLineText}>
-                ربط حتى {activePlanObj.pharmacies} صيدليات في كل مخزن على حدة
+                {activePlanObj.pharmacies === 1
+                  ? 'ربط صيدلية واحدة في كل مخزن على حدة'
+                  : activePlanObj.pharmacies === 2
+                  ? 'ربط حتى صيدليتين في كل مخزن على حدة'
+                  : `ربط حتى ${activePlanObj.pharmacies} صيدليات في كل مخزن على حدة`}
               </Text>
             </View>
             <View style={styles.featureLine}>

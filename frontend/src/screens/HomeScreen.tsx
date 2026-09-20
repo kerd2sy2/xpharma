@@ -259,6 +259,14 @@ export default function HomeScreen() {
     const subStatus = await getSubscriptionStatus(user?.email);
     setSubscriptionStatusInfo(subStatus);
 
+    if (subStatus.isTrialExpired || (!subStatus.isSubscribed && subStatus.daysRemaining <= 0)) {
+      setSubscriptionReason('انتهت الفترة التجريبية المجانية (30 يوماً). للاستمرار في متابعة حساباتك وربط الصيدلية، يرجى تفعيل اشتراكك (100 ج.م شهرياً لصيدلية واحدة).');
+      setSubscriptionRequiredPlan(1);
+      setIsTrialExpired(true);
+      setSubscriptionModalVisible(true);
+      return;
+    }
+
     let session = await getPharmacySession(wh.id);
 
     if ((session && session.token) || (wh.is_linked && (wh.pharmacy_token || session?.token))) {

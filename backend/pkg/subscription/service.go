@@ -141,6 +141,7 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 
 	var allowedPharmacies int
 	trialDaysLeft := 0
+	isTrialExpired := false
 
 	if isSubscribed {
 		if subscriptionPlan <= 0 {
@@ -161,11 +162,20 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		} else {
 			trialDaysLeft = 30
 		}
+		isTrialExpired = false
 	} else {
-		// Free Tier: 1 pharmacy per warehouse free ("1 عادي")
+		// Free trial has expired or no active subscription:
+		// "بعد كده، حتى لو صيدلية واحدة، تبقى الاشتراك 100 جنيه"
 		subscriptionPlan = 0
-		allowedPharmacies = 1
+		allowedPharmacies = 0
 		trialDaysLeft = 0
+		isTrialExpired = true
+	}
+
+	if isPaused {
+		isSubscribed = false
+		allowedPharmacies = 0
+		subscriptionPlan = 0
 	}
 
 	// Fetch distinct linked pharmacies
@@ -188,13 +198,12 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 	}
 
 	linkedCount := len(linkedList)
-	// Can always open and link new warehouses ("انما يفتح كل المخازن عادى")
-	canAddPharmacy := true
+	canAddPharmacy := isSubscribed && allowedPharmacies > 0
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":                 true,
 		"trial_days_left":         trialDaysLeft,
-		"is_trial_expired":        false,
+		"is_trial_expired":        isTrialExpired,
 		"is_subscribed":           isSubscribed,
 		"is_paused":               isPaused,
 		"subscription_plan":       subscriptionPlan,
@@ -284,7 +293,18 @@ func (s *SubscriptionService) GetUpgradeQuote(c *gin.Context) {
 	targetPrice := getPlanPrice(targetPlan)
 
 	if currentPlan > 0 && !subEndDate.IsZero() && subEndDate.After(time.Now()) {
-		isUpgrade = true
+		var isFreeTrial bool
+		_ = s.router.Pool().QueryRow(
+			c.Request.Context(),
+			`SELECT EXISTS(
+				SELECT 1 FROM public.subscriptions
+				WHERE LOWER(TRIM(user_email)) = LOWER(TRIM($1))
+				  AND status = 'active'
+				  AND (amount = 0 OR payment_method = 'free_trial' OR plan_type LIKE '%تجريب%')
+			)`,
+			email,
+		).Scan(&isFreeTrial)
+
 		hoursLeft := time.Until(subEndDate).Hours()
 		if hoursLeft <= 0 {
 			daysRemaining = 0
@@ -295,17 +315,24 @@ func (s *SubscriptionService) GetUpgradeQuote(c *gin.Context) {
 			}
 		}
 
-		currentPlanPrice = getPlanPrice(currentPlan)
-		dailyRate := currentPlanPrice / 30.0
-		unusedCredit = math.Round(dailyRate * float64(daysRemaining))
+		if isFreeTrial {
+			currentPlanPrice = 0
+			unusedCredit = 0
+			isUpgrade = false
+		} else {
+			isUpgrade = true
+			currentPlanPrice = getPlanPrice(currentPlan)
+			dailyRate := currentPlanPrice / 30.0
+			unusedCredit = math.Round(dailyRate * float64(daysRemaining))
 
-		// If user targets same or lower plan, bump target to current + 1
-		if targetPlan <= currentPlan {
-			targetPlan = currentPlan + 1
-			if targetPlan > 5 {
-				targetPlan = 5
+			// If user targets same or lower plan, bump target to current + 1
+			if targetPlan <= currentPlan {
+				targetPlan = currentPlan + 1
+				if targetPlan > 5 {
+					targetPlan = 5
+				}
+				targetPrice = getPlanPrice(targetPlan)
 			}
-			targetPrice = getPlanPrice(targetPlan)
 		}
 	}
 

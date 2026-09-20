@@ -1,8 +1,10 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -22,6 +24,94 @@ func NewAuthHandler(router *db.TenantRouter, tokenService *TokenService) *AuthHa
 		router:       router,
 		tokenService: tokenService,
 	}
+}
+
+// resolveUserSubscription returns active plan, remaining days (max 30), and expired status
+func (h *AuthHandler) resolveUserSubscription(ctx context.Context, email string) (plan int, daysLeft int, isExpired bool) {
+	cleanEmail := strings.ToLower(strings.TrimSpace(email))
+	if cleanEmail == "" {
+		return 0, 0, true
+	}
+
+	var activeSubCount int
+	var subPlanType string
+	var subEndDate time.Time
+	_ = h.router.Pool().QueryRow(
+		ctx,
+		`SELECT 
+			COUNT(*),
+			COALESCE(MAX(plan_type), ''),
+			COALESCE(MAX(end_date), CURRENT_DATE + INTERVAL '30 days')
+		 FROM (
+			SELECT plan_type, end_date
+			FROM public.subscriptions 
+			WHERE LOWER(TRIM(user_email)) = LOWER(TRIM($1))
+			  AND status = 'active'
+			  AND (end_date IS NULL OR end_date >= CURRENT_DATE)
+			ORDER BY created_at DESC 
+			LIMIT 1
+		 ) latest_sub`,
+		cleanEmail,
+	).Scan(&activeSubCount, &subPlanType, &subEndDate)
+
+	if activeSubCount > 0 {
+		if strings.Contains(subPlanType, "5") {
+			plan = 5
+		} else if strings.Contains(subPlanType, "4") {
+			plan = 4
+		} else if strings.Contains(subPlanType, "3") {
+			plan = 3
+		} else if strings.Contains(subPlanType, "2") {
+			plan = 2
+		} else {
+			plan = 1
+		}
+
+		if !subEndDate.IsZero() {
+			hoursLeft := time.Until(subEndDate).Hours()
+			if hoursLeft <= 0 {
+				daysLeft = 0
+			} else {
+				daysLeft = int(math.Ceil(hoursLeft / 24.0))
+				if daysLeft > 30 {
+					daysLeft = 30
+				}
+			}
+		} else {
+			daysLeft = 30
+		}
+		isExpired = false
+		return
+	}
+
+	// Fallback check against public.users
+	var userPlan int
+	var isSubActive bool
+	var expiresAt *time.Time
+	_ = h.router.Pool().QueryRow(
+		ctx,
+		`SELECT COALESCE(subscription_plan, 0), COALESCE(is_subscription_active, false), subscription_expires_at
+		 FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+		cleanEmail,
+	).Scan(&userPlan, &isSubActive, &expiresAt)
+
+	if isSubActive && expiresAt != nil && expiresAt.After(time.Now()) && userPlan > 0 {
+		plan = userPlan
+		hoursLeft := time.Until(*expiresAt).Hours()
+		if hoursLeft <= 0 {
+			daysLeft = 0
+		} else {
+			daysLeft = int(math.Ceil(hoursLeft / 24.0))
+			if daysLeft > 30 {
+				daysLeft = 30
+			}
+		}
+		isExpired = false
+		return
+	}
+
+	// No active subscription: expired!
+	return 0, 0, true
 }
 
 func (h *AuthHandler) GoogleLogin(c *gin.Context) {
@@ -152,7 +242,7 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 		existingDeviceID = incomingDeviceID
 	}
 
-	// Ensure active subscription record exists for this Google user
+	// Ensure 30-day free trial subscription (1 pharmacy, 0 EGP) is automatically activated for new users
 	_, _ = h.router.Pool().Exec(
 		c.Request.Context(),
 		`INSERT INTO public.subscriptions (
@@ -164,27 +254,34 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 			LOWER(TRIM($1)),
 			$2,
 			$3,
-			'باقة المشترك (3 صيدليات)',
-			200,
-			'google',
+			'1 صيدلية (فترة تجريبية مجانية)',
+			0,
+			'free_trial',
 			'active',
 			CURRENT_DATE,
 			CURRENT_DATE + INTERVAL '30 days',
 			NOW(),
 			NOW(),
-			'اشتراك حساب Google مفعل تلقائياً'
+			'فترة تجريبية مجانية 30 يوماً لصيدلية واحدة مفعلة تلقائياً'
 		WHERE NOT EXISTS (
-			SELECT 1 FROM public.subscriptions WHERE LOWER(TRIM(user_email)) = LOWER(TRIM($1)) AND status = 'active'
+			SELECT 1 FROM public.subscriptions WHERE LOWER(TRIM(user_email)) = LOWER(TRIM($1))
 		)`,
 		emailClean, profile.Name, incomingDeviceName,
 	)
 
-	trialDaysPassed := int(time.Since(trialStartedAt).Hours() / 24)
-	trialDaysLeft := 30 - trialDaysPassed
-	if trialDaysLeft < 0 {
-		trialDaysLeft = 30
-	}
-	isTrialExpired := false
+	// Ensure users table is synchronized with trial plan (1 pharmacy)
+	_, _ = h.router.Pool().Exec(
+		c.Request.Context(),
+		`UPDATE public.users
+		 SET subscription_plan = 1,
+		     is_subscription_active = TRUE,
+		     subscription_expires_at = COALESCE(subscription_expires_at, NOW() + INTERVAL '30 days'),
+		     updated_at = NOW()
+		 WHERE LOWER(email) = LOWER($1) AND (subscription_plan IS NULL OR subscription_plan = 0)`,
+		emailClean,
+	)
+
+	subPlan, trialDaysLeft, isTrialExpired := h.resolveUserSubscription(c.Request.Context(), emailClean)
 
 	var pharmacyID, tenantID, pharmaCode string
 	_ = h.router.Pool().QueryRow(
@@ -211,7 +308,7 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 		"token":             token,
 		"trial_days_left":   trialDaysLeft,
 		"is_trial_expired":  isTrialExpired,
-		"subscription_plan": subscriptionPlan,
+		"subscription_plan": subPlan,
 		"device_id":         existingDeviceID,
 		"user": gin.H{
 			"id":                dbUserID,
@@ -225,7 +322,7 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 			"device_id":         existingDeviceID,
 			"trial_days_left":   trialDaysLeft,
 			"is_trial_expired":  isTrialExpired,
-			"subscription_plan": subscriptionPlan,
+			"subscription_plan": subPlan,
 		},
 		"profile": profile,
 		"role":    dbRole,
@@ -332,12 +429,46 @@ func (h *AuthHandler) AppleLogin(c *gin.Context) {
 		existingDeviceID = incomingDeviceID
 	}
 
-	trialDaysPassed := int(time.Since(trialStartedAt).Hours() / 24)
-	trialDaysLeft := 30 - trialDaysPassed
-	if trialDaysLeft < 0 {
-		trialDaysLeft = 30
-	}
-	isTrialExpired := false
+	// Ensure 30-day free trial subscription (1 pharmacy, 0 EGP) is automatically activated for new users
+	_, _ = h.router.Pool().Exec(
+		c.Request.Context(),
+		`INSERT INTO public.subscriptions (
+			tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
+			status, start_date, end_date, created_at, updated_at, notes
+		)
+		SELECT 
+			(SELECT id FROM public.tenants LIMIT 1),
+			LOWER(TRIM($1)),
+			$2,
+			$3,
+			'1 صيدلية (فترة تجريبية مجانية)',
+			0,
+			'free_trial',
+			'active',
+			CURRENT_DATE,
+			CURRENT_DATE + INTERVAL '30 days',
+			NOW(),
+			NOW(),
+			'فترة تجريبية مجانية 30 يوماً لصيدلية واحدة مفعلة تلقائياً'
+		WHERE NOT EXISTS (
+			SELECT 1 FROM public.subscriptions WHERE LOWER(TRIM(user_email)) = LOWER(TRIM($1))
+		)`,
+		appleEmail, userName, incomingDeviceName,
+	)
+
+	// Ensure users table is synchronized with trial plan (1 pharmacy)
+	_, _ = h.router.Pool().Exec(
+		c.Request.Context(),
+		`UPDATE public.users
+		 SET subscription_plan = 1,
+		     is_subscription_active = TRUE,
+		     subscription_expires_at = COALESCE(subscription_expires_at, NOW() + INTERVAL '30 days'),
+		     updated_at = NOW()
+		 WHERE LOWER(email) = LOWER($1) AND (subscription_plan IS NULL OR subscription_plan = 0)`,
+		appleEmail,
+	)
+
+	subPlan, trialDaysLeft, isTrialExpired := h.resolveUserSubscription(c.Request.Context(), appleEmail)
 
 	var pharmacyID, tenantID, pharmaCode string
 	_ = h.router.Pool().QueryRow(
@@ -364,7 +495,7 @@ func (h *AuthHandler) AppleLogin(c *gin.Context) {
 		"token":             token,
 		"trial_days_left":   trialDaysLeft,
 		"is_trial_expired":  isTrialExpired,
-		"subscription_plan": subscriptionPlan,
+		"subscription_plan": subPlan,
 		"device_id":         existingDeviceID,
 		"user": gin.H{
 			"id":                dbUserID,
@@ -377,7 +508,7 @@ func (h *AuthHandler) AppleLogin(c *gin.Context) {
 			"device_id":         existingDeviceID,
 			"trial_days_left":   trialDaysLeft,
 			"is_trial_expired":  isTrialExpired,
-			"subscription_plan": subscriptionPlan,
+			"subscription_plan": subPlan,
 		},
 		"role": dbRole,
 	})
@@ -412,9 +543,9 @@ func (h *AuthHandler) CheckDevice(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"success":           true,
 			"bound":             false,
-			"trial_days_left":   7,
+			"trial_days_left":   30,
 			"is_trial_expired":  false,
-			"subscription_plan": 0,
+			"subscription_plan": 1,
 		})
 		return
 	}
@@ -444,19 +575,14 @@ func (h *AuthHandler) CheckDevice(c *gin.Context) {
 		existingDeviceID = incomingDeviceID
 	}
 
-	trialDaysPassed := int(time.Since(trialStartedAt).Hours() / 24)
-	trialDaysLeft := 7 - trialDaysPassed
-	if trialDaysLeft < 0 {
-		trialDaysLeft = 0
-	}
-	isTrialExpired := trialDaysPassed >= 7 && subscriptionPlan == 0
+	subPlan, trialDaysLeft, isTrialExpired := h.resolveUserSubscription(c.Request.Context(), emailClean)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":           true,
 		"device_id":         existingDeviceID,
 		"trial_days_left":   trialDaysLeft,
 		"is_trial_expired":  isTrialExpired,
-		"subscription_plan": subscriptionPlan,
+		"subscription_plan": subPlan,
 	})
 }
 

@@ -609,7 +609,7 @@ export default function WarehousePortalScreen({
     if (!check.canAdd) {
       setSubscriptionReason(check.reason);
       setSubscriptionRequiredPlan(check.requiredPlan || Math.min(5, pharmacies.length + 1));
-      setIsTrialExpired(false);
+      setIsTrialExpired(check.isTrialExpired || false);
       setShowUpgradeModal(true);
       return;
     }

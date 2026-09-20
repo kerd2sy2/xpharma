@@ -4,7 +4,7 @@ const TRIAL_START_KEY = 'xpharma_trial_start_date';
 const GLOBAL_PHARMACIES_KEY = 'xpharma_global_linked_pharmacies';
 const SUBSCRIPTION_PLAN_KEY = 'xpharma_active_subscription_plan';
 
-export const TRIAL_DURATION_DAYS = 7;
+export const TRIAL_DURATION_DAYS = 30;
 
 export interface PricingPlan {
   pharmacies: number;
@@ -16,29 +16,35 @@ export interface PricingPlan {
 
 export const PRICING_PLANS: PricingPlan[] = [
   {
-    pharmacies: 3,
-    price: 200,
-    label: '3 صيدليات لكل مخزن',
-    subtitle: 'ربط حتى 3 صيدليات في كل مخزن، مع فتح كافة المخازن بلا حدود',
-    popular: true,
+    pharmacies: 1,
+    price: 100,
+    label: 'صيدلية واحدة (1)',
+    subtitle: 'ربط صيدلية واحدة في كافة المخازن بلا حدود',
   },
   {
     pharmacies: 2,
     price: 150,
-    label: 'صيدليتان (2) لكل مخزن',
+    label: 'صيدليتان (2)',
     subtitle: 'ربط حتى صيدليتين في كل مخزن، مع فتح كافة المخازن بلا حدود',
+  },
+  {
+    pharmacies: 3,
+    price: 200,
+    label: '3 صيدليات',
+    subtitle: 'ربط حتى 3 صيدليات في كل مخزن، مع فتح كافة المخازن بلا حدود',
+    popular: true,
   },
   {
     pharmacies: 4,
     price: 250,
-    label: '4 صيدليات لكل مخزن',
+    label: '4 صيدليات',
     subtitle: 'ربط حتى 4 صيدليات في كل مخزن، مع فتح كافة المخازن بلا حدود',
   },
   {
     pharmacies: 5,
     price: 300,
-    label: '5 صيدليات لكل مخزن',
-    subtitle: 'أعلى باقة توفير للسلاسل والصيدليات الكبرى (لكل مخزن)',
+    label: '5 صيدليات',
+    subtitle: 'أعلى باقة توفير للسلاسل والصيدليات الكبرى',
   },
 ];
 
@@ -255,21 +261,25 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
     const nowMs = Date.now();
     const elapsedDays = (nowMs - startMs) / (1000 * 60 * 60 * 24);
     daysRemaining = Math.max(0, Math.min(30, Math.ceil(TRIAL_DURATION_DAYS - elapsedDays)));
-    isTrialExpired = false;
+    isTrialExpired = daysRemaining <= 0 && subscribedPlan === 0;
   }
 
-  // Free tier: no trial expiration locking
-  isTrialExpired = false;
+  // Active status:
+  const isSubscribed = hasServerSync
+    ? (serverAllowedPharmacies > 0 && !isTrialExpired)
+    : (subscribedPlan > 0 || (!isTrialExpired && daysRemaining > 0));
 
-  // Subscription check: strictly based on active paid plan (Plan > 0)
-  const isSubscribed = subscribedPlan > 0;
-  // Per warehouse quota: 1 pharmacy free ("1 عادي"), or subscribed plan ("2 فما فوق باشتراك")
-  const allowedPharmacies = isSubscribed ? subscribedPlan : 1;
+  // If trial or subscription expired: 0 allowed pharmacies ("بعد كده، حتى لو صيدلية واحدة، تبقى الاشتراك 100 جنيه")
+  const allowedPharmacies = isTrialExpired
+    ? 0
+    : isSubscribed
+    ? (serverAllowedPharmacies || subscribedPlan || 1)
+    : 1;
 
   return {
     trialStartDate,
     daysRemaining,
-    isTrialExpired: false,
+    isTrialExpired,
     isSubscribed,
     subscribedPlan,
     allowedPharmacies,
@@ -280,7 +290,7 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
 
 /**
  * Check if the user can add another pharmacy / warehouse globally
- * Rule: User can open and link to all warehouses freely ("انما يفتح كل المخازن عادى")
+ * Rule: User can open and link to all warehouses freely as long as trial/subscription is active
  */
 export async function checkCanAddPharmacy(userEmail?: string): Promise<{
   canAdd: boolean;
@@ -292,6 +302,17 @@ export async function checkCanAddPharmacy(userEmail?: string): Promise<{
 }> {
   const status = await getSubscriptionStatus(userEmail);
 
+  if (status.isTrialExpired || (!status.isSubscribed && status.daysRemaining <= 0)) {
+    return {
+      canAdd: false,
+      reason: 'انتهت الفترة التجريبية المجانية (30 يوماً). للاستمرار في استخدام المنصة وربط الصيدليات، يرجى تفعيل اشتراكك (100 ج.م شهرياً لصيدلية واحدة).',
+      requiredPlan: 1,
+      currentCount: status.linkedPharmaciesCount,
+      allowedCount: 0,
+      isTrialExpired: true,
+    };
+  }
+
   return {
     canAdd: true,
     currentCount: status.linkedPharmaciesCount,
@@ -302,8 +323,10 @@ export async function checkCanAddPharmacy(userEmail?: string): Promise<{
 
 /**
  * Check if pharmacist can add a pharmacy inside a specific warehouse:
- * Rule: 1 pharmacy is free / normal ("1 عادي").
- * 2 or more pharmacies in the SAME warehouse requires an active subscription ("2 باشتراك فما فوق")!
+ * Rule:
+ * - If trial/sub is expired: blocked completely, must subscribe (1 pharmacy: 100 EGP).
+ * - During 30-day free trial: 1 pharmacy is free ("صيدلية واحدة 30 يوم مجانًا"). Adding a 2nd pharmacy requires upgrading (150 EGP).
+ * - On paid plan: up to allowedPharmacies branches allowed.
  */
 export async function checkCanAddPharmacyInWarehouse(
   warehouseId: string,
@@ -317,24 +340,35 @@ export async function checkCanAddPharmacyInWarehouse(
 }> {
   const status = await getSubscriptionStatus(userEmail);
 
-  // If user is already subscribed to a paid plan:
+  // Expired trial or inactive subscription:
+  if (status.isTrialExpired || (!status.isSubscribed && status.daysRemaining <= 0)) {
+    return {
+      canAdd: false,
+      reason: 'انتهت الفترة التجريبية المجانية (30 يوماً). يرجى تفعيل اشتراكك لمتابعة استخدام المنصة (100 ج.م شهرياً لصيدلية واحدة).',
+      requiredPlan: 1,
+      isTrialExpired: true,
+    };
+  }
+
+  // Active paid plan or active trial:
   if (status.isSubscribed) {
     if (warehousePharmaciesCount >= status.allowedPharmacies) {
+      const nextPlan = Math.min(5, status.allowedPharmacies + 1);
       return {
         canAdd: false,
-        reason: `لقد استنفدت الحد الأقصى لباقة اشتراكك في هذا المخزن (${status.allowedPharmacies} صيدليات). يرجى ترقية باقتك لإضافة فرع جديد.`,
-        requiredPlan: Math.min(5, status.allowedPharmacies + 1),
+        reason: `لقد استنفدت الحد الأقصى لباقة اشتراكك في هذا المخزن (${status.allowedPharmacies} ${status.allowedPharmacies === 1 ? 'صيدلية' : 'صيدليات'}). يرجى ترقية باقتك لإضافة فرع جديد.`,
+        requiredPlan: nextPlan,
         isTrialExpired: false,
       };
     }
     return { canAdd: true, isTrialExpired: false };
   }
 
-  // Free Tier: 1 pharmacy is free in this warehouse. 2 or more requires subscription!
+  // Active Trial (daysRemaining > 0): 1 pharmacy free
   if (warehousePharmaciesCount >= 1) {
     return {
       canAdd: false,
-      reason: 'ربط أكثر من صيدلية واحدة في نفس المخزن يتطلب الاشتراك في إحدى باقات إكس فارما (باقة صيدليتان أو أكثر).',
+      reason: 'الباقة التجريبية الحالية تشمل صيدلية واحدة فقط مجاناً. لربط صيدليتين أو أكثر في نفس المخزن، يرجى ترقية باقتك (150 ج.م لباقة صيدليتين).',
       requiredPlan: 2,
       isTrialExpired: false,
     };

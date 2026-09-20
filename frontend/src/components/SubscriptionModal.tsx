@@ -46,11 +46,19 @@ export default function SubscriptionModal({
   onSubscribed,
 }: SubscriptionModalProps) {
   const { user } = useAuth();
-  const [selectedPlan, setSelectedPlan] = useState<number>(suggestedPlan || 3);
+  const [selectedPlan, setSelectedPlan] = useState<number>(suggestedPlan || (isTrialExpired ? 1 : 3));
   const [showSuccess, setShowSuccess] = useState(false);
   const [activatedPlanObj, setActivatedPlanObj] = useState<PricingPlan | null>(null);
   const [isCheckingServer, setIsCheckingServer] = useState(false);
   const [isProcessingKashier, setIsProcessingKashier] = useState(false);
+
+  React.useEffect(() => {
+    if (suggestedPlan) {
+      setSelectedPlan(suggestedPlan);
+    } else if (isTrialExpired) {
+      setSelectedPlan(1);
+    }
+  }, [suggestedPlan, isTrialExpired, visible]);
 
   const activePlanObj = PRICING_PLANS.find((p) => p.pharmacies === selectedPlan) || PRICING_PLANS[0];
 
@@ -348,7 +356,13 @@ export default function SubscriptionModal({
                     <Text style={styles.featuresCardHeader}>كل باقة تمنحك المميزات التالية:</Text>
                     <View style={styles.featureItemRow}>
                       <Ionicons name="checkmark-circle" size={17} color="#10B981" />
-                      <Text style={styles.featureItemText}>ربط حتى {activePlanObj.pharmacies} صيدليات في المخزن الواحد</Text>
+                      <Text style={styles.featureItemText}>
+                        {activePlanObj.pharmacies === 1
+                          ? 'ربط صيدلية واحدة في كل مخزن على حدة'
+                          : activePlanObj.pharmacies === 2
+                          ? 'ربط حتى صيدليتين في كل مخزن على حدة'
+                          : `ربط حتى ${activePlanObj.pharmacies} صيدليات في المخزن الواحد`}
+                      </Text>
                     </View>
                     <View style={styles.featureItemRow}>
                       <Ionicons name="checkmark-circle" size={17} color="#10B981" />
