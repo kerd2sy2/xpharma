@@ -242,26 +242,27 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 
 	// Enforce Subscription & Trial limits before linking a pharmacy
 	if linkedUID != "" || cleanEmail != "" {
-		var trialStartedAt time.Time
 		var subPlan int
-		var subExpiresAt *time.Time
-		var isSubActive bool
 		var dbUID string
 
 		_ = s.router.Pool().QueryRow(
 			c.Request.Context(),
-			`SELECT id, COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0), subscription_expires_at, COALESCE(is_subscription_active, false)
+			`SELECT id::text, COALESCE(subscription_plan, 3)
 			 FROM public.users 
 			 WHERE (id::text = $1 AND $1 <> '') OR (LOWER(email) = LOWER($2) AND $2 <> '') 
 			 LIMIT 1`,
 			linkedUID, cleanEmail,
-		).Scan(&dbUID, &trialStartedAt, &subPlan, &subExpiresAt, &isSubActive)
+		).Scan(&dbUID, &subPlan)
 
 		if dbUID != "" {
 			linkedUID = dbUID
 		}
 
-		// Also check public.subscriptions table directly
+		if subPlan < 3 {
+			subPlan = 3
+		}
+
+		// Also check public.subscriptions table directly for any elevated plan (4 or 5)
 		var activeSubCount int
 		var subPlanType string
 		_ = s.router.Pool().QueryRow(
@@ -274,31 +275,18 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 			cleanEmail, linkedUID,
 		).Scan(&activeSubCount, &subPlanType)
 
-		isSubscribed := isSubActive || subPlan > 0 || activeSubCount > 0
-		if subExpiresAt != nil && subExpiresAt.Before(time.Now()) && activeSubCount == 0 {
-			isSubscribed = false
-		}
-
-		if activeSubCount > 0 && subPlan <= 0 {
-			subPlan = 3
-			if strings.Contains(subPlanType, "1") {
-				subPlan = 1
-			} else if strings.Contains(subPlanType, "2") {
-				subPlan = 2
-			} else if strings.Contains(subPlanType, "4") {
+		if activeSubCount > 0 {
+			if strings.Contains(subPlanType, "4") {
 				subPlan = 4
 			} else if strings.Contains(subPlanType, "5") {
 				subPlan = 5
 			}
 		}
 
-		// 1. Allowed pharmacies: up to 2 pharmacies free initially, or subPlan when subscribed
-		allowedPharmacies := 2
-		if isSubscribed {
-			allowedPharmacies = subPlan
-			if allowedPharmacies < 3 {
-				allowedPharmacies = 3
-			}
+		isSubscribed := true
+		allowedPharmacies := subPlan
+		if allowedPharmacies < 3 {
+			allowedPharmacies = 3
 		}
 
 			// 2. Check if this specific pharmacy code is already linked to this user

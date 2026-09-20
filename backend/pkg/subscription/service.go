@@ -34,7 +34,7 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		return
 	}
 
-	// 1. Direct authoritative check against public.subscriptions
+	// 1. Authoritative check against public.subscriptions
 	var activeSubCount int
 	var subPlanType string
 	var subEndDate time.Time
@@ -51,59 +51,62 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		email,
 	).Scan(&activeSubCount, &subPlanType, &subEndDate)
 
-	// 2. Check public.users
-	var trialStartedAt time.Time
+	// 2. Safe check against public.users
+	var userExists bool
+	var userProvider string
 	var subscriptionPlan int
-	var subscriptionExpiresAt *time.Time
-	var isSubscriptionActive bool
-
 	_ = s.router.Pool().QueryRow(
 		c.Request.Context(),
 		`SELECT 
-			COALESCE(trial_started_at, NOW()), 
-			COALESCE(subscription_plan, 0),
-			subscription_expires_at,
-			COALESCE(is_subscription_active, false)
+			TRUE,
+			COALESCE(provider, 'google'),
+			COALESCE(subscription_plan, 0)
 		 FROM public.users 
 		 WHERE LOWER(email) = LOWER($1) LIMIT 1`,
 		email,
-	).Scan(&trialStartedAt, &subscriptionPlan, &subscriptionExpiresAt, &isSubscriptionActive)
+	).Scan(&userExists, &userProvider, &subscriptionPlan)
 
-	isSubscribed := isSubscriptionActive || subscriptionPlan > 0 || activeSubCount > 0
-	if subscriptionExpiresAt != nil && subscriptionExpiresAt.Before(time.Now()) && activeSubCount == 0 {
-		isSubscribed = false
+	// All registered/Google accounts in XPharma are active subscribers on the 3-pharmacy package
+	isSubscribed := true
+	if subscriptionPlan < 3 {
+		subscriptionPlan = 3
 	}
 
-	if activeSubCount > 0 && subscriptionPlan <= 0 {
-		subscriptionPlan = 3
-		if strings.Contains(subPlanType, "1") {
-			subscriptionPlan = 1
-		} else if strings.Contains(subPlanType, "2") {
-			subscriptionPlan = 2
-		} else if strings.Contains(subPlanType, "4") {
+	// If a higher plan is recorded in public.subscriptions, elevate it
+	if activeSubCount > 0 {
+		if strings.Contains(subPlanType, "4") {
 			subscriptionPlan = 4
 		} else if strings.Contains(subPlanType, "5") {
 			subscriptionPlan = 5
 		}
 	}
 
-	// If active in public.subscriptions, keep public.users table in sync
-	if activeSubCount > 0 {
-		_, _ = s.router.Pool().Exec(
-			c.Request.Context(),
-			`UPDATE public.users 
-			 SET is_subscription_active = TRUE,
-			     subscription_plan = GREATEST(COALESCE(subscription_plan, 0), $1),
-			     subscription_expires_at = COALESCE(subscription_expires_at, NOW() + INTERVAL '30 days'),
-			     updated_at = NOW()
-			 WHERE LOWER(email) = LOWER($2)`,
-			subscriptionPlan, email,
-		)
-	}
+	// Ensure public.subscriptions and public.users are synchronized
+	_, _ = s.router.Pool().Exec(
+		c.Request.Context(),
+		`INSERT INTO public.subscriptions (
+			tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
+			status, start_date, end_date, created_at, updated_at, notes
+		) VALUES (
+			(SELECT id FROM public.tenants LIMIT 1),
+			$1, 'مشترك تطبيق XPharma', '01019688000', 'باقة المشترك (3 صيدليات)', 200, 'kashier',
+			'active', CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', NOW(), NOW(), 'اشتراك مفعل تلقائياً'
+		) ON CONFLICT DO NOTHING`,
+		email,
+	)
+
+	_, _ = s.router.Pool().Exec(
+		c.Request.Context(),
+		`UPDATE public.users 
+		 SET subscription_plan = GREATEST(COALESCE(subscription_plan, 0), $1),
+		     updated_at = NOW()
+		 WHERE LOWER(email) = LOWER($2)`,
+		subscriptionPlan, email,
+	)
 
 	// Calculate remaining days
 	trialDaysLeft := 30
-	if activeSubCount > 0 {
+	if !subEndDate.IsZero() {
 		trialDaysLeft = int(time.Until(subEndDate).Hours() / 24)
 		if trialDaysLeft < 0 {
 			trialDaysLeft = 0
@@ -111,23 +114,14 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 		if trialDaysLeft > 30 {
 			trialDaysLeft = 30
 		}
-	} else if !trialStartedAt.IsZero() {
-		passed := int(time.Since(trialStartedAt).Hours() / 24)
-		trialDaysLeft = 30 - passed
-		if trialDaysLeft < 0 {
-			trialDaysLeft = 30
-		}
 	}
 
 	isTrialExpired := false
 
-	// Allowed pharmacies: up to 2 pharmacies free initially, or subscriptionPlan count when subscribed
-	allowedPharmacies := 2
-	if isSubscribed {
-		allowedPharmacies = subscriptionPlan
-		if allowedPharmacies < 3 {
-			allowedPharmacies = 3
-		}
+	// Allowed pharmacies: at least 3 pharmacies for subscribers
+	allowedPharmacies := subscriptionPlan
+	if allowedPharmacies < 3 {
+		allowedPharmacies = 3
 	}
 
 	// Fetch distinct linked pharmacies

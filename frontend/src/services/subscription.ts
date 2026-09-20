@@ -250,8 +250,11 @@ export async function getSubscriptionStatus(userEmail?: string): Promise<Subscri
   // Free tier: no trial expiration locking
   isTrialExpired = false;
 
-  const isSubscribed = subscribedPlan > 0;
-  // Allowed pharmacies: up to 2 pharmacies free initially, or subscribedPlan count when subscribed (at least 3)
+  // Subscribed account: any user with email or active plan has at least 3 pharmacies allowed
+  const isSubscribed = subscribedPlan > 0 || (!!userEmail && userEmail.trim().length > 0);
+  if (isSubscribed && subscribedPlan < 3) {
+    subscribedPlan = 3;
+  }
   const allowedPharmacies = isSubscribed ? Math.max(subscribedPlan, serverAllowedPharmacies, 3) : 2;
 
   return {
