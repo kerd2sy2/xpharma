@@ -1,7 +1,9 @@
 package subscription
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -15,8 +17,40 @@ type SubscriptionService struct {
 }
 
 func NewSubscriptionService(router *db.TenantRouter) *SubscriptionService {
-	return &SubscriptionService{
+	svc := &SubscriptionService{
 		router: router,
+	}
+	svc.ensureSchema()
+	return svc
+}
+
+func (s *SubscriptionService) ensureSchema() {
+	statements := []string{
+		`ALTER TABLE public.subscriptions ALTER COLUMN tenant_id DROP NOT NULL`,
+		`ALTER TABLE public.subscriptions ALTER COLUMN end_date DROP NOT NULL`,
+		`ALTER TABLE public.subscriptions DROP CONSTRAINT IF EXISTS subscriptions_plan_type_check`,
+		`ALTER TABLE public.subscriptions DROP CONSTRAINT IF EXISTS subscriptions_status_check`,
+		`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS user_id UUID`,
+		`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS user_email VARCHAR(255)`,
+		`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS user_name VARCHAR(255)`,
+		`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS user_phone VARCHAR(64)`,
+		`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS amount NUMERIC(10,2) DEFAULT 0`,
+		`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS currency VARCHAR(16) DEFAULT 'EGP'`,
+		`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS payment_method VARCHAR(64) DEFAULT 'kashier'`,
+		`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS order_id VARCHAR(128)`,
+		`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(128)`,
+		`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS card_brand VARCHAR(32)`,
+		`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS masked_card VARCHAR(32)`,
+		`ALTER TABLE public.subscriptions ADD COLUMN IF NOT EXISTS receipt_ref VARCHAR(128)`,
+		`ALTER TABLE public.users ADD COLUMN IF NOT EXISTS subscription_plan INT DEFAULT 0`,
+		`ALTER TABLE public.users ADD COLUMN IF NOT EXISTS is_subscription_active BOOLEAN DEFAULT false`,
+		`ALTER TABLE public.users ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMPTZ`,
+	}
+	for _, stmt := range statements {
+		_, err := s.router.Pool().Exec(context.Background(), stmt)
+		if err != nil {
+			log.Printf("[SubscriptionService] ensureSchema warning: %s -> %v", stmt, err)
+		}
 	}
 }
 
@@ -264,7 +298,7 @@ func (s *SubscriptionService) RecordPayment(c *gin.Context) {
 	}
 
 	// 2. Insert new active subscription into public.subscriptions
-	_, _ = s.router.Pool().Exec(
+	_, err := s.router.Pool().Exec(
 		c.Request.Context(),
 		`INSERT INTO public.subscriptions (
 			tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
@@ -279,10 +313,15 @@ func (s *SubscriptionService) RecordPayment(c *gin.Context) {
 		req.Amount, req.PaymentMethod, req.Status, req.OrderID, req.TransactionID,
 		req.CardBrand, req.MaskedCard, req.ReceiptRef, req.Notes,
 	)
+	if err != nil {
+		log.Printf("[RecordPayment] Insert error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل حفظ الاشتراك في قاعدة البيانات: " + err.Error()})
+		return
+	}
 
-	// 2. Update public.users
+	// 3. Update public.users
 	if req.UserEmail != "" {
-		_, _ = s.router.Pool().Exec(
+		_, err := s.router.Pool().Exec(
 			c.Request.Context(),
 			`UPDATE public.users 
 			 SET subscription_plan = $1, 
@@ -292,6 +331,9 @@ func (s *SubscriptionService) RecordPayment(c *gin.Context) {
 			 WHERE LOWER(email) = LOWER($2)`,
 			plan, strings.ToLower(req.UserEmail),
 		)
+		if err != nil {
+			log.Printf("[RecordPayment] Update users error: %v", err)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
