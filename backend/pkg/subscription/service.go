@@ -193,9 +193,10 @@ func (s *SubscriptionService) GetStatus(c *gin.Context) {
 // RegisterPharmacy registers a pharmacy code globally for subscription management
 func (s *SubscriptionService) RegisterPharmacy(c *gin.Context) {
 	var req struct {
-		Code  string `json:"code" binding:"required"`
-		Name  string `json:"name" binding:"required"`
-		Email string `json:"email"`
+		Code     string `json:"code" binding:"required"`
+		Name     string `json:"name" binding:"required"`
+		Email    string `json:"email"`
+		TenantID string `json:"tenant_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "كود واسم الصيدلية مطلوبان"})
@@ -206,11 +207,11 @@ func (s *SubscriptionService) RegisterPharmacy(c *gin.Context) {
 	if cleanEmail != "" {
 		var userID string
 		_ = s.router.Pool().QueryRow(c.Request.Context(), `SELECT id FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1`, cleanEmail).Scan(&userID)
-		if userID != "" {
+		if userID != "" && strings.TrimSpace(req.TenantID) != "" {
 			_, _ = s.router.Pool().Exec(
 				c.Request.Context(),
-				`UPDATE public.pharmacies SET linked_user_id = $1, updated_at = NOW() WHERE LOWER(code) = LOWER($2)`,
-				userID, strings.TrimSpace(req.Code),
+				`UPDATE public.pharmacies SET linked_user_id = $1, updated_at = NOW() WHERE LOWER(code) = LOWER($2) AND tenant_id = $3`,
+				userID, strings.TrimSpace(req.Code), strings.TrimSpace(req.TenantID),
 			)
 		}
 	}

@@ -307,12 +307,12 @@ func (s *WarehouseService) VerifyPharmacy(c *gin.Context) {
 			allowedPharmacies = subPlan
 		}
 
-		// 1. Check if this specific pharmacy code is already linked to this user
+		// 1. Check if this specific pharmacy code is already linked to this user in this specific warehouse
 		var alreadyLinked bool
 		_ = s.router.Pool().QueryRow(
 			c.Request.Context(),
-			`SELECT EXISTS(SELECT 1 FROM public.pharmacies WHERE linked_user_id = $1 AND LOWER(code) = LOWER($2))`,
-			linkedUID, code,
+			`SELECT EXISTS(SELECT 1 FROM public.pharmacies WHERE linked_user_id = $1 AND LOWER(code) = LOWER($2) AND tenant_id = $3)`,
+			linkedUID, code, req.TenantID,
 		).Scan(&alreadyLinked)
 
 		// 2. Rule: User subscribes per single warehouse based on pharmacy count (1 is free, 2+ requires subscription)

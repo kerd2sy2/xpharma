@@ -125,9 +125,9 @@ export default function SubscriptionSuccessScreen() {
               <Text style={styles.subtitle}>
                 تمت معالجة عملية الدفع وتحديث حسابك لإدارة حتى{' '}
                 <Text style={styles.highlightText}>
-                  {planObj ? planObj.label : `${planPharmacies} صيدليات`}
+                  {planObj ? planObj.label : `${planPharmacies} صيدليات في كل مخزن`}
                 </Text>{' '}
-                بنجاح كامل.
+                مع إمكانية فتح كافة المخازن مجاناً وبلا حدود.
               </Text>
 
               <View style={styles.receiptBox}>

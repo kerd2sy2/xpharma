@@ -18,33 +18,27 @@ export const PRICING_PLANS: PricingPlan[] = [
   {
     pharmacies: 3,
     price: 200,
-    label: '3 صيدليات',
-    subtitle: 'إدارة 3 فروع مع كافة المخازن (تفعيل فوري)',
+    label: '3 صيدليات لكل مخزن',
+    subtitle: 'ربط حتى 3 صيدليات في كل مخزن، مع فتح كافة المخازن بلا حدود',
     popular: true,
   },
   {
     pharmacies: 2,
     price: 150,
-    label: 'صيدليتان (2)',
-    subtitle: 'اشتراك شهري بعد انتهاء الـ 7 أيام التجريبية',
-  },
-  {
-    pharmacies: 1,
-    price: 100,
-    label: 'صيدلية واحدة',
-    subtitle: 'اشتراك شهري بعد انتهاء الـ 7 أيام التجريبية',
+    label: 'صيدليتان (2) لكل مخزن',
+    subtitle: 'ربط حتى صيدليتين في كل مخزن، مع فتح كافة المخازن بلا حدود',
   },
   {
     pharmacies: 4,
     price: 250,
-    label: '4 صيدليات',
-    subtitle: 'تغطية شاملة ومتابعة دقيقة لكل فروعك',
+    label: '4 صيدليات لكل مخزن',
+    subtitle: 'ربط حتى 4 صيدليات في كل مخزن، مع فتح كافة المخازن بلا حدود',
   },
   {
     pharmacies: 5,
     price: 300,
-    label: '5 صيدليات',
-    subtitle: 'أعلى باقة توفير للسلاسل والصيدليات الكبرى',
+    label: '5 صيدليات لكل مخزن',
+    subtitle: 'أعلى باقة توفير للسلاسل والصيدليات الكبرى (لكل مخزن)',
   },
 ];
 
@@ -97,7 +91,7 @@ export async function getGlobalLinkedPharmacies(): Promise<Array<{ code: string;
 /**
  * Register a pharmacy globally when verified
  */
-export async function registerGlobalPharmacy(code: string, name: string, email?: string): Promise<number> {
+export async function registerGlobalPharmacy(code: string, name: string, email?: string, tenantId?: string): Promise<number> {
   try {
     const list = await getGlobalLinkedPharmacies();
     const cleanCode = (code || '').trim().toLowerCase();
@@ -120,7 +114,12 @@ export async function registerGlobalPharmacy(code: string, name: string, email?:
         await fetch('https://api.xpharma.cloud/v1/subscription/register-pharmacy', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: code.trim(), name: name.trim(), email: email.trim() }),
+          body: JSON.stringify({
+            code: code.trim(),
+            name: name.trim(),
+            email: email.trim(),
+            tenant_id: tenantId || '',
+          }),
         });
       } catch (beErr) {
         console.warn('Backend register-pharmacy call error:', beErr);

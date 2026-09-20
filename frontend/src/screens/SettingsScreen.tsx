@@ -51,11 +51,11 @@ export default function SettingsScreen({
   const isSubscribed = !!subscriptionStatusInfo?.isSubscribed && currentPlanNumber > 0;
   const matchedPlan = PRICING_PLANS.find((p) => p.pharmacies === currentPlanNumber);
   const planLabel = isSubscribed
-    ? (matchedPlan ? matchedPlan.label : `باقة ${currentPlanNumber} صيدليات`)
-    : 'الباقة المجانية (مخازن مفتوحة)';
+    ? (matchedPlan ? matchedPlan.label : `باقة ${currentPlanNumber} صيدليات لكل مخزن`)
+    : 'الباقة المجانية (صيدلية لكل مخزن)';
   const planSubtitle = isSubscribed
-    ? `حتى ${currentPlanNumber} صيدليات في المخزن الواحد، ومتاح فتح كل المخازن مجاناً`
-    : 'صيدلية واحدة في كل مخزن مجاناً (متاح فتح وربط كافة المخازن)';
+    ? `حتى ${currentPlanNumber} صيدليات في المخزن الواحد، ومتاح فتح كل المخازن مجاناً وبلا حدود`
+    : 'صيدلية واحدة في كل مخزن مجاناً (متاح فتح وربط كافة مخازن الجمهورية)';
   const daysRemaining = subscriptionStatusInfo?.daysRemaining ?? 30;
   const linkedCount = subscriptionStatusInfo?.linkedPharmaciesCount ?? 0;
   const allowedPharmacies = isSubscribed ? currentPlanNumber : 1;
@@ -202,16 +202,21 @@ export default function SettingsScreen({
               </View>
             </View>
 
-            {/* Metrics: Remaining Days & Pharmacy Count */}
+            {/* Metrics: Remaining Days, Per Warehouse Quota, & Open Warehouses */}
             <View style={styles.subMetricsRow}>
               <View style={styles.subMetricCol}>
-                <Text style={styles.subMetricVal}>{daysRemaining} يوم</Text>
-                <Text style={styles.subMetricLbl}>المدة المتبقية</Text>
+                <Text style={styles.subMetricVal}>{isSubscribed ? `${daysRemaining} يوم` : 'دائم'}</Text>
+                <Text style={styles.subMetricLbl}>صلاحية الباقة</Text>
               </View>
               <View style={styles.subMetricSep} />
               <View style={styles.subMetricCol}>
-                <Text style={styles.subMetricVal}>{linkedCount} / {allowedPharmacies}</Text>
-                <Text style={styles.subMetricLbl}>الصيدليات المربوطة</Text>
+                <Text style={styles.subMetricVal}>حتى {allowedPharmacies} صيدليات</Text>
+                <Text style={styles.subMetricLbl}>لكل مخزن على حدة</Text>
+              </View>
+              <View style={styles.subMetricSep} />
+              <View style={styles.subMetricCol}>
+                <Text style={styles.subMetricVal}>مفتوحة 100%</Text>
+                <Text style={styles.subMetricLbl}>كافة المخازن</Text>
               </View>
             </View>
 

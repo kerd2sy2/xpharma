@@ -219,8 +219,8 @@ export default function SubscriptionModal({
                         <Ionicons name="checkmark-sharp" size={16} color="#059669" />
                       </View>
                       <View style={styles.unlockedTextCol}>
-                        <Text style={styles.unlockedItemTitle}>ربط {activatedPlanObj?.pharmacies || activePlanObj.pharmacies} صيدليات / فروع</Text>
-                        <Text style={styles.unlockedItemSub}>يمكنك الآن ربط وإضافة كافة فروعك والتبديل بينهم بضغطة واحدة</Text>
+                        <Text style={styles.unlockedItemTitle}>ربط حتى {activatedPlanObj?.pharmacies || activePlanObj.pharmacies} صيدليات في كل مخزن</Text>
+                        <Text style={styles.unlockedItemSub}>يمكنك الآن ربط حتى {activatedPlanObj?.pharmacies || activePlanObj.pharmacies} فروع في المخزن الواحد، ومتاح فتح كافة المخازن بلا حدود</Text>
                       </View>
                     </View>
 
@@ -280,7 +280,7 @@ export default function SubscriptionModal({
                     </View>
                     <Text style={styles.heroTitle}>باقات وخطط الاشتراك الشهري</Text>
                     <Text style={styles.heroSubtitle}>
-                      {reason || 'اختر الباقة المناسبة لعدد صيدلياتك للربط مع جميع مخازن الجمهورية'}
+                      {reason || 'الباقة تحدد عدد الصيدليات المسموح بربطها في المخزن الواحد (مع فتح كافة المخازن مجاناً)'}
                     </Text>
                   </LinearGradient>
 
@@ -348,7 +348,11 @@ export default function SubscriptionModal({
                     <Text style={styles.featuresCardHeader}>كل باقة تمنحك المميزات التالية:</Text>
                     <View style={styles.featureItemRow}>
                       <Ionicons name="checkmark-circle" size={17} color="#10B981" />
-                      <Text style={styles.featureItemText}>ربط غير محدود بجميع مخازن الأدوية والمستلزمات في مصر</Text>
+                      <Text style={styles.featureItemText}>ربط حتى {activePlanObj.pharmacies} صيدليات في المخزن الواحد</Text>
+                    </View>
+                    <View style={styles.featureItemRow}>
+                      <Ionicons name="checkmark-circle" size={17} color="#10B981" />
+                      <Text style={styles.featureItemText}>فتح وربط غير محدود بجميع مخازن الأدوية والمستلزمات في مصر</Text>
                     </View>
                     <View style={styles.featureItemRow}>
                       <Ionicons name="checkmark-circle" size={17} color="#10B981" />

@@ -246,7 +246,7 @@ export default function HomeScreen() {
       const activeName = session?.pharmacy_name || wh.linked_pharmacy_name || '';
 
       if (activeCode && activeName) {
-        await registerGlobalPharmacy(activeCode, activeName, user?.email);
+        await registerGlobalPharmacy(activeCode, activeName, user?.email, wh.id);
       }
 
       setActivePortal({
@@ -264,7 +264,7 @@ export default function HomeScreen() {
   const handleVerificationSuccess = async (result: VerifyPharmacyResult) => {
     if (!selectedWarehouseForModal || !result.token) return;
 
-    await registerGlobalPharmacy(result.pharmacy_code || '', result.pharmacy_name || '', user?.email);
+    await registerGlobalPharmacy(result.pharmacy_code || '', result.pharmacy_name || '', user?.email, selectedWarehouseForModal.id);
     const updatedStatus = await getSubscriptionStatus(user?.email);
     setSubscriptionStatusInfo(updatedStatus);
 

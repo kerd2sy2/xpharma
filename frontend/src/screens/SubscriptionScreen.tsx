@@ -226,9 +226,9 @@ export default function SubscriptionScreen({
                   <Ionicons name="checkmark-sharp" size={16} color="#059669" />
                 </View>
                 <View style={styles.unlockedTextCol}>
-                  <Text style={styles.unlockedItemTitle}>ربط {activatedPlanObj?.pharmacies || activePlanObj.pharmacies} صيدليات / فروع</Text>
-                  <Text style={styles.unlockedItemSub}>يمكنك الآن ربط وإضافة كافة فروعك والتبديل بينهم بضغطة واحدة</Text>
-                </View>
+                <Text style={styles.unlockedItemTitle}>ربط حتى {activatedPlanObj?.pharmacies || activePlanObj.pharmacies} صيدليات في كل مخزن</Text>
+                <Text style={styles.unlockedItemSub}>يمكنك الآن ربط حتى {activatedPlanObj?.pharmacies || activePlanObj.pharmacies} فروع في المخزن الواحد، ومتاح فتح كافة المخازن بلا حدود</Text>
+              </View>
               </View>
 
               <View style={styles.unlockedItem}>
@@ -289,7 +289,7 @@ export default function SubscriptionScreen({
             </View>
             <Text style={styles.heroTitle}>باقات وخطط الاشتراك الشهري</Text>
             <Text style={styles.heroSubtitle}>
-              {reason || 'اختر الباقة المناسبة لعدد صيدلياتك للربط مع جميع مخازن الجمهورية'}
+              {reason || 'الباقة تحدد عدد الصيدليات المسموح بربطها في المخزن الواحد (مع فتح كافة المخازن مجاناً)'}
             </Text>
           </LinearGradient>
 
@@ -345,7 +345,7 @@ export default function SubscriptionScreen({
                         {plan.label}
                       </Text>
                       <Text style={styles.planLimitText}>
-                        ربط حتى {plan.pharmacies} صيدلية
+                        ربط حتى {plan.pharmacies} صيدليات في المخزن الواحد
                       </Text>
                     </View>
 
@@ -368,7 +368,13 @@ export default function SubscriptionScreen({
             <View style={styles.featureLine}>
               <Ionicons name="checkmark-circle" size={18} color="#10B981" />
               <Text style={styles.featureLineText}>
-                ربط كامل وتلقائي مع كافة مخازن الأدوية والمستلزمات
+                ربط حتى {activePlanObj.pharmacies} صيدليات في كل مخزن على حدة
+              </Text>
+            </View>
+            <View style={styles.featureLine}>
+              <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+              <Text style={styles.featureLineText}>
+                فتح وربط غير محدود مع كافة مخازن الأدوية والمستلزمات في مصر
               </Text>
             </View>
             <View style={styles.featureLine}>
