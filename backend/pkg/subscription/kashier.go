@@ -272,19 +272,68 @@ func (s *SubscriptionService) HandleWebhook(c *gin.Context) {
 	isSuccess := status == "SUCCESS" || status == "CAPTURED" || status == "PAID" || strings.Contains(status, "SUCCESS")
 
 	if isSuccess && orderID != "" {
-		// Extract plan number from order reference (e.g. XPH-SUB-username-P3-timestamp)
+		// Extract plan number and custom amount from order reference (e.g. XPH-SUB-username-P4-A55-timestamp)
 		plan := 3
+		var customAmount float64
 		parts := strings.Split(orderID, "-")
 		for _, part := range parts {
 			if strings.HasPrefix(part, "P") && len(part) >= 2 {
 				if val, err := strconv.Atoi(part[1:]); err == nil && val > 0 {
 					plan = val
-					break
+				}
+			}
+			if strings.HasPrefix(part, "A") && len(part) >= 2 {
+				if val, err := strconv.ParseFloat(part[1:], 64); err == nil && val > 0 {
+					customAmount = val
 				}
 			}
 		}
 
+		price := getPlanPrice(plan)
+		if customAmount > 0 {
+			price = customAmount
+		}
+
 		if email != "" {
+			// Idempotency: check if orderID already exists
+			var existingID string
+			_ = s.router.Pool().QueryRow(c.Request.Context(),
+				`SELECT id FROM public.subscriptions WHERE order_id = $1 LIMIT 1`,
+				orderID,
+			).Scan(&existingID)
+
+			if existingID != "" {
+				_, _ = s.router.Pool().Exec(c.Request.Context(),
+					`UPDATE public.subscriptions SET status = 'active', updated_at = NOW() WHERE id = $1`,
+					existingID,
+				)
+			} else {
+				// Supersede older active records
+				_, _ = s.router.Pool().Exec(c.Request.Context(),
+					`UPDATE public.subscriptions SET status = 'superseded', updated_at = NOW() WHERE LOWER(user_email) = LOWER($1) AND status = 'active'`,
+					email,
+				)
+				subQuery := `
+					INSERT INTO public.subscriptions (
+						tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
+						status, order_id, transaction_id, receipt_ref, notes,
+						start_date, end_date, created_at, updated_at
+					) VALUES (
+						(SELECT id FROM public.tenants LIMIT 1),
+						$1, 
+						COALESCE((SELECT name FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1), 'مشترك Google'),
+						COALESCE((SELECT device_name FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1), '-'),
+						$2, $3, 'kashier', 'active', $4, $4, $4, 
+						'دفع إلكتروني ناجح عبر بوابة كاشير (Kashier Webhook)',
+						CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', NOW(), NOW()
+					)
+				`
+				_, subErr := s.router.Pool().Exec(c.Request.Context(), subQuery, email, fmt.Sprintf("%d صيدليات", plan), price, orderID)
+				if subErr != nil {
+					log.Printf("[Kashier Webhook] Subscriptions insert error: %v", subErr)
+				}
+			}
+
 			_, updateErr := s.router.Pool().Exec(
 				c.Request.Context(),
 				`UPDATE public.users 
@@ -299,28 +348,6 @@ func (s *SubscriptionService) HandleWebhook(c *gin.Context) {
 				log.Printf("[Kashier Webhook] DB Update error: %v", updateErr)
 			} else {
 				log.Printf("[Kashier Webhook] Successfully activated Plan %d for %s", plan, email)
-			}
-
-			// Also persist to public.subscriptions for web-admin billing review immediately
-			price := getPlanPrice(plan)
-			subQuery := `
-				INSERT INTO public.subscriptions (
-					tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
-					status, order_id, transaction_id, receipt_ref, notes,
-					start_date, end_date, created_at, updated_at
-				) VALUES (
-					(SELECT id FROM public.tenants LIMIT 1),
-					$1, 
-					COALESCE((SELECT name FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1), 'مشترك Google'),
-					COALESCE((SELECT device_name FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1), '-'),
-					$2, $3, 'kashier', 'active', $4, $4, $4, 
-					'دفع إلكتروني ناجح عبر بوابة كاشير (Kashier Webhook)',
-					CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', NOW(), NOW()
-				)
-			`
-			_, subErr := s.router.Pool().Exec(c.Request.Context(), subQuery, email, fmt.Sprintf("%d صيدليات", plan), price, orderID)
-			if subErr != nil {
-				log.Printf("[Kashier Webhook] Subscriptions insert error: %v", subErr)
 			}
 		}
 	}
@@ -343,6 +370,7 @@ func (s *SubscriptionService) HandleRedirect(c *gin.Context) {
 
 	if isSuccess && orderID != "" {
 		plan := 3
+		var customAmount float64
 		parts := strings.Split(orderID, "-")
 		var emailPrefix string
 		for i, part := range parts {
@@ -351,15 +379,60 @@ func (s *SubscriptionService) HandleRedirect(c *gin.Context) {
 					plan = val
 				}
 			}
+			if strings.HasPrefix(part, "A") && len(part) >= 2 {
+				if val, err := strconv.ParseFloat(part[1:], 64); err == nil && val > 0 {
+					customAmount = val
+				}
+			}
 			if part == "SUB" && i+1 < len(parts) {
 				emailPrefix = parts[i+1]
 			}
 		}
 
 		price := getPlanPrice(plan)
+		if customAmount > 0 {
+			price = customAmount
+		}
 		queryEmail := strings.ToLower(strings.TrimSpace(c.Query("email")))
 
 		if queryEmail != "" {
+			var existingID string
+			_ = s.router.Pool().QueryRow(c.Request.Context(),
+				`SELECT id FROM public.subscriptions WHERE order_id = $1 LIMIT 1`,
+				orderID,
+			).Scan(&existingID)
+
+			if existingID != "" {
+				_, _ = s.router.Pool().Exec(c.Request.Context(),
+					`UPDATE public.subscriptions SET status = 'active', updated_at = NOW() WHERE id = $1`,
+					existingID,
+				)
+			} else {
+				_, _ = s.router.Pool().Exec(
+					c.Request.Context(),
+					`UPDATE public.subscriptions SET status = 'superseded', updated_at = NOW() 
+					 WHERE LOWER(user_email) = LOWER($1) AND status = 'active'`,
+					queryEmail,
+				)
+				_, _ = s.router.Pool().Exec(
+					c.Request.Context(),
+					`INSERT INTO public.subscriptions (
+						tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
+						status, order_id, transaction_id, receipt_ref, notes,
+						start_date, end_date, created_at, updated_at
+					) VALUES (
+						(SELECT id FROM public.tenants LIMIT 1),
+						$1,
+						COALESCE((SELECT name FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1), 'مشترك تطبيق XPharma'),
+						COALESCE((SELECT device_name FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1), '-'),
+						$2, $3, 'kashier', 'active', $4, $4, $4,
+						'دفع إلكتروني ناجح عبر بوابة كاشير (Kashier Redirect)',
+						CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', NOW(), NOW()
+					)`,
+					queryEmail, fmt.Sprintf("%d صيدليات", plan), price, orderID,
+				)
+			}
+
 			_, _ = s.router.Pool().Exec(
 				c.Request.Context(),
 				`UPDATE public.users 
@@ -369,31 +442,6 @@ func (s *SubscriptionService) HandleRedirect(c *gin.Context) {
 				     updated_at = NOW()
 				 WHERE LOWER(email) = LOWER($2)`,
 				plan, queryEmail,
-			)
-
-			_, _ = s.router.Pool().Exec(
-				c.Request.Context(),
-				`UPDATE public.subscriptions SET status = 'superseded', updated_at = NOW() 
-				 WHERE LOWER(user_email) = LOWER($1) AND status = 'active'`,
-				queryEmail,
-			)
-
-			_, _ = s.router.Pool().Exec(
-				c.Request.Context(),
-				`INSERT INTO public.subscriptions (
-					tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
-					status, order_id, transaction_id, receipt_ref, notes,
-					start_date, end_date, created_at, updated_at
-				) VALUES (
-					(SELECT id FROM public.tenants LIMIT 1),
-					$1,
-					COALESCE((SELECT name FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1), 'مشترك تطبيق XPharma'),
-					COALESCE((SELECT device_name FROM public.users WHERE LOWER(email) = LOWER($1) LIMIT 1), '-'),
-					$2, $3, 'kashier', 'active', $4, $4, $4,
-					'دفع إلكتروني ناجح عبر بوابة كاشير (Kashier Redirect)',
-					CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', NOW(), NOW()
-				)`,
-				queryEmail, fmt.Sprintf("%d صيدليات", plan), price, orderID,
 			)
 		} else if emailPrefix != "" {
 			_, _ = s.router.Pool().Exec(

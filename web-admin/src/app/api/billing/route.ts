@@ -151,6 +151,32 @@ export async function POST(req: NextRequest) {
     `);
     const cols = new Set(colRes.rows.map((r: any) => r.column_name));
 
+    // Idempotency: avoid duplicate rows for the same order_id
+    if (order_id) {
+      const existing = await query(
+        `SELECT id, status FROM public.subscriptions WHERE order_id = $1 LIMIT 1`,
+        [order_id]
+      );
+      if (existing.rows.length > 0) {
+        await query(
+          `UPDATE public.subscriptions SET status = 'active', updated_at = NOW() WHERE id = $1`,
+          [existing.rows[0].id]
+        );
+        return NextResponse.json({
+          success: true,
+          subscription: existing.rows[0],
+          message: 'Payment already recorded (idempotent)',
+        });
+      }
+    }
+
+    if (user_email && status === 'active') {
+      await query(
+        `UPDATE public.subscriptions SET status = 'superseded', updated_at = NOW() WHERE LOWER(user_email) = LOWER($1) AND status = 'active'`,
+        [user_email]
+      );
+    }
+
     let queryText = '';
     let params: any[] = [];
 

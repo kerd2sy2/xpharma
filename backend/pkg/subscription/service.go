@@ -404,16 +404,53 @@ func (s *SubscriptionService) RecordPayment(c *gin.Context) {
 		plan = 2
 	} else if strings.Contains(req.PlanType, "1") {
 		plan = 1
-	} else if req.Amount >= 300 {
-		plan = 5
-	} else if req.Amount >= 250 {
-		plan = 4
-	} else if req.Amount >= 200 {
-		plan = 3
-	} else if req.Amount >= 150 {
-		plan = 2
-	} else if req.Amount >= 100 {
-		plan = 1
+	}
+
+	// If plan is still default, try extracting from OrderID (e.g. XPH-SUB-user-P4-A55-...)
+	if req.OrderID != "" {
+		parts := strings.Split(req.OrderID, "-")
+		for _, part := range parts {
+			if strings.HasPrefix(part, "P") && len(part) >= 2 {
+				if val, err := strconv.Atoi(part[1:]); err == nil && val > 0 {
+					plan = val
+					break
+				}
+			}
+		}
+	}
+
+	// 0. Idempotency Check: Don't insert duplicate records for the same order_id
+	if req.OrderID != "" {
+		var existingID string
+		_ = s.router.Pool().QueryRow(
+			c.Request.Context(),
+			`SELECT id FROM public.subscriptions WHERE order_id = $1 LIMIT 1`,
+			req.OrderID,
+		).Scan(&existingID)
+		if existingID != "" {
+			// Already recorded! Ensure it is active and user is updated
+			_, _ = s.router.Pool().Exec(c.Request.Context(),
+				`UPDATE public.subscriptions SET status = 'active', plan_type = $2, updated_at = NOW() WHERE id = $1`,
+				existingID, fmt.Sprintf("%d صيدليات", plan),
+			)
+			if req.UserEmail != "" {
+				_, _ = s.router.Pool().Exec(c.Request.Context(),
+					`UPDATE public.users 
+					 SET subscription_plan = $1, 
+					     is_subscription_active = true, 
+					     subscription_expires_at = NOW() + INTERVAL '30 days',
+					     updated_at = NOW()
+					 WHERE LOWER(email) = LOWER($2)`,
+					plan, strings.ToLower(req.UserEmail),
+				)
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"success": true,
+				"message": "تم تأكيد وتحديث الاشتراك بنجاح (معاملة سابقة مسجلة)",
+				"plan":    plan,
+			})
+			return
+		}
 	}
 
 	// 1. Supersede any older active subscriptions for this email so new plan takes priority

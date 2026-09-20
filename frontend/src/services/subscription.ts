@@ -538,7 +538,21 @@ export async function recordSubscriptionPayment(payload: {
 }): Promise<boolean> {
   let success = false;
 
-  // 1. Send to admin.xpharma.cloud for Super Admin billing review
+  // 1. Primary: Send to api.xpharma.cloud backend
+  try {
+    const res = await fetch('https://api.xpharma.cloud/v1/subscription/record-payment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      return true;
+    }
+  } catch (e) {
+    console.warn('Primary backend record-payment failed, trying fallback:', e);
+  }
+
+  // 2. Fallback: Send to admin.xpharma.cloud if primary was unreachable
   try {
     const res = await fetch('https://admin.xpharma.cloud/api/billing', {
       method: 'POST',
@@ -547,19 +561,7 @@ export async function recordSubscriptionPayment(payload: {
     });
     if (res.ok) success = true;
   } catch (e) {
-    console.warn('Failed to record billing in admin portal:', e);
-  }
-
-  // 2. Send to api.xpharma.cloud backend
-  try {
-    const res = await fetch('https://api.xpharma.cloud/v1/subscription/record-payment', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (res.ok) success = true;
-  } catch (e) {
-    console.warn('Failed to record billing in API backend:', e);
+    console.warn('Failed to record billing in admin portal fallback:', e);
   }
 
   return success;

@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { setActiveSubscriptionPlan, PRICING_PLANS, recordSubscriptionPayment } from '@/services/subscription';
+import { setActiveSubscriptionPlan, PRICING_PLANS, getSubscriptionStatus } from '@/services/subscription';
 import { useAuth } from '@/context/AuthContext';
 
 export default function SubscriptionSuccessScreen() {
@@ -29,6 +29,7 @@ export default function SubscriptionSuccessScreen() {
   }>();
 
   const [planPharmacies, setPlanPharmacies] = useState<number>(3);
+  const [displayAmount, setDisplayAmount] = useState<number | string>('');
   const [scaleAnim] = useState(new Animated.Value(0.7));
   const [fadeAnim] = useState(new Animated.Value(0));
 
@@ -38,48 +39,57 @@ export default function SubscriptionSuccessScreen() {
     params.paymentStatus.toUpperCase() === 'CAPTURED';
 
   useEffect(() => {
-    // 1. Determine plan from merchantOrderId or amount
-    let detectedPlan = 3;
-    if (params.merchantOrderId) {
-      const match = params.merchantOrderId.match(/-P(\d+)-/);
-      if (match && match[1]) {
-        detectedPlan = parseInt(match[1], 10);
+    let detectedPlan = 0;
+    let detectedAmount = '';
+    const rawOrder = params.merchantOrderId || params.orderId || params.orderReference || '';
+    if (rawOrder) {
+      const matchP = rawOrder.match(/-P(\d+)-/);
+      if (matchP && matchP[1]) {
+        detectedPlan = parseInt(matchP[1], 10);
+      }
+      const matchA = rawOrder.match(/-A(\d+)-/);
+      if (matchA && matchA[1]) {
+        detectedAmount = matchA[1];
       }
     }
-    if (!detectedPlan || detectedPlan <= 0) {
-      const amt = parseInt(params.amount || '0', 10);
-      const matched = PRICING_PLANS.find((p) => p.price === amt);
-      if (matched) {
-        detectedPlan = matched.pharmacies;
+
+    if (params.amount) {
+      detectedAmount = params.amount;
+    }
+
+    // Authoritatively synchronize with server status
+    const syncStatus = async () => {
+      if (user?.email) {
+        try {
+          const status = await getSubscriptionStatus(user.email);
+          if (status.isSubscribed && status.subscribedPlan > 0) {
+            setPlanPharmacies(status.subscribedPlan);
+            if (!detectedAmount) {
+              const matched = PRICING_PLANS.find((p) => p.pharmacies === status.subscribedPlan);
+              setDisplayAmount(matched ? matched.price : 200);
+            } else {
+              setDisplayAmount(detectedAmount);
+            }
+            return;
+          }
+        } catch {}
       }
-    }
 
-    setPlanPharmacies(detectedPlan);
+      if (detectedPlan > 0) {
+        setPlanPharmacies(detectedPlan);
+        setActiveSubscriptionPlan(detectedPlan).catch(() => {});
+      }
+      if (detectedAmount) {
+        setDisplayAmount(detectedAmount);
+      } else {
+        const matched = PRICING_PLANS.find((p) => p.pharmacies === (detectedPlan || 3));
+        setDisplayAmount(matched ? matched.price : 200);
+      }
+    };
 
-    // 2. Activate subscription plan locally and persist
-    if (isSuccess) {
-      setActiveSubscriptionPlan(detectedPlan).catch(() => {});
+    syncStatus();
 
-      // 3. Record billing to central dashboard (admin.xpharma.cloud & api.xpharma.cloud)
-      const amtVal = parseFloat(params.amount || '0') || (PRICING_PLANS.find((p) => p.pharmacies === detectedPlan)?.price ?? 200);
-      recordSubscriptionPayment({
-        user_email: user?.email || '',
-        user_name: user?.name || 'دكتور صيدلي',
-        user_phone: user?.phone || '',
-        plan_type: `${detectedPlan} صيدليات`,
-        amount: amtVal,
-        payment_method: 'kashier',
-        status: 'active',
-        order_id: params.merchantOrderId || params.orderId || '',
-        transaction_id: params.transactionId || '',
-        card_brand: params.cardBrand || 'Visa',
-        masked_card: params.maskedCard || '',
-        receipt_ref: params.transactionId || params.orderReference || params.merchantOrderId || '',
-        notes: `دفع إلكتروني ناجح عبر كاشير - بطاقة: ${params.maskedCard || 'فيزا/ماستر'} - كود العملية: ${params.transactionId || ''}`,
-      }).catch((e) => console.warn('Record billing error:', e));
-    }
-
-    // 4. Entrance animation
+    // Entrance animation
     Animated.parallel([
       Animated.spring(scaleAnim, {
         toValue: 1,
@@ -133,7 +143,7 @@ export default function SubscriptionSuccessScreen() {
               <View style={styles.receiptBox}>
                 <View style={styles.receiptRow}>
                   <Text style={styles.receiptVal}>
-                    {params.amount || (planObj ? planObj.price : 200)} جنيه مصري
+                    {displayAmount || params.amount || (planObj ? planObj.price : 200)} جنيه مصري
                   </Text>
                   <Text style={styles.receiptLabel}>المبلغ المدفوع</Text>
                 </View>
