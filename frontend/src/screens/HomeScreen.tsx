@@ -39,6 +39,9 @@ import {
 } from '@/services/subscription';
 
 // Modular Components
+import ModuleErrorBoundary from '@/components/ModuleErrorBoundary';
+import CategoryTabs from '@/features/home/components/CategoryTabs';
+import HomeSearchBar from '@/features/home/components/HomeSearchBar';
 import { WarehouseCard } from '@/features/warehouses/components/WarehouseCard';
 import { RequestWarehouseModal } from '@/features/warehouses/components/RequestWarehouseModal';
 import SettingsScreen from '@/screens/SettingsScreen';
@@ -488,46 +491,6 @@ export default function HomeScreen() {
     );
   }
 
-  const renderCategoryTabs = (isSticky = false) => (
-    <View style={[styles.tabsContainer, isSticky && styles.tabsStickyContainer]}>
-      <TouchableOpacity
-        style={[
-          styles.categoryTab,
-          selectedCategoryTab === 'pharma' && styles.categoryTabActive,
-        ]}
-        onPress={() => setSelectedCategoryTab('pharma')}
-        activeOpacity={0.75}
-      >
-        <Text
-          style={[
-            styles.categoryTabText,
-            selectedCategoryTab === 'pharma' && styles.categoryTabTextActive,
-          ]}
-        >
-          أدوية
-        </Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={[
-          styles.categoryTab,
-          selectedCategoryTab === 'accessories' && styles.categoryTabActive,
-        ]}
-        onPress={() => setSelectedCategoryTab('accessories')}
-        activeOpacity={0.75}
-      >
-        <Text
-          style={[
-            styles.categoryTabText,
-            selectedCategoryTab === 'accessories' && styles.categoryTabTextActive,
-          ]}
-        >
-          إكسسوارات
-        </Text>
-      </TouchableOpacity>
-    </View>
-  );
-
   const topInset = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 0);
   const hasBanners = !isSearchActive && banners && banners.length > 0;
 
@@ -695,17 +658,23 @@ export default function HomeScreen() {
             )}
 
             {/* Google Play Style Category Tabs with Active Underline Bar */}
-            {renderCategoryTabs(false)}
+            <CategoryTabs
+              selectedTab={selectedCategoryTab}
+              onSelectTab={setSelectedCategoryTab}
+              isSticky={false}
+            />
           </View>
         }
         renderItem={({ item }) => (
           <View style={!isTablet ? { paddingHorizontal: 16 } : undefined}>
-            <WarehouseCard
-              item={item}
-              onPress={handleWarehousePress}
-              width={isTablet ? TABLET_CARD_WIDTH : undefined}
-              marginBottom={isTablet ? CARD_GAP : 12}
-            />
+            <ModuleErrorBoundary fallbackTitle="خطأ في كرت المخزن">
+              <WarehouseCard
+                item={item}
+                onPress={handleWarehousePress}
+                width={isTablet ? TABLET_CARD_WIDTH : undefined}
+                marginBottom={isTablet ? CARD_GAP : 12}
+              />
+            </ModuleErrorBoundary>
           </View>
         )}
         ListEmptyComponent={
@@ -749,45 +718,28 @@ export default function HomeScreen() {
       {(isSearchActive || isStickyTabs) && (
         <View style={[styles.fixedHeaderArea, { paddingTop: topInset, backgroundColor: colors.bg }]}>
           {isSearchActive ? (
-            <View style={styles.searchBarActiveContainer}>
-              <TouchableOpacity
-                style={styles.searchCloseBtn}
-                onPress={() => {
-                  setIsSearchActive(false);
-                  setSearchQuery('');
-                }}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="arrow-forward" size={22} color={colors.text} />
-              </TouchableOpacity>
-
-              <View style={styles.searchInputActiveWrapper}>
-                <Ionicons name="search" size={18} color={colors.secondaryText} style={styles.searchInnerIcon} />
-                <TextInput
-                  ref={searchInputRef}
-                  style={styles.searchActiveTextInput}
-                  placeholder="ابحث باسم المخزن أو الصيدلية..."
-                  placeholderTextColor={colors.secondaryText}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  returnKeyType="search"
-                  onSubmitEditing={() => {
-                    if (searchQuery.trim().length > 0 && filteredWarehouses.length === 0) {
-                      openRequestModal(searchQuery.trim());
-                    }
-                  }}
-                  autoFocus
-                />
-                {searchQuery.length > 0 && (
-                  <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.clearSearchBtn}>
-                    <Ionicons name="close-circle" size={18} color={colors.secondaryText} />
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
+            <HomeSearchBar
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              onClose={() => {
+                setIsSearchActive(false);
+                setSearchQuery('');
+              }}
+              onSubmit={() => {
+                if (searchQuery.trim().length > 0 && filteredWarehouses.length === 0) {
+                  openRequestModal(searchQuery.trim());
+                }
+              }}
+              inputRef={searchInputRef}
+              colors={colors}
+            />
           ) : isStickyTabs ? (
             <View style={[styles.stickyTabsHeaderWrapper, { backgroundColor: colors.bg }]}>
-              {renderCategoryTabs(true)}
+              <CategoryTabs
+                selectedTab={selectedCategoryTab}
+                onSelectTab={setSelectedCategoryTab}
+                isSticky={true}
+              />
             </View>
           ) : null}
 
