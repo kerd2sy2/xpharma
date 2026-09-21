@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { fetchInvoiceDetails, fetchPharmacyPurchases, InvoiceItem, InvoiceLineItem } from '@/services/warehouse';
 
 const PAGE_SIZE = 20;
@@ -14,6 +14,9 @@ export function usePurchases(token: string) {
   const [invoiceLines, setInvoiceLines] = useState<InvoiceLineItem[]>([]);
   const [loadingLines, setLoadingLines] = useState(false);
   const [showInfoModal, setShowInfoModal] = useState(false);
+
+  // In-memory cache for instant line items display
+  const invoiceCacheRef = useRef<Record<string, InvoiceLineItem[]>>({});
 
   const loadInitial = useCallback(async (showLoader = true) => {
     if (!token) return;
@@ -50,14 +53,23 @@ export function usePurchases(token: string) {
   const openInvoiceDetails = useCallback(async (inv: InvoiceItem) => {
     setSelectedInvoice(inv);
     setShowInfoModal(false);
-    setLoadingLines(true);
     const targetId = inv.id || inv.remote_id || inv.invoice_number;
+
+    // Instant check in local cache
+    if (invoiceCacheRef.current[targetId] && invoiceCacheRef.current[targetId].length > 0) {
+      setInvoiceLines(invoiceCacheRef.current[targetId]);
+      setLoadingLines(false);
+      return;
+    }
+
+    setLoadingLines(true);
     try {
       const details = await fetchInvoiceDetails(token, targetId);
       if (details.items && details.items.length > 0) {
+        invoiceCacheRef.current[targetId] = details.items;
         setInvoiceLines(details.items);
       } else {
-        setInvoiceLines([
+        const fallbackItems: InvoiceLineItem[] = [
           {
             id: 'fallback-1',
             item_name: 'أدوية ومستلزمات عامة (فاتورة مسجلة)',
@@ -69,7 +81,9 @@ export function usePurchases(token: string) {
                 : 0,
             total_price: inv.net_amount || inv.total_amount || 0,
           },
-        ]);
+        ];
+        invoiceCacheRef.current[targetId] = fallbackItems;
+        setInvoiceLines(fallbackItems);
       }
     } catch (err) {
       console.warn('Error fetching invoice lines:', err);

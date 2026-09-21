@@ -22,6 +22,26 @@ func NewQueryService(router *db.TenantRouter) *QueryService {
 	return &QueryService{router: router}
 }
 
+// isValidUUID returns true if the string is formatted as a 36-character UUID
+func isValidUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+		} else {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // ValidateLinkedPharmacyMiddleware ensures the requested pharmacy is still actively linked to the requesting user in public.pharmacies
 func (s *QueryService) ValidateLinkedPharmacyMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -228,43 +248,61 @@ func (s *QueryService) GetPurchases(c *gin.Context) {
 func (s *QueryService) GetInvoiceDetails(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	pharmaCode := c.GetString("pharma_code")
-	invoiceID := c.Param("id")
+	invoiceID := strings.TrimSpace(c.Param("id"))
 
 	ctx := c.Request.Context()
 	var invoice map[string]interface{}
 	var items []map[string]interface{}
 
 	err := s.router.ExecInTenant(ctx, tenantID, func(ctx context.Context, schema string, conn *pgxpool.Conn) error {
-		// 1. Fetch invoice header
+		// 1. Fetch invoice header using index-friendly queries
 		var id, remoteID, invNum, status string
 		var invDate time.Time
 		var total, disc, net, paid, remaining float64
+		var err error
 
-		invQuery := fmt.Sprintf(`
-			SELECT id::text, remote_id, invoice_number, invoice_date, total_amount, discount_amount, net_amount, paid_amount, remaining_amount, status
-			FROM %s.invoices
-			WHERE (id::text = $1 OR remote_id = $1 OR invoice_number = $1 OR REPLACE(invoice_number, 'INV-', '') = $1 OR invoice_number = ('INV-' || $1))
-			  AND pharmacy_code = $2
-			LIMIT 1
-		`, schema)
+		cleanNum := strings.TrimPrefix(invoiceID, "INV-")
+		prefixedNum := "INV-" + cleanNum
 
-		err := conn.QueryRow(ctx, invQuery, invoiceID, pharmaCode).Scan(
-			&id, &remoteID, &invNum, &invDate, &total, &disc, &net, &paid, &remaining, &status,
-		)
-		if err != nil {
-			// Fallback search without pharmacy_code filter
-			invQueryFallback := fmt.Sprintf(`
+		if isValidUUID(invoiceID) {
+			// Direct Primary Key lookup (sub-millisecond B-tree seek)
+			invQuery := fmt.Sprintf(`
 				SELECT id::text, remote_id, invoice_number, invoice_date, total_amount, discount_amount, net_amount, paid_amount, remaining_amount, status
 				FROM %s.invoices
-				WHERE (id::text = $1 OR remote_id = $1 OR invoice_number = $1 OR REPLACE(invoice_number, 'INV-', '') = $1 OR invoice_number = ('INV-' || $1))
+				WHERE id = $1::uuid
 				LIMIT 1
 			`, schema)
-			err = conn.QueryRow(ctx, invQueryFallback, invoiceID).Scan(
+			err = conn.QueryRow(ctx, invQuery, invoiceID).Scan(
+				&id, &remoteID, &invNum, &invDate, &total, &disc, &net, &paid, &remaining, &status,
+			)
+		} else {
+			// Fast indexed search using remote_id or invoice_number without function wrappers on columns
+			invQuery := fmt.Sprintf(`
+				SELECT id::text, remote_id, invoice_number, invoice_date, total_amount, discount_amount, net_amount, paid_amount, remaining_amount, status
+				FROM %s.invoices
+				WHERE (remote_id = $1 OR invoice_number = $1 OR invoice_number = $2 OR invoice_number = $3)
+				  AND pharmacy_code = $4
+				LIMIT 1
+			`, schema)
+			err = conn.QueryRow(ctx, invQuery, invoiceID, cleanNum, prefixedNum, pharmaCode).Scan(
 				&id, &remoteID, &invNum, &invDate, &total, &disc, &net, &paid, &remaining, &status,
 			)
 			if err != nil {
-				return err
+				// Fallback search without pharmacy_code filter
+				invQueryFallback := fmt.Sprintf(`
+					SELECT id::text, remote_id, invoice_number, invoice_date, total_amount, discount_amount, net_amount, paid_amount, remaining_amount, status
+					FROM %s.invoices
+					WHERE (remote_id = $1 OR invoice_number = $1 OR invoice_number = $2 OR invoice_number = $3)
+					LIMIT 1
+				`, schema)
+				err = conn.QueryRow(ctx, invQueryFallback, invoiceID, cleanNum, prefixedNum).Scan(
+					&id, &remoteID, &invNum, &invDate, &total, &disc, &net, &paid, &remaining, &status,
+				)
 			}
+		}
+
+		if err != nil {
+			return err
 		}
 
 		realNet := total
@@ -285,7 +323,7 @@ func (s *QueryService) GetInvoiceDetails(c *gin.Context) {
 			"status":           status,
 		}
 
-		// 2. Fetch line items
+		// 2. Fetch line items using direct UUID index seek (Index Scan using idx_items_invoice)
 		itemsQuery := fmt.Sprintf(`
 			SELECT it.id::text, 
 			       COALESCE(it.remote_item_id, ''), 
@@ -298,21 +336,11 @@ func (s *QueryService) GetInvoiceDetails(c *gin.Context) {
 			       COALESCE(it.discount_percent::float8, 0), 
 			       COALESCE(it.total_price::float8, 0)
 			FROM %s.invoice_items it
-			WHERE it.invoice_id::text = $1 
-			   OR it.invoice_id::text = $2 
-			   OR it.invoice_id::text = $3
-			   OR it.invoice_id IN (
-			       SELECT inv.id FROM %s.invoices inv 
-			       WHERE inv.id::text = $1 OR inv.remote_id = $1 OR inv.remote_id = $2 OR inv.remote_id = $3
-			          OR inv.invoice_number = $1 OR inv.invoice_number = $2 OR inv.invoice_number = $3 
-			          OR REPLACE(inv.invoice_number, 'INV-', '') = $1 
-			          OR REPLACE(inv.invoice_number, 'INV-', '') = $2
-			          OR REPLACE(inv.invoice_number, 'INV-', '') = $3
-			   )
+			WHERE it.invoice_id = $1::uuid
 			ORDER BY it.id ASC
-		`, schema, schema)
+		`, schema)
 
-		rows, err := conn.Query(ctx, itemsQuery, id, remoteID, invoiceID)
+		rows, err := conn.Query(ctx, itemsQuery, id)
 		if err != nil {
 			return nil
 		}
@@ -555,7 +583,7 @@ func (s *QueryService) GetReturns(c *gin.Context) {
 func (s *QueryService) GetReturnDetails(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	pharmaCode := c.GetString("pharma_code")
-	returnID := c.Param("id")
+	returnID := strings.TrimSpace(c.Param("id"))
 
 	ctx := c.Request.Context()
 	var retHeader map[string]interface{}
@@ -565,31 +593,47 @@ func (s *QueryService) GetReturnDetails(c *gin.Context) {
 		var id, remoteID, retNum, status, reason string
 		var retDate time.Time
 		var total, net float64
+		var err error
 
-		retQuery := fmt.Sprintf(`
-			SELECT id::text, remote_id, return_number, return_date, total_amount, net_amount, status, COALESCE(reason, '')
-			FROM %s.returns
-			WHERE (id::text = $1 OR remote_id = $1 OR return_number = $1)
-			  AND pharmacy_code = $2
-			LIMIT 1
-		`, schema)
+		cleanNum := strings.TrimPrefix(returnID, "RET-")
+		prefixedNum := "RET-" + cleanNum
 
-		err := conn.QueryRow(ctx, retQuery, returnID, pharmaCode).Scan(
-			&id, &remoteID, &retNum, &retDate, &total, &net, &status, &reason,
-		)
-		if err != nil {
-			retQueryFallback := fmt.Sprintf(`
+		if isValidUUID(returnID) {
+			retQuery := fmt.Sprintf(`
 				SELECT id::text, remote_id, return_number, return_date, total_amount, net_amount, status, COALESCE(reason, '')
 				FROM %s.returns
-				WHERE (id::text = $1 OR remote_id = $1 OR return_number = $1)
+				WHERE id = $1::uuid
 				LIMIT 1
 			`, schema)
-			err = conn.QueryRow(ctx, retQueryFallback, returnID).Scan(
+			err = conn.QueryRow(ctx, retQuery, returnID).Scan(
+				&id, &remoteID, &retNum, &retDate, &total, &net, &status, &reason,
+			)
+		} else {
+			retQuery := fmt.Sprintf(`
+				SELECT id::text, remote_id, return_number, return_date, total_amount, net_amount, status, COALESCE(reason, '')
+				FROM %s.returns
+				WHERE (remote_id = $1 OR return_number = $1 OR return_number = $2 OR return_number = $3)
+				  AND pharmacy_code = $4
+				LIMIT 1
+			`, schema)
+			err = conn.QueryRow(ctx, retQuery, returnID, cleanNum, prefixedNum, pharmaCode).Scan(
 				&id, &remoteID, &retNum, &retDate, &total, &net, &status, &reason,
 			)
 			if err != nil {
-				return err
+				retQueryFallback := fmt.Sprintf(`
+					SELECT id::text, remote_id, return_number, return_date, total_amount, net_amount, status, COALESCE(reason, '')
+					FROM %s.returns
+					WHERE (remote_id = $1 OR return_number = $1 OR return_number = $2 OR return_number = $3)
+					LIMIT 1
+				`, schema)
+				err = conn.QueryRow(ctx, retQueryFallback, returnID, cleanNum, prefixedNum).Scan(
+					&id, &remoteID, &retNum, &retDate, &total, &net, &status, &reason,
+				)
 			}
+		}
+
+		if err != nil {
+			return err
 		}
 
 		retHeader = map[string]interface{}{
@@ -617,7 +661,7 @@ func (s *QueryService) GetReturnDetails(c *gin.Context) {
 				SELECT id::text, COALESCE(item_code, ''), COALESCE(item_name, 'صنف مرتجع'), 
 				       COALESCE(quantity::float8, 0), COALESCE(unit_price::float8, 0), COALESCE(discount_percent::float8, 0), COALESCE(total_price::float8, 0)
 				FROM %s.return_items
-				WHERE return_id::text = $1
+				WHERE return_id = $1::uuid
 				ORDER BY id ASC
 			`, schema)
 			rows, err := conn.Query(ctx, itemsQuery, id)

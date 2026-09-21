@@ -130,6 +130,10 @@ export default function WarehousePortalScreen({
   const [receipts, setReceipts] = useState<ReceiptItem[]>([]);
   const [statement, setStatement] = useState<StatementItem[]>([]);
 
+  // In-memory line items cache for sub-millisecond instant opening
+  const invoiceLinesCacheRef = useRef<Record<string, InvoiceLineItem[]>>({});
+  const returnLinesCacheRef = useRef<Record<string, InvoiceLineItem[]>>({});
+
   // Pagination & infinite scroll states
   const [loadingMore, setLoadingMore] = useState(false);
   const loadingMoreRef = useRef(false);
@@ -523,6 +527,8 @@ export default function WarehousePortalScreen({
 
   const onRefresh = async () => {
     setRefreshing(true);
+    invoiceLinesCacheRef.current = {};
+    returnLinesCacheRef.current = {};
     await checkAndSyncPharmacies();
     if (selectedInvoice) {
       const targetId = selectedInvoice.id || selectedInvoice.remote_id || selectedInvoice.invoice_number;
@@ -685,15 +691,24 @@ export default function WarehousePortalScreen({
 
   const handleInvoicePress = async (inv: InvoiceItem) => {
     setSelectedInvoice(inv);
-    setLoadingInvoiceLines(true);
     const targetId = inv.id || inv.remote_id || inv.invoice_number;
+
+    // Instant check from in-memory cache
+    if (invoiceLinesCacheRef.current[targetId] && invoiceLinesCacheRef.current[targetId].length > 0) {
+      setInvoiceLines(invoiceLinesCacheRef.current[targetId]);
+      setLoadingInvoiceLines(false);
+      return;
+    }
+
+    setLoadingInvoiceLines(true);
     try {
       const details = await fetchInvoiceDetails(currentToken, targetId);
       if (details.items && details.items.length > 0) {
+        invoiceLinesCacheRef.current[targetId] = details.items;
         setInvoiceLines(details.items);
       } else {
         // Fallback: create item from invoice if no line items found in DB
-        setInvoiceLines([
+        const fallbackItems: InvoiceLineItem[] = [
           {
             id: 'fallback-1',
             item_name: 'أدوية ومستلزمات عامة (فاتورة مسجلة)',
@@ -705,7 +720,9 @@ export default function WarehousePortalScreen({
                 : 0,
             total_price: inv.net_amount || inv.total_amount || 0,
           },
-        ]);
+        ];
+        invoiceLinesCacheRef.current[targetId] = fallbackItems;
+        setInvoiceLines(fallbackItems);
       }
     } catch (e) {
       console.error('Error fetching invoice lines:', e);
@@ -716,15 +733,24 @@ export default function WarehousePortalScreen({
 
   const handleReturnPress = async (ret: ReturnItem) => {
     setSelectedReturn(ret);
-    setLoadingReturnLines(true);
     const targetId = ret.id || ret.remote_id || ret.return_number || '';
+
+    // Instant check from in-memory cache
+    if (returnLinesCacheRef.current[targetId] && returnLinesCacheRef.current[targetId].length > 0) {
+      setReturnLines(returnLinesCacheRef.current[targetId]);
+      setLoadingReturnLines(false);
+      return;
+    }
+
+    setLoadingReturnLines(true);
     try {
       const details = await fetchReturnDetails(currentToken, targetId);
       if (details.items && details.items.length > 0) {
+        returnLinesCacheRef.current[targetId] = details.items;
         setReturnLines(details.items);
       } else {
         // Fallback: show the return entry item
-        setReturnLines([
+        const fallbackItems: InvoiceLineItem[] = [
           {
             id: 'ret-fb-1',
             item_name: ret.reason || 'أدوية ومستحضرات مرتجعة للمخزن',
@@ -733,7 +759,9 @@ export default function WarehousePortalScreen({
             discount_percent: 0,
             total_price: ret.net_amount || ret.total_amount || 0,
           },
-        ]);
+        ];
+        returnLinesCacheRef.current[targetId] = fallbackItems;
+        setReturnLines(fallbackItems);
       }
     } catch (e) {
       console.error('Error fetching return lines:', e);
@@ -924,6 +952,45 @@ export default function WarehousePortalScreen({
               })
             )}
           </ScrollView>
+
+          {/* Fixed Footer Summary for the Invoice */}
+          <View style={styles.invoiceFooterBar}>
+            <View style={styles.invoiceFooterRow}>
+              <View style={styles.invoiceFooterCol}>
+                <Text style={styles.invoiceFooterLabel}>الصافي</Text>
+                <Text style={[styles.invoiceFooterValue, { color: '#00B86B', fontWeight: '900' }]}>
+                  {formatCurrency(selectedInvoice.net_amount || selectedInvoice.total_amount)}
+                </Text>
+              </View>
+
+              {selectedInvoice.discount_amount && selectedInvoice.discount_amount > 0 ? (
+                <View style={styles.invoiceFooterCol}>
+                  <Text style={[styles.invoiceFooterLabel, { color: '#EF4444' }]}>الخصم</Text>
+                  <Text style={[styles.invoiceFooterValue, { color: '#EF4444' }]}>
+                    {formatCurrency(selectedInvoice.discount_amount)}
+                  </Text>
+                </View>
+              ) : null}
+
+              {selectedInvoice.discount_amount && selectedInvoice.discount_amount > 0 ? (
+                <View style={styles.invoiceFooterCol}>
+                  <Text style={styles.invoiceFooterLabel}>قبل الخصم</Text>
+                  <Text style={styles.invoiceFooterValue}>
+                    {formatCurrency(
+                      (selectedInvoice.net_amount || selectedInvoice.total_amount || 0) + selectedInvoice.discount_amount
+                    )}
+                  </Text>
+                </View>
+              ) : null}
+
+              <View style={styles.invoiceFooterCol}>
+                <Text style={styles.invoiceFooterLabel}>الأصناف</Text>
+                <Text style={[styles.invoiceFooterValue, { color: colors.primary }]}>
+                  {invoiceLines.length}
+                </Text>
+              </View>
+            </View>
+          </View>
 
           {/* Modal Info for Invoice Header */}
           <Modal
@@ -1125,6 +1192,25 @@ export default function WarehousePortalScreen({
               })
             )}
           </ScrollView>
+
+          {/* Fixed Footer Summary for the Return */}
+          <View style={styles.invoiceFooterBar}>
+            <View style={styles.invoiceFooterRow}>
+              <View style={styles.invoiceFooterCol}>
+                <Text style={styles.invoiceFooterLabel}>صافي المرتجع</Text>
+                <Text style={[styles.invoiceFooterValue, { color: '#F59E0B', fontWeight: '900' }]}>
+                  {formatCurrency(selectedReturn.net_amount || selectedReturn.total_amount)}
+                </Text>
+              </View>
+
+              <View style={styles.invoiceFooterCol}>
+                <Text style={styles.invoiceFooterLabel}>الأصناف</Text>
+                <Text style={[styles.invoiceFooterValue, { color: colors.primary }]}>
+                  {returnLines.length}
+                </Text>
+              </View>
+            </View>
+          </View>
 
           {/* Modal Info for Return Header */}
           <Modal
@@ -2241,6 +2327,40 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1E293B',
     textAlign: 'center',
+  },
+
+  // Bottom Summary Bar Styles
+  invoiceFooterBar: {
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 8,
+  },
+  invoiceFooterRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+  },
+  invoiceFooterCol: {
+    alignItems: 'center',
+    gap: 3,
+  },
+  invoiceFooterLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  invoiceFooterValue: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#1E293B',
   },
 
   // Modal styles
