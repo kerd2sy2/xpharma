@@ -159,22 +159,7 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 		emailClean,
 	).Scan(&existingDeviceID, &existingDeviceName, &existingPhone, &trialStartedAt, &subscriptionPlan)
 
-	isLegacyMigration := existingDeviceID != "" &&
-		strings.HasPrefix(existingDeviceID, "XPH-ANDROID-") &&
-		!strings.HasPrefix(existingDeviceID, "XPH-HW-") &&
-		existingDeviceName != "" &&
-		strings.EqualFold(strings.TrimSpace(existingDeviceName), strings.TrimSpace(incomingDeviceName))
 
-	if existingDeviceID != "" && existingDeviceID != incomingDeviceID && !isLegacyMigration {
-		c.JSON(http.StatusConflict, gin.H{
-			"success":           false,
-			"code":              "DEVICE_MISMATCH",
-			"error":             "نأسف لقد تم تسجيل الدخول بواسطة جوجل بجهاز آخر. يرجى تسجيل الخروج ثم تسجيل الدخول مرة أخرى.",
-			"registered_device": existingDeviceName,
-			"current_device":    incomingDeviceName,
-		})
-		return
-	}
 
 	role := "user"
 	superAdminEmail := os.Getenv("SUPER_ADMIN_EMAIL")
