@@ -13,7 +13,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, FontAwesome, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuth } from '@/context/AuthContext';
-import { PhoneLoginModal, Google2FAModal } from '@/features/auth';
+import { Google2FAModal } from '@/features/auth';
 import XLogo from '@/components/XLogo';
 
 const { width, height } = Dimensions.get('window');
@@ -22,7 +22,6 @@ export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const isDark = false;
   const { loginWithGoogle, loginWithApple, isAuthenticating, error, clearError } = useAuth();
-  const [showPhoneModal, setShowPhoneModal] = useState(false);
 
   const showGoogle = Platform.OS === 'android' || Platform.OS === 'web';
   const showApple = Platform.OS === 'ios';
@@ -143,32 +142,9 @@ export default function LoginScreen() {
               )}
             </TouchableOpacity>
           )}
-
-          {/* Phone Number / SMS OTP Login */}
-          <TouchableOpacity
-            style={[
-              styles.socialButton,
-              styles.phoneButton,
-              styles.shadow,
-            ]}
-            onPress={() => setShowPhoneModal(true)}
-            disabled={isAuthenticating}
-            activeOpacity={0.85}
-          >
-            <View style={styles.buttonIcon}>
-              <MaterialCommunityIcons name="cellphone-message" size={24} color="#3F0082" />
-            </View>
-            <Text style={[styles.socialButtonText, { color: '#3F0082' }]}>
-              تسجيل الدخول برقم الجوال (رمز SMS)
-            </Text>
-          </TouchableOpacity>
         </View>
       </View>
 
-      <PhoneLoginModal
-        visible={showPhoneModal}
-        onClose={() => setShowPhoneModal(false)}
-      />
       <Google2FAModal />
     </View>
   );
