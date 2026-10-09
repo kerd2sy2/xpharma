@@ -136,7 +136,7 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 
 	googleClientID := os.Getenv("GOOGLE_CLIENT_ID")
 	if googleClientID == "" {
-		googleClientID = "691858081100-sc5nk157i5vjejhr52pgm8kkh1ofore6.apps.googleusercontent.com"
+		googleClientID = "689660111938-7s2nne8stcvnqlff73h5jvm3q3oo0k97.apps.googleusercontent.com"
 	}
 
 	profile, err := VerifyGoogleToken(req.IDToken, googleClientID)
