@@ -79,3 +79,9 @@ export async function deleteUser(id: string | number) {
     method: 'DELETE'
   });
 }
+
+export async function resetUserDevice(id: string | number) {
+  return apiClient(`/users/${id}/reset-device`, {
+    method: 'POST'
+  });
+}

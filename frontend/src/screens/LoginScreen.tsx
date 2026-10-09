@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, FontAwesome, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuth } from '@/context/AuthContext';
 import { Google2FAModal } from '@/features/auth';
+import DeviceMismatchModal from '@/components/DeviceMismatchModal';
 import XLogo from '@/components/XLogo';
 
 const { width, height } = Dimensions.get('window');
@@ -21,7 +22,15 @@ const { width, height } = Dimensions.get('window');
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const isDark = false;
-  const { loginWithGoogle, loginWithApple, isAuthenticating, error, clearError } = useAuth();
+  const { 
+    loginWithGoogle, 
+    loginWithApple, 
+    isAuthenticating, 
+    error, 
+    clearError,
+    deviceMismatchInfo,
+    clearDeviceMismatch
+  } = useAuth();
 
   const showGoogle = Platform.OS === 'android' || Platform.OS === 'web';
   const showApple = Platform.OS === 'ios';
@@ -146,6 +155,15 @@ export default function LoginScreen() {
       </View>
 
       <Google2FAModal />
+
+      <DeviceMismatchModal
+        visible={!!deviceMismatchInfo?.isMismatch}
+        onClose={clearDeviceMismatch}
+        registeredDevice={deviceMismatchInfo?.registeredDevice}
+        currentDevice={deviceMismatchInfo?.currentDevice}
+        email={deviceMismatchInfo?.email}
+        errorMessage={deviceMismatchInfo?.error}
+      />
     </View>
   );
 }

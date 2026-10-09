@@ -50,18 +50,22 @@ export const columns: ColumnDef<User>[] = [
       const deviceName = row.original.device_name;
       const deviceId = row.original.device_id;
       return (
-        <div className='flex flex-col text-xs'>
-          {deviceName ? (
-            <div className='flex items-center gap-1 font-medium text-foreground'>
-              <IconDeviceMobile className='h-3.5 w-3.5 text-primary shrink-0' />
-              <span>{deviceName}</span>
-            </div>
+        <div className='flex flex-col text-xs gap-0.5'>
+          {deviceId ? (
+            <>
+              <div className='flex items-center gap-1 font-semibold text-foreground'>
+                <IconDeviceMobile className='h-3.5 w-3.5 text-emerald-600 shrink-0' />
+                <span className='truncate max-w-[160px]' title={deviceName || 'هاتف مسجل'}>
+                  {deviceName || 'هاتف أندرويد'}
+                </span>
+              </div>
+              <span className='font-mono text-[10px] text-muted-foreground truncate max-w-[150px]' title={deviceId}>
+                {deviceId}
+              </span>
+            </>
           ) : (
-            <span className='text-muted-foreground text-[11px]'>تطبيق الهاتف</span>
-          )}
-          {deviceId && (
-            <span className='font-mono text-[10px] text-muted-foreground truncate max-w-[120px]' title={deviceId}>
-              سيرية: {deviceId.slice(0, 14)}...
+            <span className='text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded text-[11px] w-fit'>
+              غير مرتبط (جاهز للربط)
             </span>
           )}
         </div>

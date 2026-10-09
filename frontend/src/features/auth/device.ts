@@ -70,13 +70,14 @@ export async function getUniqueDeviceId(): Promise<{ deviceId: string; deviceNam
 
     const hardwareId = computeHardwareFingerprint();
 
-    let deviceId = await SecureStore.getItemAsync(HARDWARE_DEVICE_ID_KEY);
-    if (!deviceId || !deviceId.startsWith('XPH-HW-')) {
-      deviceId = hardwareId;
-      await SecureStore.setItemAsync(HARDWARE_DEVICE_ID_KEY, deviceId);
+    // Cache in SecureStore as well
+    try {
+      await SecureStore.setItemAsync(HARDWARE_DEVICE_ID_KEY, hardwareId);
+    } catch (e) {
+      // SecureStore not available in web/fallback
     }
 
-    return { deviceId, deviceName };
+    return { deviceId: hardwareId, deviceName };
   } catch (e) {
     const fallbackId = computeHardwareFingerprint();
     return {

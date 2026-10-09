@@ -159,7 +159,16 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 		emailClean,
 	).Scan(&existingDeviceID, &existingDeviceName, &existingPhone, &trialStartedAt, &subscriptionPlan)
 
-
+	if existingDeviceID != "" && existingDeviceID != incomingDeviceID {
+		c.JSON(http.StatusConflict, gin.H{
+			"success":           false,
+			"code":              "DEVICE_MISMATCH",
+			"error":             "هذا الحساب مسجل ومفعل على هاتف آخر (" + existingDeviceName + "). لا يمكن فتح الحساب على أكثر من جهاز في نفس الوقت. يرجى التواصل مع الدعم الفني لإلغاء ربط الجهاز القديم أو تسجيل الدخول من جهازك المسجل.",
+			"registered_device": existingDeviceName,
+			"current_device":    incomingDeviceName,
+		})
+		return
+	}
 
 	role := "user"
 	superAdminEmail := os.Getenv("SUPER_ADMIN_EMAIL")

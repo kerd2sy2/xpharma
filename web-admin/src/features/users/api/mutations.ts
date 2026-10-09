@@ -1,6 +1,6 @@
 import { mutationOptions } from '@tanstack/react-query';
 import { getQueryClient } from '@/lib/query-client';
-import { createUser, updateUser, deleteUser } from './service';
+import { createUser, updateUser, deleteUser, resetUserDevice } from './service';
 import { userKeys } from './queries';
 import type { UserMutationPayload } from './types';
 
@@ -21,6 +21,13 @@ export const updateUserMutation = mutationOptions({
 
 export const deleteUserMutation = mutationOptions({
   mutationFn: (id: string | number) => deleteUser(id),
+  onSuccess: () => {
+    getQueryClient().invalidateQueries({ queryKey: userKeys.all });
+  }
+});
+
+export const resetUserDeviceMutation = mutationOptions({
+  mutationFn: (id: string | number) => resetUserDevice(id),
   onSuccess: () => {
     getQueryClient().invalidateQueries({ queryKey: userKeys.all });
   }
