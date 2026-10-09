@@ -87,9 +87,9 @@ export default function Google2FAModal() {
     }
   }
 
-  async function handleVerifySetupOtp() {
+  async function handleVerifySetupOtp(codeToUse?: string) {
     setErrorMessage(null);
-    const cleanCode = otpCode.trim();
+    const cleanCode = (codeToUse || otpCode).trim();
     if (cleanCode.length < 4) {
       setErrorMessage('يرجى إدخال رمز التحقق المكون من 6 أرقام');
       return;
@@ -102,9 +102,9 @@ export default function Google2FAModal() {
     }
   }
 
-  async function handleVerifyReturningOtp() {
+  async function handleVerifyReturningOtp(codeToUse?: string) {
     setErrorMessage(null);
-    const cleanCode = otpCode.trim();
+    const cleanCode = (codeToUse || otpCode).trim();
     if (cleanCode.length < 4) {
       setErrorMessage('يرجى إدخال رمز التحقق المكون من 6 أرقام');
       return;
@@ -277,10 +277,16 @@ export default function Google2FAModal() {
                         placeholder="• • • • • •"
                         placeholderTextColor="#A396B8"
                         keyboardType="number-pad"
+                        textContentType="oneTimeCode"
+                        autoComplete="sms-otp"
+                        importantForAutofill="yes"
                         value={otpCode}
                         onChangeText={(t) => {
                           setOtpCode(t);
                           if (errorMessage) setErrorMessage(null);
+                          if (t.trim().length === 6) {
+                            handleVerifySetupOtp(t.trim());
+                          }
                         }}
                         autoFocus={true}
                         maxLength={6}
@@ -290,7 +296,7 @@ export default function Google2FAModal() {
                     {/* Verify Button */}
                     <TouchableOpacity
                       style={[styles.primaryButton, isAuthenticating && styles.buttonDisabled]}
-                      onPress={handleVerifySetupOtp}
+                      onPress={() => handleVerifySetupOtp()}
                       disabled={isAuthenticating}
                       activeOpacity={0.85}
                     >
@@ -351,10 +357,16 @@ export default function Google2FAModal() {
                       placeholder="• • • • • •"
                       placeholderTextColor="#A396B8"
                       keyboardType="number-pad"
+                      textContentType="oneTimeCode"
+                      autoComplete="sms-otp"
+                      importantForAutofill="yes"
                       value={otpCode}
                       onChangeText={(t) => {
                         setOtpCode(t);
                         if (errorMessage) setErrorMessage(null);
+                        if (t.trim().length === 6) {
+                          handleVerifyReturningOtp(t.trim());
+                        }
                       }}
                       autoFocus={true}
                       maxLength={6}
@@ -364,7 +376,7 @@ export default function Google2FAModal() {
                   {/* Verify Button */}
                   <TouchableOpacity
                     style={[styles.primaryButton, isAuthenticating && styles.buttonDisabled]}
-                    onPress={handleVerifyReturningOtp}
+                    onPress={() => handleVerifyReturningOtp()}
                     disabled={isAuthenticating}
                     activeOpacity={0.85}
                   >

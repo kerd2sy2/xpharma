@@ -74,9 +74,9 @@ export default function PhoneLoginModal({ visible, onClose }: PhoneLoginModalPro
     }
   }
 
-  async function handleVerifyOtp() {
+  async function handleVerifyOtp(codeToUse?: string) {
     setErrorMessage(null);
-    const cleanCode = otpCode.trim();
+    const cleanCode = (codeToUse || otpCode).trim();
     if (cleanCode.length < 4) {
       setErrorMessage('يرجى إدخال رمز التحقق المكون من الأرقام المستلمة');
       return;
@@ -227,10 +227,16 @@ export default function PhoneLoginModal({ visible, onClose }: PhoneLoginModalPro
                       placeholder="• • • • • •"
                       placeholderTextColor="#A396B8"
                       keyboardType="number-pad"
+                      textContentType="oneTimeCode"
+                      autoComplete="sms-otp"
+                      importantForAutofill="yes"
                       value={otpCode}
                       onChangeText={(t) => {
                         setOtpCode(t);
                         if (errorMessage) setErrorMessage(null);
+                        if (t.trim().length === 6) {
+                          handleVerifyOtp(t.trim());
+                        }
                       }}
                       autoFocus={true}
                       maxLength={6}
@@ -240,7 +246,7 @@ export default function PhoneLoginModal({ visible, onClose }: PhoneLoginModalPro
                   {/* Verify Button */}
                   <TouchableOpacity
                     style={[styles.primaryButton, isAuthenticating && styles.buttonDisabled]}
-                    onPress={handleVerifyOtp}
+                    onPress={() => handleVerifyOtp()}
                     disabled={isAuthenticating}
                     activeOpacity={0.85}
                   >
