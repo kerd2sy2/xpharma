@@ -3,6 +3,10 @@ import {
   AuthResponse, 
   checkDeviceSession,
   getSavedSession, 
+  googleResendOtp,
+  googleSendPhoneOtp,
+  googleVerifyOtp,
+  googleVerifyPhoneOtp,
   initGoogleSignIn, 
   SendOtpResponse,
   sendPhoneOtp,
@@ -21,6 +25,14 @@ export interface DeviceMismatchInfo {
   error?: string;
 }
 
+export interface Google2FAState {
+  requiresPhone?: boolean;
+  requiresOtp?: boolean;
+  verificationTicket: string;
+  phoneMasked?: string;
+  message?: string;
+}
+
 interface AuthContextType {
   user: UserProfile | null;
   token: string | null;
@@ -28,10 +40,16 @@ interface AuthContextType {
   isAuthenticating: boolean;
   error: string | null;
   deviceMismatchInfo: DeviceMismatchInfo | null;
+  google2FAState: Google2FAState | null;
   loginWithGoogle: () => Promise<boolean>;
   loginWithApple: () => Promise<boolean>;
   requestOtp: (phone: string) => Promise<SendOtpResponse>;
   loginWithPhoneOtp: (phone: string, otp: string) => Promise<boolean>;
+  sendGooglePhoneOtp: (phone: string) => Promise<{ success: boolean; error?: string }>;
+  verifyGooglePhoneOtp: (phone: string, otp: string) => Promise<boolean>;
+  verifyGoogleOtp: (otp: string) => Promise<boolean>;
+  resendGoogleOtp: () => Promise<{ success: boolean; error?: string }>;
+  cancelGoogle2FA: () => void;
   logout: () => Promise<void>;
   clearError: () => void;
   clearDeviceMismatch: () => void;
@@ -47,6 +65,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deviceMismatchInfo, setDeviceMismatchInfo] = useState<DeviceMismatchInfo | null>(null);
+  const [google2FAState, setGoogle2FAState] = useState<Google2FAState | null>(null);
 
   useEffect(() => {
     initGoogleSignIn();
@@ -122,7 +141,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         email: requestedEmail || result.user?.email,
         error: result.error,
       });
-      setError(result.error || 'هذا الحساب مسجل على هاتف آخر');
+      setError(result.error || 'نأسف لقد تم تسجيل الدخول بواسطة جوجل بجهاز آخر. يرجى تسجيل الخروج ثم تسجيل الدخول مرة أخرى.');
       return false;
     }
 
@@ -131,6 +150,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setToken(result.token);
       setError(null);
       setDeviceMismatchInfo(null);
+      setGoogle2FAState(null);
       return true;
     } else {
       setError(result.error || 'فشل تسجيل الدخول');
@@ -143,9 +163,158 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setError(null);
     try {
       const res = await signInWithGoogle();
+      if (res.code === 'DEVICE_MISMATCH' || (!res.success && res.registeredDevice)) {
+        setDeviceMismatchInfo({
+          isMismatch: true,
+          registeredDevice: res.registeredDevice,
+          currentDevice: res.currentDevice,
+          email: res.user?.email,
+          error: res.error,
+        });
+        setError(res.error || 'نأسف لقد تم تسجيل الدخول بواسطة جوجل بجهاز آخر. يرجى تسجيل الخروج ثم تسجيل الدخول مرة أخرى.');
+        return false;
+      }
+
+      if (res.requires_phone && res.verification_ticket) {
+        setGoogle2FAState({
+          requiresPhone: true,
+          verificationTicket: res.verification_ticket,
+          message: res.message,
+        });
+        return false;
+      }
+
+      if (res.requires_otp && res.verification_ticket) {
+        setGoogle2FAState({
+          requiresOtp: true,
+          verificationTicket: res.verification_ticket,
+          phoneMasked: res.phone_masked,
+          message: res.message,
+        });
+        return false;
+      }
+
       return await handleLoginResult(res);
+    } catch (err: any) {
+      setError(err?.message || 'حدث خطأ أثناء تسجيل الدخول بواسطة Google');
+      return false;
     } finally {
       setIsAuthenticating(false);
+    }
+  }
+
+  function cancelGoogle2FA() {
+    setGoogle2FAState(null);
+  }
+
+  async function sendGooglePhoneOtp(phone: string): Promise<{ success: boolean; error?: string }> {
+    if (!google2FAState?.verificationTicket) {
+      return { success: false, error: 'انتهت صلاحية جلسة التحقق، يرجى إعادة تسجيل الدخول' };
+    }
+    setIsAuthenticating(true);
+    try {
+      const res = await googleSendPhoneOtp(google2FAState.verificationTicket, phone);
+      if (!res.success) {
+        return { success: false, error: res.error || 'فشل إرسال رمز التحقق' };
+      }
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message || 'فشل إرسال رمز التحقق' };
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }
+
+  async function verifyGooglePhoneOtp(phone: string, otp: string): Promise<boolean> {
+    if (!google2FAState?.verificationTicket) {
+      setError('انتهت صلاحية جلسة التحقق، يرجى إعادة تسجيل الدخول');
+      return false;
+    }
+    setIsAuthenticating(true);
+    try {
+      const res = await googleVerifyPhoneOtp(google2FAState.verificationTicket, phone, otp);
+      if (res.code === 'DEVICE_MISMATCH' || (!res.success && res.registeredDevice)) {
+        setDeviceMismatchInfo({
+          isMismatch: true,
+          registeredDevice: res.registeredDevice,
+          currentDevice: res.currentDevice,
+          email: res.user?.email,
+          error: res.error,
+        });
+        setError(res.error || 'نأسف لقد تم تسجيل الدخول بواسطة جوجل بجهاز آخر. يرجى تسجيل الخروج ثم تسجيل الدخول مرة أخرى.');
+        setGoogle2FAState(null);
+        return false;
+      }
+
+      if (res.success && res.user && res.token) {
+        setUser(res.user);
+        setToken(res.token);
+        setError(null);
+        setDeviceMismatchInfo(null);
+        setGoogle2FAState(null);
+        return true;
+      }
+      setError(res.error || 'رمز التحقق غير صحيح أو انتهت صلاحيته');
+      return false;
+    } catch (e: any) {
+      setError(e?.message || 'فشل التحقق من رمز التحقق');
+      return false;
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }
+
+  async function verifyGoogleOtp(otp: string): Promise<boolean> {
+    if (!google2FAState?.verificationTicket) {
+      setError('انتهت صلاحية جلسة التحقق، يرجى إعادة تسجيل الدخول');
+      return false;
+    }
+    setIsAuthenticating(true);
+    try {
+      const res = await googleVerifyOtp(google2FAState.verificationTicket, otp);
+      if (res.code === 'DEVICE_MISMATCH' || (!res.success && res.registeredDevice)) {
+        setDeviceMismatchInfo({
+          isMismatch: true,
+          registeredDevice: res.registeredDevice,
+          currentDevice: res.currentDevice,
+          email: res.user?.email,
+          error: res.error,
+        });
+        setError(res.error || 'نأسف لقد تم تسجيل الدخول بواسطة جوجل بجهاز آخر. يرجى تسجيل الخروج ثم تسجيل الدخول مرة أخرى.');
+        setGoogle2FAState(null);
+        return false;
+      }
+
+      if (res.success && res.user && res.token) {
+        setUser(res.user);
+        setToken(res.token);
+        setError(null);
+        setDeviceMismatchInfo(null);
+        setGoogle2FAState(null);
+        return true;
+      }
+      setError(res.error || 'رمز التحقق غير صحيح أو انتهت صلاحيته');
+      return false;
+    } catch (e: any) {
+      setError(e?.message || 'فشل التحقق من رمز التحقق');
+      return false;
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }
+
+  async function resendGoogleOtp(): Promise<{ success: boolean; error?: string }> {
+    if (!google2FAState?.verificationTicket) {
+      return { success: false, error: 'انتهت صلاحية جلسة التحقق' };
+    }
+    try {
+      const res = await googleResendOtp(google2FAState.verificationTicket);
+      if (!res.success) {
+        return { success: false, error: res.error || 'فشل إعادة إرسال رمز التحقق' };
+      }
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message || 'فشل إعادة الإرسال' };
     }
   }
 
@@ -193,6 +362,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setToken(null);
       setError(null);
       setDeviceMismatchInfo(null);
+      setGoogle2FAState(null);
     } finally {
       setIsLoading(false);
     }
@@ -215,10 +385,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isAuthenticating,
         error,
         deviceMismatchInfo,
+        google2FAState,
         loginWithGoogle,
         loginWithApple,
         requestOtp,
         loginWithPhoneOtp,
+        sendGooglePhoneOtp,
+        verifyGooglePhoneOtp,
+        verifyGoogleOtp,
+        resendGoogleOtp,
+        cancelGoogle2FA,
         logout,
         clearError,
         clearDeviceMismatch,
@@ -236,4 +412,3 @@ export function useAuth(): AuthContextType {
   }
   return context;
 }
-

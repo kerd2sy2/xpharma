@@ -30,6 +30,11 @@ export interface AuthResponse {
   trialDaysLeft?: number;
   isTrialExpired?: boolean;
   subscriptionPlan?: number;
+  requires_phone?: boolean;
+  requires_otp?: boolean;
+  verification_ticket?: string;
+  phone_masked?: string;
+  message?: string;
 }
 
 export interface DeviceCheckResult {

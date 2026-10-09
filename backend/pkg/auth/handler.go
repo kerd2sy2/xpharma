@@ -149,15 +149,15 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 	incomingDeviceID := strings.TrimSpace(req.DeviceID)
 	incomingDeviceName := strings.TrimSpace(req.DeviceName)
 
-	var existingDeviceID, existingDeviceName string
+	var existingDeviceID, existingDeviceName, existingPhone string
 	var trialStartedAt time.Time
 	var subscriptionPlan int
 	_ = h.router.Pool().QueryRow(
 		c.Request.Context(),
-		`SELECT COALESCE(device_id, ''), COALESCE(device_name, ''), COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0)
+		`SELECT COALESCE(device_id, ''), COALESCE(device_name, ''), COALESCE(phone, ''), COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0)
 		 FROM public.users WHERE email = $1 LIMIT 1`,
 		emailClean,
-	).Scan(&existingDeviceID, &existingDeviceName, &trialStartedAt, &subscriptionPlan)
+	).Scan(&existingDeviceID, &existingDeviceName, &existingPhone, &trialStartedAt, &subscriptionPlan)
 
 	isLegacyMigration := existingDeviceID != "" &&
 		strings.HasPrefix(existingDeviceID, "XPH-ANDROID-") &&
@@ -169,8 +169,9 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{
 			"success":           false,
 			"code":              "DEVICE_MISMATCH",
-			"error":             "هذا الحساب مسجل ومفعل بالفعل على هاتف آخر. لا يمكن فتح الحساب على أكثر من جهاز في نفس الوقت. تواصل مع الدعم الفني إذا كان هاتفك القديم به مشكلة وترغب في نقل الحساب إلى جهازك الجديد.",
+			"error":             "نأسف لقد تم تسجيل الدخول بواسطة جوجل بجهاز آخر. يرجى تسجيل الخروج ثم تسجيل الدخول مرة أخرى.",
 			"registered_device": existingDeviceName,
+			"current_device":    incomingDeviceName,
 		})
 		return
 	}
@@ -202,17 +203,6 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 			avatar_url = EXCLUDED.avatar_url,
 			email_verified = EXCLUDED.email_verified,
 			raw_profile = EXCLUDED.raw_profile,
-			device_id = CASE 
-				WHEN public.users.device_id IS NULL OR public.users.device_id = '' THEN EXCLUDED.device_id
-				WHEN public.users.device_id LIKE 'XPH-ANDROID-%' AND NOT public.users.device_id LIKE 'XPH-HW-%' AND LOWER(TRIM(COALESCE(public.users.device_name, ''))) = LOWER(TRIM(COALESCE(EXCLUDED.device_name, ''))) THEN EXCLUDED.device_id
-				ELSE public.users.device_id 
-			END,
-			device_name = CASE 
-				WHEN public.users.device_name IS NULL OR public.users.device_name = '' THEN EXCLUDED.device_name
-				WHEN public.users.device_id LIKE 'XPH-ANDROID-%' AND NOT public.users.device_id LIKE 'XPH-HW-%' AND LOWER(TRIM(COALESCE(public.users.device_name, ''))) = LOWER(TRIM(COALESCE(EXCLUDED.device_name, ''))) THEN EXCLUDED.device_name
-				ELSE public.users.device_name 
-			END,
-			last_login_at = NOW(),
 			updated_at = NOW()
 		RETURNING id, role, is_active, COALESCE(device_id, ''), COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0);
 	`
@@ -242,16 +232,75 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 		return
 	}
 
-	if (existingDeviceID == "" || isLegacyMigration) && incomingDeviceID != "" {
-		_, _ = h.router.Pool().Exec(
-			c.Request.Context(),
-			`UPDATE public.users SET device_id = $1, device_name = $2, updated_at = NOW() WHERE email = $3`,
-			incomingDeviceID, incomingDeviceName, emailClean,
-		)
-		existingDeviceID = incomingDeviceID
+	// -------------------------------------------------------------
+	// 2-Factor Authentication (OTP via SMS) Enforcement
+	// -------------------------------------------------------------
+	// Case 1: First-time Google user (No registered phone number)
+	if existingPhone == "" {
+		ticket, err := h.tokenService.GenerateTicket(emailClean, profile.Sub, incomingDeviceID, incomingDeviceName, "setup_phone")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل إنشاء رمز التحقق"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"success":             true,
+			"requires_phone":      true,
+			"verification_ticket": ticket,
+			"email":               emailClean,
+			"name":                profile.Name,
+			"message":             "يرجى إدخال رقم الهاتف لاستلام رمز التحقق لمرة واحدة (SMS)",
+		})
+		return
 	}
 
-	// Ensure 30-day free trial subscription (1 pharmacy, 0 EGP) is automatically activated for new users
+	// Case 2: Returning user with registered phone - Send OTP automatically via SMS
+	ticket, err := h.tokenService.GenerateTicket(emailClean, profile.Sub, incomingDeviceID, incomingDeviceName, "verify_otp")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل إنشاء رمز التحقق"})
+		return
+	}
+
+	sendErr := h.otpService.SendOTP(c.Request.Context(), existingPhone)
+	if sendErr != nil {
+		log.Printf("[Google 2FA] Warning: Failed to send OTP to %s: %v", existingPhone, sendErr)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":             true,
+		"requires_otp":        true,
+		"phone_masked":        MaskPhone(existingPhone),
+		"verification_ticket": ticket,
+		"email":               emailClean,
+		"name":                profile.Name,
+		"message":             "تم إرسال رمز التحقق إلى رقم هاتفك المسجل لتأكيد الدخول",
+	})
+}
+
+// issueUserSession sets up trial subscription and issues production JWT token
+func (h *AuthHandler) issueUserSession(c *gin.Context, emailClean, incomingDeviceID, incomingDeviceName string) {
+	var dbUserID, dbRole, dbName, dbAvatar, dbPhone string
+	var trialStartedAt time.Time
+	var subscriptionPlan int
+	var isActive bool = true
+
+	err := h.router.Pool().QueryRow(
+		c.Request.Context(),
+		`SELECT id, role, is_active, COALESCE(name, ''), COALESCE(avatar_url, ''), COALESCE(phone, ''), COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0)
+		 FROM public.users WHERE email = $1 LIMIT 1`,
+		emailClean,
+	).Scan(&dbUserID, &dbRole, &isActive, &dbName, &dbAvatar, &dbPhone, &trialStartedAt, &subscriptionPlan)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل العثور على بيانات المستخدم"})
+		return
+	}
+
+	if !isActive {
+		c.JSON(http.StatusForbidden, gin.H{"error": "تم تعطيل هذا الحساب. يرجى مراجعة إدارة المنصة"})
+		return
+	}
+
+	// Ensure 30-day free trial subscription (1 pharmacy, 0 EGP) is automatically activated
 	_, _ = h.router.Pool().Exec(
 		c.Request.Context(),
 		`INSERT INTO public.subscriptions (
@@ -275,7 +324,7 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 		WHERE NOT EXISTS (
 			SELECT 1 FROM public.subscriptions WHERE LOWER(TRIM(user_email)) = LOWER(TRIM($1))
 		)`,
-		emailClean, profile.Name, incomingDeviceName,
+		emailClean, dbName, dbPhone,
 	)
 
 	// Ensure users table is synchronized with trial plan (1 pharmacy)
@@ -295,13 +344,13 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 	var pharmacyID, tenantID, pharmaCode string
 	_ = h.router.Pool().QueryRow(
 		c.Request.Context(),
-		`SELECT id, tenant_id, code FROM public.pharmacies WHERE linked_user_id = $1 OR linked_user_id = $2 LIMIT 1`,
-		dbUserID, profile.Sub,
+		`SELECT id, tenant_id, code FROM public.pharmacies WHERE linked_user_id = $1 LIMIT 1`,
+		dbUserID,
 	).Scan(&pharmacyID, &tenantID, &pharmaCode)
 
 	token, err := h.tokenService.GenerateToken(Claims{
 		UserID:     dbUserID,
-		Email:      profile.Email,
+		Email:      emailClean,
 		Role:       dbRole,
 		TenantID:   tenantID,
 		PharmacyID: pharmacyID,
@@ -318,23 +367,217 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 		"trial_days_left":   trialDaysLeft,
 		"is_trial_expired":  isTrialExpired,
 		"subscription_plan": subPlan,
-		"device_id":         existingDeviceID,
+		"device_id":         incomingDeviceID,
 		"user": gin.H{
 			"id":                dbUserID,
-			"email":             profile.Email,
-			"name":              profile.Name,
-			"photo":             profile.Picture,
+			"email":             emailClean,
+			"phone":             dbPhone,
+			"name":              dbName,
+			"photo":             dbAvatar,
 			"role":              dbRole,
 			"provider":          "google",
 			"tenant_id":         tenantID,
 			"pharmacy_id":       pharmacyID,
-			"device_id":         existingDeviceID,
+			"device_id":         incomingDeviceID,
 			"trial_days_left":   trialDaysLeft,
 			"is_trial_expired":  isTrialExpired,
 			"subscription_plan": subPlan,
 		},
-		"profile": profile,
-		"role":    dbRole,
+		"role": dbRole,
+	})
+}
+
+// GoogleSendPhoneOTP sends OTP to phone number entered by first-time Google user
+func (h *AuthHandler) GoogleSendPhoneOTP(c *gin.Context) {
+	var req struct {
+		VerificationTicket string `json:"verification_ticket" binding:"required"`
+		Phone              string `json:"phone" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "البيانات غير مكتملة"})
+		return
+	}
+
+	_, err := h.tokenService.VerifyTicket(req.VerificationTicket)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "انتهت صلاحية الجلسة، يرجى إعادة تسجيل الدخول بحساب Google"})
+		return
+	}
+
+	phoneClean := NormalizePhone(req.Phone)
+	if len(phoneClean) < 9 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "رقم الهاتف غير صالح"})
+		return
+	}
+
+	err = h.otpService.SendOTP(c.Request.Context(), phoneClean)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "تم إرسال رمز التحقق بنجاح إلى " + phoneClean,
+	})
+}
+
+// GoogleVerifyPhoneOTP verifies OTP for first-time user and binds phone to account
+func (h *AuthHandler) GoogleVerifyPhoneOTP(c *gin.Context) {
+	var req struct {
+		VerificationTicket string `json:"verification_ticket" binding:"required"`
+		Phone              string `json:"phone" binding:"required"`
+		OTP                string `json:"otp" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "البيانات غير مكتملة"})
+		return
+	}
+
+	claims, err := h.tokenService.VerifyTicket(req.VerificationTicket)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "انتهت صلاحية الجلسة، يرجى إعادة تسجيل الدخول بحساب Google"})
+		return
+	}
+
+	phoneClean := NormalizePhone(req.Phone)
+	verified, err := h.otpService.VerifyOTP(c.Request.Context(), phoneClean, req.OTP)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "فشل التحقق من رمز التحقق: " + err.Error()})
+		return
+	}
+	if !verified {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "رمز التحقق غير صحيح أو انتهت صلاحيته"})
+		return
+	}
+
+	// Link phone number and bind this device to user
+	_, err = h.router.Pool().Exec(
+		c.Request.Context(),
+		`UPDATE public.users 
+		 SET phone = $1, device_id = $2, device_name = $3, last_login_at = NOW(), updated_at = NOW() 
+		 WHERE email = $4`,
+		phoneClean, claims.DeviceID, claims.DeviceName, claims.Email,
+	)
+
+	// Issue full session
+	h.issueUserSession(c, claims.Email, claims.DeviceID, claims.DeviceName)
+}
+
+// GoogleVerifyOTP verifies OTP for returning user and issues session
+func (h *AuthHandler) GoogleVerifyOTP(c *gin.Context) {
+	var req struct {
+		VerificationTicket string `json:"verification_ticket" binding:"required"`
+		OTP                string `json:"otp" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "البيانات غير مكتملة"})
+		return
+	}
+
+	claims, err := h.tokenService.VerifyTicket(req.VerificationTicket)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "انتهت صلاحية الجلسة، يرجى إعادة تسجيل الدخول بحساب Google"})
+		return
+	}
+
+	var userPhone string
+	err = h.router.Pool().QueryRow(
+		c.Request.Context(),
+		`SELECT COALESCE(phone, '') FROM public.users WHERE email = $1 LIMIT 1`,
+		claims.Email,
+	).Scan(&userPhone)
+	if err != nil || userPhone == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "لم يتم العثور على رقم هاتف مسجل لهذا الحساب"})
+		return
+	}
+
+	verified, err := h.otpService.VerifyOTP(c.Request.Context(), userPhone, req.OTP)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "فشل التحقق من رمز التحقق: " + err.Error()})
+		return
+	}
+	if !verified {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "رمز التحقق غير صحيح أو انتهت صلاحيته"})
+		return
+	}
+
+	// Update device binding and last login
+	_, _ = h.router.Pool().Exec(
+		c.Request.Context(),
+		`UPDATE public.users 
+		 SET device_id = $1, device_name = $2, last_login_at = NOW(), updated_at = NOW() 
+		 WHERE email = $3`,
+		claims.DeviceID, claims.DeviceName, claims.Email,
+	)
+
+	// Issue full session
+	h.issueUserSession(c, claims.Email, claims.DeviceID, claims.DeviceName)
+}
+
+// GoogleResendOTP resends OTP to registered phone number for returning user
+func (h *AuthHandler) GoogleResendOTP(c *gin.Context) {
+	var req struct {
+		VerificationTicket string `json:"verification_ticket" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "البيانات غير مكتملة"})
+		return
+	}
+
+	claims, err := h.tokenService.VerifyTicket(req.VerificationTicket)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "انتهت صلاحية الجلسة، يرجى إعادة تسجيل الدخول بحساب Google"})
+		return
+	}
+
+	var userPhone string
+	err = h.router.Pool().QueryRow(
+		c.Request.Context(),
+		`SELECT COALESCE(phone, '') FROM public.users WHERE email = $1 LIMIT 1`,
+		claims.Email,
+	).Scan(&userPhone)
+	if err != nil || userPhone == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "لم يتم العثور على رقم هاتف مسجل"})
+		return
+	}
+
+	err = h.otpService.SendOTP(c.Request.Context(), userPhone)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "تمت إعادة إرسال رمز التحقق بنجاح"})
+}
+
+// Logout clears the device binding in database so another device can log in cleanly
+func (h *AuthHandler) Logout(c *gin.Context) {
+	var req struct {
+		Email string `json:"email"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	cleanEmail := strings.ToLower(strings.TrimSpace(req.Email))
+	if cleanEmail == "" {
+		if claimsVal, exists := c.Get("claims"); exists {
+			if claims, ok := claimsVal.(*Claims); ok {
+				cleanEmail = strings.ToLower(strings.TrimSpace(claims.Email))
+			}
+		}
+	}
+
+	if cleanEmail != "" {
+		_, _ = h.router.Pool().Exec(
+			c.Request.Context(),
+			`UPDATE public.users SET device_id = NULL, device_name = NULL, updated_at = NOW() WHERE email = $1`,
+			cleanEmail,
+		)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "تم تسجيل الخروج وفك ربط الجهاز بنجاح",
 	})
 }
 
@@ -569,7 +812,7 @@ func (h *AuthHandler) CheckDevice(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{
 			"success":           false,
 			"code":              "DEVICE_MISMATCH",
-			"error":             "هذا الحساب مسجل ومفعل بالفعل على هاتف آخر. لا يمكن فتح الحساب على أكثر من جهاز في نفس الوقت. تواصل مع الدعم الفني إذا كان هاتفك القديم به مشكلة وترغب في نقل الحساب إلى جهازك الجديد.",
+			"error":             "نأسف لقد تم تسجيل الدخول بواسطة جوجل بجهاز آخر. يرجى تسجيل الخروج ثم تسجيل الدخول مرة أخرى.",
 			"registered_device": existingDeviceName,
 		})
 		return

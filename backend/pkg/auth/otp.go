@@ -71,6 +71,20 @@ func NormalizePhone(phone string) string {
 	return "+" + cleaned
 }
 
+// MaskPhone masks phone numbers for display, e.g. +966 5****1234
+func MaskPhone(phone string) string {
+	cleaned := strings.TrimSpace(phone)
+	if len(cleaned) <= 6 {
+		return cleaned
+	}
+	prefix := cleaned[:len(cleaned)-4]
+	suffix := cleaned[len(cleaned)-4:]
+	if len(prefix) >= 5 {
+		return prefix[:5] + "****" + suffix
+	}
+	return prefix + "****" + suffix
+}
+
 type AuthenticaSendReq struct {
 	Method string `json:"method"`
 	Phone  string `json:"phone"`

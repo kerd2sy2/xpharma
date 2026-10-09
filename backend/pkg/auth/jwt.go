@@ -59,6 +59,48 @@ func (s *TokenService) VerifyToken(tokenString string) (*Claims, error) {
 	return nil, errors.New("invalid token")
 }
 
+type TicketClaims struct {
+	Email      string `json:"email"`
+	GoogleSub  string `json:"google_sub,omitempty"`
+	DeviceID   string `json:"device_id"`
+	DeviceName string `json:"device_name"`
+	Action     string `json:"action"` // "setup_phone" or "verify_otp"
+	jwt.RegisteredClaims
+}
+
+func (s *TokenService) GenerateTicket(email, sub, deviceID, deviceName, action string) (string, error) {
+	claims := TicketClaims{
+		Email:      email,
+		GoogleSub:  sub,
+		DeviceID:   deviceID,
+		DeviceName: deviceName,
+		Action:     action,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "xpharma-otp-ticket",
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(s.secretKey)
+}
+
+func (s *TokenService) VerifyTicket(ticketStr string) (*TicketClaims, error) {
+	token, err := jwt.ParseWithClaims(ticketStr, &TicketClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return s.secretKey, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if claims, ok := token.Claims.(*TicketClaims); ok && token.Valid {
+		return claims, nil
+	}
+	return nil, errors.New("invalid or expired verification ticket")
+}
+
 func (s *TokenService) AuthMiddleware(requiredRoles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")

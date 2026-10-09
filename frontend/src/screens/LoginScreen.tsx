@@ -13,7 +13,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, FontAwesome, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuth } from '@/context/AuthContext';
-import { PhoneLoginModal } from '@/features/auth';
+import { PhoneLoginModal, Google2FAModal } from '@/features/auth';
 import XLogo from '@/components/XLogo';
 
 const { width, height } = Dimensions.get('window');
@@ -169,6 +169,7 @@ export default function LoginScreen() {
         visible={showPhoneModal}
         onClose={() => setShowPhoneModal(false)}
       />
+      <Google2FAModal />
     </View>
   );
 }

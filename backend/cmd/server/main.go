@@ -42,6 +42,13 @@ func main() {
 	}
 	defer router.Close()
 
+	// Ensure schema updates (0013: phone / otp provider support)
+	_, _ = router.Pool().Exec(context.Background(), `
+		ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_provider_check;
+		ALTER TABLE public.users ADD CONSTRAINT users_provider_check CHECK (provider IN ('google', 'apple', 'email', 'phone', 'otp'));
+		CREATE INDEX IF NOT EXISTS idx_users_phone ON public.users (phone);
+	`)
+
 	broker := queue.NewResilientBroker()
 	defer broker.Close()
 
@@ -114,6 +121,11 @@ func main() {
 		authGroup.POST("/verify-pharmacy", warehouseService.VerifyPharmacy)
 		authGroup.POST("/link-pharmacy", warehouseService.LinkPharmacy)
 		authGroup.POST("/google", authHandler.GoogleLogin)
+		authGroup.POST("/google/send-phone-otp", authHandler.GoogleSendPhoneOTP)
+		authGroup.POST("/google/verify-phone-otp", authHandler.GoogleVerifyPhoneOTP)
+		authGroup.POST("/google/verify-otp", authHandler.GoogleVerifyOTP)
+		authGroup.POST("/google/resend-otp", authHandler.GoogleResendOTP)
+		authGroup.POST("/logout", authHandler.Logout)
 		authGroup.POST("/apple", authHandler.AppleLogin)
 		authGroup.POST("/check-device", authHandler.CheckDevice)
 		authGroup.POST("/reset-device", authHandler.ResetDevice)

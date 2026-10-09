@@ -78,9 +78,28 @@ export async function signInWithGoogle(): Promise<AuthResponse> {
         return {
           success: false,
           code: 'DEVICE_MISMATCH',
-          error: resData.error || 'هذا الحساب مسجل ومفعل بالفعل على هاتف آخر. لا يمكن فتح الحساب على أكثر من جهاز في نفس الوقت.',
+          error: resData.error || 'نأسف لقد تم تسجيل الدخول بواسطة جوجل بجهاز آخر. يرجى تسجيل الخروج ثم تسجيل الدخول مرة أخرى.',
           registeredDevice: resData.registered_device || 'هاتف آخر مسجل مسبقاً',
           currentDevice: deviceName,
+        };
+      }
+
+      if (resData.requires_phone) {
+        return {
+          success: true,
+          requires_phone: true,
+          verification_ticket: resData.verification_ticket,
+          message: resData.message,
+        };
+      }
+
+      if (resData.requires_otp) {
+        return {
+          success: true,
+          requires_otp: true,
+          phone_masked: resData.phone_masked,
+          verification_ticket: resData.verification_ticket,
+          message: resData.message,
         };
       }
 
@@ -327,6 +346,22 @@ export async function getSavedSession(): Promise<{ token: string | null; user: U
 
 export async function signOut(): Promise<void> {
   try {
+    const userStr = await SecureStore.getItemAsync(USER_KEY);
+    if (userStr) {
+      const u = JSON.parse(userStr);
+      if (u?.email) {
+        await resilientFetch<any>(`${API_BASE_URL}/v1/auth/logout`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: u.email }),
+          timeoutMs: 4000,
+          serviceName: 'auth-logout',
+        }).catch(() => {});
+      }
+    }
+  } catch (e) {}
+
+  try {
     if (GoogleSignin && Platform.OS !== 'web') {
       const isSignedIn = await GoogleSignin.hasPreviousSignIn();
       if (isSignedIn) {
@@ -461,4 +496,127 @@ export async function verifyPhoneOtp(phone: string, otp: string): Promise<AuthRe
     };
   }
 }
+
+export async function googleSendPhoneOtp(ticket: string, phone: string): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    return await resilientFetch<any>(`${API_BASE_URL}/v1/auth/google/send-phone-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verification_ticket: ticket, phone: phone.trim() }),
+      timeoutMs: 12000,
+      serviceName: 'auth-google-send-phone-otp',
+    });
+  } catch (e: any) {
+    return { success: false, error: e.message || 'فشل إرسال رمز التحقق' };
+  }
+}
+
+export async function googleVerifyPhoneOtp(ticket: string, phone: string, otp: string): Promise<AuthResponse> {
+  try {
+    const resData = await resilientFetch<any>(`${API_BASE_URL}/v1/auth/google/verify-phone-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verification_ticket: ticket, phone: phone.trim(), otp: otp.trim() }),
+      timeoutMs: 12000,
+      serviceName: 'auth-google-verify-phone-otp',
+    });
+
+    if (!resData.success) {
+      return { success: false, error: resData.error || 'رمز التحقق غير صحيح' };
+    }
+
+    const { deviceId } = await getUniqueDeviceId();
+    const user: UserProfile = {
+      id: resData.user?.id || 'user',
+      name: resData.user?.name || 'مستخدم',
+      email: resData.user?.email || '',
+      phone: resData.user?.phone,
+      photo: resData.user?.photo,
+      role: resData.role || 'client',
+      provider: 'google',
+      deviceId: resData.device_id || deviceId,
+      trialDaysLeft: typeof resData.trial_days_left === 'number' ? resData.trial_days_left : 30,
+      isTrialExpired: !!resData.is_trial_expired,
+      subscriptionPlan: resData.subscription_plan || 1,
+    };
+
+    if (resData.token) {
+      await SecureStore.setItemAsync(TOKEN_KEY, resData.token);
+      await SecureStore.setItemAsync(USER_KEY, JSON.stringify(user));
+    }
+
+    return {
+      success: true,
+      token: resData.token,
+      user,
+      trialDaysLeft: user.trialDaysLeft,
+      isTrialExpired: user.isTrialExpired,
+      subscriptionPlan: user.subscriptionPlan,
+    };
+  } catch (e: any) {
+    return { success: false, error: e.message || 'فشل التحقق من الرمز' };
+  }
+}
+
+export async function googleVerifyOtp(ticket: string, otp: string): Promise<AuthResponse> {
+  try {
+    const resData = await resilientFetch<any>(`${API_BASE_URL}/v1/auth/google/verify-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verification_ticket: ticket, otp: otp.trim() }),
+      timeoutMs: 12000,
+      serviceName: 'auth-google-verify-otp',
+    });
+
+    if (!resData.success) {
+      return { success: false, error: resData.error || 'رمز التحقق غير صحيح' };
+    }
+
+    const { deviceId } = await getUniqueDeviceId();
+    const user: UserProfile = {
+      id: resData.user?.id || 'user',
+      name: resData.user?.name || 'مستخدم',
+      email: resData.user?.email || '',
+      phone: resData.user?.phone,
+      photo: resData.user?.photo,
+      role: resData.role || 'client',
+      provider: 'google',
+      deviceId: resData.device_id || deviceId,
+      trialDaysLeft: typeof resData.trial_days_left === 'number' ? resData.trial_days_left : 30,
+      isTrialExpired: !!resData.is_trial_expired,
+      subscriptionPlan: resData.subscription_plan || 1,
+    };
+
+    if (resData.token) {
+      await SecureStore.setItemAsync(TOKEN_KEY, resData.token);
+      await SecureStore.setItemAsync(USER_KEY, JSON.stringify(user));
+    }
+
+    return {
+      success: true,
+      token: resData.token,
+      user,
+      trialDaysLeft: user.trialDaysLeft,
+      isTrialExpired: user.isTrialExpired,
+      subscriptionPlan: user.subscriptionPlan,
+    };
+  } catch (e: any) {
+    return { success: false, error: e.message || 'فشل التحقق من الرمز' };
+  }
+}
+
+export async function googleResendOtp(ticket: string): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    return await resilientFetch<any>(`${API_BASE_URL}/v1/auth/google/resend-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verification_ticket: ticket }),
+      timeoutMs: 12000,
+      serviceName: 'auth-google-resend-otp',
+    });
+  } catch (e: any) {
+    return { success: false, error: e.message || 'فشل إعادة إرسال الرمز' };
+  }
+}
+
 

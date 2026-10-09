@@ -12,6 +12,7 @@ git pull origin main
 
 echo "🗄️ Applying database migrations..."
 sudo -u postgres psql -d xpharma_db -f backend/migrations/0012_optimize_invoice_items_indexes.sql || true
+sudo -u postgres psql -d xpharma_db -f backend/migrations/0013_phone_otp_provider.sql || true
 
 echo "⚙️ Building Go backend..."
 cd backend
