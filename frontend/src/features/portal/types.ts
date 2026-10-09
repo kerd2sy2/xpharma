@@ -1,14 +1,17 @@
-import {
-  InvoiceItem,
-  InvoiceLineItem,
-  LinkedPharmacyAccount,
-  PharmacyBalance,
-  ReceiptItem,
-  ReturnItem,
-  StatementItem,
-  Warehouse,
-} from '@/services/warehouse';
-import { SubscriptionStatus } from '@/services/subscription';
+import { Warehouse, LinkedPharmacyAccount } from '@/features/warehouses';
+import { InvoiceItem, InvoiceLineItem } from '@/features/purchases';
+import { ReturnItem } from '@/features/returns';
+import { ReceiptItem } from '@/features/receipts';
+import { StatementItem } from '@/features/statement';
+import { SubscriptionStatus } from '@/features/subscription';
+
+export interface PharmacyBalance {
+  balance: number;
+  total_purchases: number;
+  total_returns: number;
+  total_paid: number;
+  currency: string;
+}
 
 export type SectionKey = 'purchases' | 'returns' | 'receipts' | 'statement';
 

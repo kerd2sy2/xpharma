@@ -12,7 +12,8 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { InvoiceLineItem, ReturnItem } from '@/services/warehouse';
+import { ReturnItem } from '../types';
+import { InvoiceLineItem } from '@/features/purchases/types';
 
 interface ReturnDetailsModalProps {
   returnItem: ReturnItem | null;

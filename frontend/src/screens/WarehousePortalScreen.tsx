@@ -23,34 +23,44 @@ import XLogo from '@/components/XLogo';
 // Services & Types
 import {
   clearPharmacySession,
-  fetchInvoiceDetails,
-  fetchPharmacyBalance,
-  fetchPharmacyPurchases,
-  fetchPharmacyReceipts,
-  fetchPharmacyReturns,
-  fetchPharmacyStatement,
-  fetchReturnDetails,
   fetchWarehouses,
   getWarehousePharmacies,
   savePharmacySession,
   saveWarehousePharmacy,
   syncWarehousePharmacies,
-  InvoiceItem,
-  InvoiceLineItem,
   LinkedPharmacyAccount,
-  PharmacyBalance,
-  ReceiptItem,
-  ReturnItem,
-  StatementItem,
   VerifyPharmacyResult,
   Warehouse,
-} from '@/services/warehouse';
+} from '@/features/warehouses';
+import {
+  fetchPharmacyBalance,
+  PharmacyBalance,
+} from '@/features/portal';
+import {
+  fetchPharmacyPurchases,
+  fetchInvoiceDetails,
+  InvoiceItem,
+  InvoiceLineItem,
+} from '@/features/purchases';
+import {
+  fetchPharmacyReturns,
+  fetchReturnDetails,
+  ReturnItem,
+} from '@/features/returns';
+import {
+  fetchPharmacyReceipts,
+  ReceiptItem,
+} from '@/features/receipts';
+import {
+  fetchPharmacyStatement,
+  StatementItem,
+} from '@/features/statement';
 import {
   checkCanAddPharmacyInWarehouse,
   getSubscriptionStatus,
   registerGlobalPharmacy,
   SubscriptionStatus,
-} from '@/services/subscription';
+} from '@/features/subscription';
 
 // Modular Portal Components
 import PortalHeader from '@/features/portal/components/PortalHeader';
@@ -117,7 +127,7 @@ export default function WarehousePortalScreen({
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [subscriptionReason, setSubscriptionReason] = useState<string | undefined>();
-  const [subscriptionRequiredPlan, setSubscriptionRequiredPlan] = useState<number>(2);
+  const [subscriptionRequiredPlan, setSubscriptionRequiredPlan] = useState<number | undefined>(undefined);
   const [isTrialExpired, setIsTrialExpired] = useState(false);
   const [showSelectActiveModal, setShowSelectActiveModal] = useState(false);
   const [subscriptionStatusInfo, setSubscriptionStatusInfo] = useState<SubscriptionStatus | null>(null);
@@ -892,6 +902,11 @@ export default function WarehousePortalScreen({
         onClose={() => setShowUpgradeModal(false)}
         onUpgradeSuccess={async () => {
           setShowUpgradeModal(false);
+          try {
+            const updatedStatus = await getSubscriptionStatus(user?.email);
+            setSubscriptionStatusInfo(updatedStatus);
+            await checkAndSyncPharmacies();
+          } catch {}
           setShowAddModal(true);
         }}
       />
@@ -902,9 +917,14 @@ export default function WarehousePortalScreen({
         reason={subscriptionReason}
         isTrialExpired={isTrialExpired}
         suggestedPlan={subscriptionRequiredPlan}
-        onSubscribed={() => {
+        onSubscribed={async () => {
           setShowSubscriptionModal(false);
           setIsTrialExpired(false);
+          try {
+            const updatedStatus = await getSubscriptionStatus(user?.email);
+            setSubscriptionStatusInfo(updatedStatus);
+            await checkAndSyncPharmacies();
+          } catch {}
         }}
       />
 

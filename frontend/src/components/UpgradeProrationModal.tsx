@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Dimensions,
   Linking,
   Modal,
@@ -23,8 +22,10 @@ import {
   setActiveSubscriptionPlan,
   recordSubscriptionPayment,
   getSubscriptionStatus,
-} from '@/services/subscription';
+} from '@/features/subscription';
 import { useAuth } from '@/context/AuthContext';
+import SubscriptionNoticeModal, { NoticeType } from '@/components/SubscriptionNoticeModal';
+
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -50,7 +51,15 @@ export default function UpgradeProrationModal({
   const [quote, setQuote] = useState<UpgradeQuote | null>(null);
   const [isProcessingKashier, setIsProcessingKashier] = useState(false);
   const [isCheckingServer, setIsCheckingServer] = useState(false);
-  const [showSuccess, setShowSuccess] = useState(false);
+
+  type NoticeModalState = {
+    visible: boolean; type: NoticeType; title: string; message: string;
+    badgeText?: string; primaryButtonText?: string; onPrimaryPress?: () => void;
+    secondaryButtonText?: string; onSecondaryPress?: () => void;
+  };
+  const [noticeModal, setNoticeModal] = useState<NoticeModalState>({ visible: false, type: 'info', title: '', message: '' });
+  const closeNotice = useCallback(() => setNoticeModal((p) => ({ ...p, visible: false })), []);
+  const showNotice = useCallback((s: Omit<NoticeModalState, 'visible'>) => setNoticeModal({ ...s, visible: true }), []);
 
   // Desired plan: at least currentPharmacyCount + 1, or targetPlan, capped between 2 and 5
   const resolvedTarget = Math.max(2, Math.min(5, targetPlan || currentPharmacyCount + 1));
@@ -81,7 +90,7 @@ export default function UpgradeProrationModal({
 
   const handlePayWithKashier = async () => {
     if (!user?.email) {
-      Alert.alert('تنبيه', 'يرجى تسجيل الدخول بحسابك أولاً لإتمام الدفع الإلكتروني.');
+      showNotice({ type: 'warning', title: 'تنبيه', message: 'يرجى تسجيل الدخول بحسابك أولاً لإتمام الدفع الإلكتروني.', primaryButtonText: 'حسناً' });
       return;
     }
 
@@ -97,16 +106,51 @@ export default function UpgradeProrationModal({
       });
 
       if (!res.success || !res.session_url) {
-        Alert.alert('تعذر فتح بوابة كاشير', res.error || 'يرجى المحاولة مرة أخرى أو الدفع عبر واتساب.');
+        showNotice({ type: 'error', title: 'تعذر فتح بوابة كاشير', message: res.error || 'يرجى المحاولة مرة أخرى أو الدفع عبر واتساب.', primaryButtonText: 'حسناً' });
         setIsProcessingKashier(false);
         return;
       }
 
       // Open AuthSession that intercepts xpharma:// redirect and closes browser automatically
-      await WebBrowser.openAuthSessionAsync(
-        res.session_url,
-        'xpharma://'
-      );
+      const browserResult = await WebBrowser.openAuthSessionAsync(res.session_url, 'xpharma://');
+
+      // Check payment status from redirect URL
+      let isPaymentConfirmed = false;
+      const returnUrl = browserResult.type === 'success' ? browserResult.url : '';
+      if (returnUrl) {
+        try {
+          const queryIndex = returnUrl.indexOf('?');
+          let paymentStatus = '';
+          if (queryIndex !== -1) {
+            const queryString = returnUrl.substring(queryIndex + 1);
+            const searchParams = new URLSearchParams(queryString);
+            paymentStatus = (searchParams.get('paymentStatus') || searchParams.get('status') || '').toUpperCase();
+          }
+          if (paymentStatus === 'SUCCESS' || paymentStatus === 'CAPTURED' || paymentStatus === 'PAID' || returnUrl.includes('subscription-success')) {
+            isPaymentConfirmed = true;
+          }
+        } catch (err) {
+          console.warn('Error parsing payment status:', err);
+        }
+      }
+
+      // Fallback: check if backend already received payment via webhook or redirect
+      if (!isPaymentConfirmed) {
+        try {
+          const checkStatus = await getSubscriptionStatus(user.email);
+          if (checkStatus.isSubscribed && (checkStatus.subscribedPlan >= quote.targetPlan || checkStatus.allowedPharmacies >= quote.targetPlan)) {
+            isPaymentConfirmed = true;
+          }
+        } catch (err) {
+          console.warn('Fallback status check error:', err);
+        }
+      }
+
+      if (!isPaymentConfirmed) {
+        showNotice({ type: 'warning', title: 'لم تكتمل عملية الدفع', message: 'لم يتم استلام تأكيد نجاح العملية من بوابة الدفع. لم يتم خصم أي مبالغ أو ترقية الاشتراك.', primaryButtonText: 'حسناً' });
+        setIsProcessingKashier(false);
+        return;
+      }
 
       // Immediately persist selected plan locally and notify servers
       await setActiveSubscriptionPlan(quote.targetPlan);
@@ -128,15 +172,20 @@ export default function UpgradeProrationModal({
 
       // Refresh status from server
       setIsCheckingServer(true);
-      try {
-        await getSubscriptionStatus(user.email);
-      } catch {}
+      try { await getSubscriptionStatus(user.email); } catch {}
       setIsCheckingServer(false);
 
-      setShowSuccess(true);
       onUpgradeSuccess(quote.targetPlan);
+      showNotice({
+        type: 'success',
+        title: 'تمت الترقية بنجاح 🎉',
+        badgeText: `${quote.targetPlan} صيدليات`,
+        message: `تم ترقية باقتك إلى (${quote.targetPlan} صيدليات لكل مخزن). يمكنك الآن متابعة ربط وإضافة الصيدلية.`,
+        primaryButtonText: 'متابعة',
+        onPrimaryPress: () => { closeNotice(); onClose(); },
+      });
     } catch (e: any) {
-      Alert.alert('خطأ', 'حدث خطأ أثناء فتح بوابة الدفع: ' + (e.message || 'يرجى المحاولة لاحقاً'));
+      showNotice({ type: 'error', title: 'خطأ في بوابة الدفع', message: 'حدث خطأ أثناء فتح بوابة الدفع: ' + (e.message || 'يرجى المحاولة لاحقاً'), primaryButtonText: 'حسناً' });
     } finally {
       setIsProcessingKashier(false);
     }
@@ -146,13 +195,12 @@ export default function UpgradeProrationModal({
     const text = encodeURIComponent(
       `السلام عليكم، أرغب في ترقية اشتراكي في منصة XPharma إلى باقة ${quote?.targetPlan || resolvedTarget} صيدليات لكل مخزن. بريدي الإلكتروني: ${user?.email || ''}`
     );
-    Linking.openURL(`https://wa.me/201019688000?text=${text}`).catch(() => {
-      Alert.alert('تنبيه', 'تعذر فتح واتساب، رقم الدعم المباشر هو: 01019688000');
+    Linking.openURL(`https://wa.me/201550888841?text=${text}`).catch(() => {
+      showNotice({ type: 'warning', title: 'تنبيه', message: 'تعذر فتح واتساب، رقم الدعم المباشر هو: 01550888841', primaryButtonText: 'حسناً' });
     });
   };
 
   const handleClose = () => {
-    setShowSuccess(false);
     onClose();
   };
 
@@ -179,58 +227,11 @@ export default function UpgradeProrationModal({
                 <Ionicons name="close" size={20} color="#334155" />
               </TouchableOpacity>
 
-              {showSuccess ? (
-                /* ========================================================= */
-                /* 1. SUCCESS ACTIVATION STATE                               */
-                /* ========================================================= */
-                <View style={styles.successContainer}>
-                  <LinearGradient
-                    colors={['#0F2B1E', '#064E3B', '#047857']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.successHeroCard}
-                  >
-                    <View style={styles.successIconGlowRing}>
-                      <View style={styles.successIconCircle}>
-                        <Ionicons name="sparkles" size={36} color="#FBBF24" />
-                      </View>
-                    </View>
-
-                    <Text style={styles.successHeroTitle}>تمت الترقية بنجاح 🎉</Text>
-                    <Text style={styles.successHeroSubtitle}>
-                      تم ترقية باقتك إلى {quote?.targetPlan || resolvedTarget} صيدليات لكل مخزن
-                    </Text>
-
-                    <View style={styles.activePlanPill}>
-                      <Ionicons name="shield-checkmark" size={16} color="#34D399" />
-                      <Text style={styles.activePlanPillText}>
-                        صلاحية 30 يوماً كاملة من اليوم
-                      </Text>
-                    </View>
-                  </LinearGradient>
-
-                  <TouchableOpacity
-                    style={styles.successDoneBtn}
-                    onPress={handleClose}
-                    activeOpacity={0.88}
-                  >
-                    <LinearGradient
-                      colors={['#047857', '#065F46']}
-                      style={styles.successDoneBtnGradient}
-                    >
-                      <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" />
-                      <Text style={styles.successDoneBtnText}>متابعة إضافة الصيدلية الآن</Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
-                </View>
-              ) : (
-                /* ========================================================= */
-                /* 2. PRORATED UPGRADE BREAKDOWN VIEW                        */
-                /* ========================================================= */
-                <ScrollView
-                  showsVerticalScrollIndicator={false}
-                  contentContainerStyle={styles.scrollContent}
-                >
+              {/* PRORATED UPGRADE BREAKDOWN VIEW */}
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.scrollContent}
+              >
                   {/* Hero Header */}
                   <LinearGradient
                     colors={['#2A084E', '#4C1D95', '#6D28D9']}
@@ -393,11 +394,24 @@ export default function UpgradeProrationModal({
                     </>
                   ) : null}
                 </ScrollView>
-              )}
             </View>
           </TouchableWithoutFeedback>
         </View>
       </TouchableWithoutFeedback>
+
+      {/* Bottom-sheet notice modal */}
+      <SubscriptionNoticeModal
+        visible={noticeModal.visible}
+        type={noticeModal.type}
+        title={noticeModal.title}
+        message={noticeModal.message}
+        badgeText={noticeModal.badgeText}
+        primaryButtonText={noticeModal.primaryButtonText}
+        onPrimaryPress={noticeModal.onPrimaryPress}
+        secondaryButtonText={noticeModal.secondaryButtonText}
+        onSecondaryPress={noticeModal.onSecondaryPress}
+        onClose={closeNotice}
+      />
     </Modal>
   );
 }
@@ -702,89 +716,6 @@ const styles = StyleSheet.create({
   whatsappBtnText: {
     color: '#166534',
     fontSize: 13.5,
-    fontWeight: '800',
-  },
-  successContainer: {
-    paddingVertical: 10,
-    alignItems: 'center',
-    width: '100%',
-  },
-  successHeroCard: {
-    borderRadius: 24,
-    width: '100%',
-    paddingVertical: 24,
-    paddingHorizontal: 16,
-    alignItems: 'center',
-    marginBottom: 16,
-    shadowColor: '#059669',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 6,
-  },
-  successIconGlowRing: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  successIconCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  successHeroTitle: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '900',
-    textAlign: 'center',
-    marginBottom: 4,
-  },
-  successHeroSubtitle: {
-    color: 'rgba(255, 255, 255, 0.85)',
-    fontSize: 13,
-    fontWeight: '500',
-    textAlign: 'center',
-    marginBottom: 14,
-  },
-  activePlanPill: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
-  },
-  activePlanPillText: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  successDoneBtn: {
-    width: '100%',
-    borderRadius: 16,
-    overflow: 'hidden',
-    marginTop: 4,
-  },
-  successDoneBtnGradient: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-    gap: 8,
-  },
-  successDoneBtnText: {
-    color: '#FFFFFF',
-    fontSize: 15,
     fontWeight: '800',
   },
 });

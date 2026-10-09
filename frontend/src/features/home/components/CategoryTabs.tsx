@@ -5,15 +5,23 @@ interface CategoryTabsProps {
   selectedTab: 'pharma' | 'accessories';
   onSelectTab: (tab: 'pharma' | 'accessories') => void;
   isSticky?: boolean;
+  backgroundColor?: string;
 }
 
 export default function CategoryTabs({
   selectedTab,
   onSelectTab,
   isSticky = false,
+  backgroundColor = '#F9F7FD',
 }: CategoryTabsProps) {
   return (
-    <View style={[styles.categoryTabsContainer, isSticky && styles.categoryTabsSticky]}>
+    <View
+      style={[
+        styles.categoryTabsContainer,
+        { backgroundColor },
+        isSticky && styles.categoryTabsSticky,
+      ]}
+    >
       <TouchableOpacity
         style={[
           styles.categoryTab,
@@ -57,23 +65,19 @@ const styles = StyleSheet.create({
   categoryTabsContainer: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#EDE7F6',
+    paddingHorizontal: 24,
+    backgroundColor: 'transparent',
+    paddingTop: 4,
+    paddingBottom: 0,
   },
   categoryTabsSticky: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 3,
+    backgroundColor: '#F9F7FD',
+    paddingTop: 4,
+    paddingBottom: 0,
   },
   categoryTab: {
     flex: 1,
-    paddingVertical: 13,
+    paddingVertical: 11,
     alignItems: 'center',
     justifyContent: 'center',
     borderBottomWidth: 2.5,
@@ -85,7 +89,7 @@ const styles = StyleSheet.create({
   categoryTabText: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#7B6F93',
+    color: '#8A7B9B',
   },
   categoryTabTextActive: {
     color: '#3f0082',

@@ -4,11 +4,14 @@ import {
   checkDeviceSession,
   getSavedSession, 
   initGoogleSignIn, 
+  SendOtpResponse,
+  sendPhoneOtp,
   signInWithApple, 
   signInWithGoogle, 
   signOut, 
-  UserProfile 
-} from '@/services/auth';
+  UserProfile,
+  verifyPhoneOtp,
+} from '@/features/auth';
 
 export interface DeviceMismatchInfo {
   isMismatch: boolean;
@@ -27,6 +30,8 @@ interface AuthContextType {
   deviceMismatchInfo: DeviceMismatchInfo | null;
   loginWithGoogle: () => Promise<boolean>;
   loginWithApple: () => Promise<boolean>;
+  requestOtp: (phone: string) => Promise<SendOtpResponse>;
+  loginWithPhoneOtp: (phone: string, otp: string) => Promise<boolean>;
   logout: () => Promise<void>;
   clearError: () => void;
   clearDeviceMismatch: () => void;
@@ -155,6 +160,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  async function requestOtp(phone: string): Promise<SendOtpResponse> {
+    setIsAuthenticating(true);
+    setError(null);
+    try {
+      const res = await sendPhoneOtp(phone);
+      if (!res.success) {
+        setError(res.error || 'فشل إرسال رمز التحقق');
+      }
+      return res;
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }
+
+  async function loginWithPhoneOtp(phone: string, otp: string): Promise<boolean> {
+    setIsAuthenticating(true);
+    setError(null);
+    try {
+      const res = await verifyPhoneOtp(phone, otp);
+      return await handleLoginResult(res, phone);
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }
+
   async function logout(): Promise<void> {
     setIsLoading(true);
     try {
@@ -187,6 +217,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         deviceMismatchInfo,
         loginWithGoogle,
         loginWithApple,
+        requestOtp,
+        loginWithPhoneOtp,
         logout,
         clearError,
         clearDeviceMismatch,

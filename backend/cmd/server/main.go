@@ -14,6 +14,7 @@ import (
 	"xpharma-backend/pkg/db"
 	"xpharma-backend/pkg/ingestion"
 	"xpharma-backend/pkg/query"
+	"xpharma-backend/pkg/queue"
 	"xpharma-backend/pkg/subscription"
 	"xpharma-backend/pkg/warehouse"
 )
@@ -41,12 +42,16 @@ func main() {
 	}
 	defer router.Close()
 
+	broker := queue.NewResilientBroker()
+	defer broker.Close()
+
 	// Initialize Domain Services (Microservices Modules)
 	tokenService := auth.NewTokenService(jwtSecret)
 	authHandler := auth.NewAuthHandler(router, tokenService)
 	warehouseService := warehouse.NewWarehouseService(router, tokenService)
 	subscriptionService := subscription.NewSubscriptionService(router)
-	ingestionService := ingestion.NewIngestionService(router)
+	ingestionService := ingestion.NewIngestionService(router, broker)
+	defer ingestionService.Close()
 	queryService := query.NewQueryService(router)
 
 	r := gin.Default()
@@ -112,6 +117,8 @@ func main() {
 		authGroup.POST("/apple", authHandler.AppleLogin)
 		authGroup.POST("/check-device", authHandler.CheckDevice)
 		authGroup.POST("/reset-device", authHandler.ResetDevice)
+		authGroup.POST("/otp/send", authHandler.SendOTP)
+		authGroup.POST("/otp/verify", authHandler.VerifyOTP)
 	}
 
 	// 6. Subscription & Payment Module (Kashier Integration)

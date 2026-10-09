@@ -349,6 +349,33 @@ func (s *SubscriptionService) HandleWebhook(c *gin.Context) {
 			} else {
 				log.Printf("[Kashier Webhook] Successfully activated Plan %d for %s", plan, email)
 			}
+
+			// Unsuspend user's pharmacies if new plan >= total linked pharmacies
+			var totalUserPharmacies int
+			_ = s.router.Pool().QueryRow(
+				c.Request.Context(),
+				`SELECT COUNT(DISTINCT code) FROM public.pharmacies
+				 WHERE linked_user_id IN (
+					SELECT id::text FROM public.users WHERE LOWER(email) = LOWER($1)
+					UNION
+					SELECT email FROM public.users WHERE LOWER(email) = LOWER($1)
+				 ) AND is_active = true`,
+				email,
+			).Scan(&totalUserPharmacies)
+
+			if plan >= totalUserPharmacies {
+				_, _ = s.router.Pool().Exec(
+					c.Request.Context(),
+					`UPDATE public.pharmacies
+					 SET is_suspended = false, updated_at = NOW()
+					 WHERE linked_user_id IN (
+						SELECT id::text FROM public.users WHERE LOWER(email) = LOWER($1)
+						UNION
+						SELECT email FROM public.users WHERE LOWER(email) = LOWER($1)
+					 )`,
+					email,
+				)
+			}
 		}
 	}
 
@@ -366,7 +393,7 @@ func (s *SubscriptionService) HandleRedirect(c *gin.Context) {
 		paymentStatus = strings.ToUpper(strings.TrimSpace(c.Query("status")))
 	}
 
-	isSuccess := paymentStatus == "SUCCESS" || paymentStatus == "CAPTURED" || paymentStatus == "PAID" || strings.Contains(paymentStatus, "SUCCESS") || paymentStatus == ""
+	isSuccess := (paymentStatus == "SUCCESS" || paymentStatus == "CAPTURED" || paymentStatus == "PAID" || strings.Contains(paymentStatus, "SUCCESS")) && paymentStatus != "FAILED" && paymentStatus != "CANCELLED" && paymentStatus != ""
 
 	if isSuccess && orderID != "" {
 		plan := 3
@@ -443,6 +470,33 @@ func (s *SubscriptionService) HandleRedirect(c *gin.Context) {
 				 WHERE LOWER(email) = LOWER($2)`,
 				plan, queryEmail,
 			)
+
+			// Unsuspend user's pharmacies if new plan >= total linked pharmacies
+			var totalUserPharmacies int
+			_ = s.router.Pool().QueryRow(
+				c.Request.Context(),
+				`SELECT COUNT(DISTINCT code) FROM public.pharmacies
+				 WHERE linked_user_id IN (
+					SELECT id::text FROM public.users WHERE LOWER(email) = LOWER($1)
+					UNION
+					SELECT email FROM public.users WHERE LOWER(email) = LOWER($1)
+				 ) AND is_active = true`,
+				queryEmail,
+			).Scan(&totalUserPharmacies)
+
+			if plan >= totalUserPharmacies {
+				_, _ = s.router.Pool().Exec(
+					c.Request.Context(),
+					`UPDATE public.pharmacies
+					 SET is_suspended = false, updated_at = NOW()
+					 WHERE linked_user_id IN (
+						SELECT id::text FROM public.users WHERE LOWER(email) = LOWER($1)
+						UNION
+						SELECT email FROM public.users WHERE LOWER(email) = LOWER($1)
+					 )`,
+					queryEmail,
+				)
+			}
 		} else if emailPrefix != "" {
 			_, _ = s.router.Pool().Exec(
 				c.Request.Context(),
@@ -482,12 +536,30 @@ func (s *SubscriptionService) HandleRedirect(c *gin.Context) {
 		}
 	}
 
-	html := `<!DOCTYPE html>
+	cardContent := `
+    <div class="icon-ring">✓</div>
+    <h1>تمت العملية بنجاح!</h1>
+    <p>تم استلام طلبك وجاري تفعيل باقة الاشتراك الخاصة بك في تطبيق XPharma فوراً.</p>
+    <a href="xpharma://subscription-success?paymentStatus=SUCCESS" class="btn">العودة للتطبيق</a>
+    <script>
+      setTimeout(function() {
+        window.location.href = "xpharma://subscription-success?paymentStatus=SUCCESS";
+      }, 400);
+    </script>`
+	if !isSuccess {
+		cardContent = `
+    <div class="icon-ring" style="background: rgba(239, 68, 68, 0.2); border-color: #EF4444; color: #EF4444;">✕</div>
+    <h1 style="color: #F87171;">لم تكتمل عملية الدفع</h1>
+    <p>لم يتم إتمام عملية الدفع بنجاح أو تم إلغاؤها. لم يتم خصم أي مبالغ من حسابك.</p>
+    <a href="xpharma://subscription-failed?paymentStatus=FAILED" class="btn" style="background: #475569;">العودة للتطبيق</a>`
+	}
+
+	html := fmt.Sprintf(`<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>تمت عملية الدفع بنجاح - XPharma</title>
+  <title>حالة عملية الدفع - XPharma</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -549,13 +621,10 @@ func (s *SubscriptionService) HandleRedirect(c *gin.Context) {
 </head>
 <body>
   <div class="card">
-    <div class="icon-ring">✓</div>
-    <h1>تمت العملية بنجاح!</h1>
-    <p>تم استلام طلبك وجاري تفعيل باقة الاشتراك الخاصة بك في تطبيق XPharma فوراً.</p>
-    <a href="xpharma://subscription-success" class="btn">العودة للتطبيق</a>
+    %s
   </div>
 </body>
-</html>`
+</html>`, cardContent)
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(http.StatusOK, html)
 }

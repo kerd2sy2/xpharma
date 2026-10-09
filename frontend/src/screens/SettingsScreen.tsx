@@ -18,7 +18,7 @@ import { Ionicons, FontAwesome } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useOTAUpdates } from '@/features/settings/hooks/useOTAUpdates';
 import UpdateModal from '@/components/UpdateModal';
-import { SubscriptionStatus, PRICING_PLANS } from '@/services/subscription';
+import { SubscriptionStatus, PRICING_PLANS } from '@/features/subscription';
 
 interface SettingsScreenProps {
   user: {
@@ -37,6 +37,7 @@ interface SettingsScreenProps {
 export default function SettingsScreen({
   user,
   subscriptionStatusInfo,
+  onOpenSubscriptionModal,
   onLogout,
   onBack,
 }: SettingsScreenProps) {
@@ -50,11 +51,11 @@ export default function SettingsScreen({
   const isSubscribed = !!subscriptionStatusInfo?.isSubscribed && currentPlanNumber > 0;
   const matchedPlan = PRICING_PLANS.find((p) => p.pharmacies === currentPlanNumber);
   const planLabel = isSubscribed
-    ? (matchedPlan ? matchedPlan.label : `باقة ${currentPlanNumber} صيدليات لكل مخزن`)
-    : 'الباقة المجانية (صيدلية لكل مخزن)';
+    ? (matchedPlan ? matchedPlan.label : `باقة ${currentPlanNumber} صيدليات`)
+    : 'الباقة المجانية';
   const planSubtitle = isSubscribed
-    ? `حتى ${currentPlanNumber} صيدليات في المخزن الواحد، ومتاح فتح كل المخازن مجاناً وبلا حدود`
-    : 'صيدلية واحدة في كل مخزن مجاناً (متاح فتح وربط كافة مخازن الجمهورية)';
+    ? `${currentPlanNumber} صيدليات لكل مخزن • كافة المخازن مفتوحة`
+    : 'صيدلية واحدة لكل مخزن مجاناً';
   const daysRemaining = subscriptionStatusInfo?.daysRemaining ?? 30;
   const linkedCount = subscriptionStatusInfo?.linkedPharmaciesCount ?? 0;
   const allowedPharmacies = isSubscribed ? currentPlanNumber : 1;
@@ -82,7 +83,7 @@ export default function SettingsScreen({
   }, [onBack]);
 
   const handleSupportPress = () => {
-    Linking.openURL('https://wa.me/201019688000').catch(() => {
+    Linking.openURL('https://wa.me/201550888841').catch(() => {
       // Fallback
     });
   };
@@ -111,120 +112,119 @@ export default function SettingsScreen({
         contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom + 24, 40) }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* 1. Executive Profile Hero Card */}
-        <LinearGradient
-          colors={['#25044A', '#3F0082', '#5610A3']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.profileHeroCard}
-        >
-          {/* Background Ambient Glow */}
-          <View style={styles.heroGlowCircle} />
+        {/* 1. Clean Profile Card */}
+        <View style={styles.profileCard}>
+          <View style={styles.avatarWrapper}>
+            {user?.photo ? (
+              <Image source={{ uri: user.photo }} style={styles.avatarImg} />
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <Text style={styles.avatarLetter}>
+                  {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
+                </Text>
+              </View>
+            )}
 
-          <View style={styles.profileHeroContent}>
-            {/* Avatar with Glow Border */}
-            <View style={styles.avatarWrapper}>
-              {user?.photo ? (
-                <Image source={{ uri: user.photo }} style={styles.avatarImg} />
+            <View style={styles.providerBadge}>
+              {user?.provider === 'google' ? (
+                <FontAwesome name="google" size={11} color="#EA4335" />
+              ) : user?.provider === 'apple' ? (
+                <Ionicons name="logo-apple" size={11} color="#000000" />
               ) : (
-                <LinearGradient
-                  colors={['#7C3AED', '#4C1D95']}
-                  style={styles.avatarPlaceholder}
-                >
-                  <Text style={styles.avatarLetter}>
-                    {user?.name ? user.name.charAt(0).toUpperCase() : 'ص'}
-                  </Text>
-                </LinearGradient>
+                <Ionicons name="shield-checkmark" size={11} color="#10B981" />
               )}
+            </View>
+          </View>
 
-              {/* Provider / Verified Badge */}
-              <View style={styles.providerBadge}>
-                {user?.provider === 'google' ? (
-                  <FontAwesome name="google" size={12} color="#EA4335" />
-                ) : user?.provider === 'apple' ? (
-                  <Ionicons name="logo-apple" size={12} color="#000000" />
-                ) : (
-                  <Ionicons name="shield-checkmark" size={12} color="#10B981" />
-                )}
+          <View style={styles.profileTextWrapper}>
+            <View style={styles.nameRow}>
+              <Text style={styles.profileName} numberOfLines={1}>
+                {user?.name || 'دكتور صيدلي'}
+              </Text>
+              <View style={styles.verifiedPill}>
+                <Ionicons name="checkmark-circle" size={11} color="#059669" />
+                <Text style={styles.verifiedPillText}>موثق</Text>
               </View>
             </View>
 
-            {/* Name & Details */}
-            <View style={styles.profileTextWrapper}>
-              <View style={styles.nameRow}>
-                <Text style={styles.profileName} numberOfLines={1}>
-                  {user?.name || 'دكتور صيدلي'}
-                </Text>
-                <View style={styles.verifiedPill}>
-                  <Ionicons name="checkmark-circle" size={12} color="#10B981" />
-                  <Text style={styles.verifiedPillText}>موثق</Text>
-                </View>
-              </View>
+            <Text style={styles.profileEmail} numberOfLines={1}>
+              {user?.email || 'حساب مفعل في شبكة XPharma'}
+            </Text>
+          </View>
+        </View>
 
-              <Text style={styles.profileEmail} numberOfLines={1}>
-                {user?.email || 'حساب مفعل في شبكة XPharma'}
+        {/* 1.5. Current Subscription Plan Card */}
+        <View style={styles.subCard}>
+          {/* Top row: Section tag and Active/Free Status Badge */}
+          <View style={styles.subCardHeader}>
+            <View style={styles.subStatusBadge}>
+              <View
+                style={[
+                  styles.subStatusDot,
+                  { backgroundColor: isSubscribed ? '#10B981' : '#64748B' },
+                ]}
+              />
+              <Text
+                style={[
+                  styles.subStatusText,
+                  { color: isSubscribed ? '#047857' : '#475569' },
+                ]}
+              >
+                {isSubscribed ? 'اشتراك نشط ومفعل' : 'الباقة المجانية'}
+              </Text>
+            </View>
+
+            <View style={styles.subTagPill}>
+              <Ionicons name="card-outline" size={13} color="#4F46E5" />
+              <Text style={styles.subTagText}>باقتك الحالية</Text>
+            </View>
+          </View>
+
+          {/* Plan Title & Subtitle */}
+          <View style={styles.subBody}>
+            <Text style={styles.subPlanTitle}>{planLabel}</Text>
+            <Text style={styles.subPlanSubtitle}>{planSubtitle}</Text>
+          </View>
+
+          {/* Compact Clean Details Row */}
+          <View style={styles.subMetaRow}>
+            <View style={styles.subMetaItem}>
+              <Ionicons name="storefront-outline" size={14} color="#4F46E5" />
+              <Text style={styles.subMetaLabel}>الصيدليات:</Text>
+              <Text style={styles.subMetaVal}>
+                {allowedPharmacies === 1 ? '1 لكل مخزن' : `${allowedPharmacies} لكل مخزن`}
+              </Text>
+            </View>
+
+            <View style={styles.subMetaDivider} />
+
+            <View style={styles.subMetaItem}>
+              <Ionicons name="time-outline" size={14} color="#4F46E5" />
+              <Text style={styles.subMetaLabel}>الصلاحية:</Text>
+              <Text style={styles.subMetaVal}>
+                {isSubscribed ? `${daysRemaining} يوم` : 'دائم'}
               </Text>
             </View>
           </View>
-        </LinearGradient>
 
-        {/* 1.5. Current Subscription Plan Card - توضيح باقة الاشتراك في الملف الشخصي */}
-        <View style={styles.subscriptionCard}>
-          <LinearGradient
-            colors={['#17062E', '#2A084E', '#3D0D70']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.subscriptionGradient}
-          >
-            {/* Top row: Active status badge + Tag */}
-            <View style={styles.subCardTopRow}>
-              <View style={styles.subActiveBadge}>
-                <Text style={styles.subActiveBadgeText}>
-                  {isSubscribed ? 'اشتراك نشط ومفعل' : 'باقة مجانية مفتوحة'}
-                </Text>
-              </View>
-
-              <View style={styles.subPlanPill}>
-                <Ionicons name="sparkles" size={13} color="#FBBF24" />
-                <Text style={styles.subPlanPillText}>باقتك الحالية</Text>
-              </View>
-            </View>
-
-            {/* Plan Title & Badge Icon */}
-            <View style={styles.subMainRow}>
-              <View style={styles.subTextGroup}>
-                <Text style={styles.subPlanBigTitle}>{planLabel}</Text>
-                <Text style={styles.subPlanSubText}>{planSubtitle}</Text>
-              </View>
-              <View style={styles.subIconWrapper}>
-                <Ionicons name="ribbon-outline" size={26} color="#A78BFA" />
-              </View>
-            </View>
-
-            {/* Metrics: Remaining Days, Per Warehouse Quota, & Open Warehouses */}
-            <View style={styles.subMetricsRow}>
-              <View style={styles.subMetricCol}>
-                <Text style={styles.subMetricVal}>{isSubscribed ? `${daysRemaining} يوم` : 'دائم'}</Text>
-                <Text style={styles.subMetricLbl}>صلاحية الباقة</Text>
-              </View>
-              <View style={styles.subMetricSep} />
-              <View style={styles.subMetricCol}>
-                <Text style={styles.subMetricVal}>حتى {allowedPharmacies} صيدليات</Text>
-                <Text style={styles.subMetricLbl}>لكل مخزن على حدة</Text>
-              </View>
-              <View style={styles.subMetricSep} />
-              <View style={styles.subMetricCol}>
-                <Text style={styles.subMetricVal}>مفتوحة 100%</Text>
-                <Text style={styles.subMetricLbl}>كافة المخازن</Text>
-              </View>
-            </View>
-          </LinearGradient>
+          {/* Upgrade / Change Plan Action Button */}
+          {onOpenSubscriptionModal && (
+            <TouchableOpacity
+              style={styles.subUpgradeBtn}
+              onPress={onOpenSubscriptionModal}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="sparkles" size={15} color="#4338CA" />
+              <Text style={styles.subUpgradeBtnText}>ترقية أو إدارة الباقة</Text>
+              <Ionicons name="chevron-back" size={15} color="#4338CA" />
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* 2. Settings Group 1: Features & System Actions */}
         <Text style={styles.sectionHeaderLabel}>الخدمات وتحديثات النظام</Text>
         <View style={styles.groupedCard}>
-          {/* OTA Updates Row */}
+          {/* Updates Row */}
           <TouchableOpacity
             style={styles.menuRowItem}
             onPress={checkForUpdates}
@@ -235,10 +235,10 @@ export default function SettingsScreen({
 
             <View style={styles.menuRowDetails}>
               <Text style={styles.menuRowTitle}>
-                {checkingUpdate ? 'جاري فحص التحديثات...' : 'تحديثات النظام الفورية (OTA)'}
+                {checkingUpdate ? 'جاري فحص التحديثات...' : 'التحديثات'}
               </Text>
               <Text style={styles.menuRowSubtitle}>
-                تنزيل وتطبيق أحدث ميزات التطبيق بدون متجر
+                فحص وتثبيت أحدث ميزات التطبيق
               </Text>
             </View>
 
@@ -246,7 +246,7 @@ export default function SettingsScreen({
               {checkingUpdate ? (
                 <ActivityIndicator size="small" color="#6D28D9" />
               ) : (
-                <Ionicons name="cloud-download" size={19} color="#6D28D9" />
+                <Ionicons name="cloud-download-outline" size={19} color="#6D28D9" />
               )}
             </View>
           </TouchableOpacity>
@@ -270,49 +270,9 @@ export default function SettingsScreen({
               <Ionicons name="logo-whatsapp" size={19} color="#16A34A" />
             </View>
           </TouchableOpacity>
-
-          <View style={styles.menuDivider} />
-
-          {/* Security & Encryption Row */}
-          <View style={styles.menuRowItem}>
-            <View style={styles.securityPill}>
-              <Ionicons name="lock-closed" size={12} color="#059669" />
-              <Text style={styles.securityPillText}>256-bit SSL</Text>
-            </View>
-
-            <View style={styles.menuRowDetails}>
-              <Text style={styles.menuRowTitle}>الأمان وحماية البيانات</Text>
-              <Text style={styles.menuRowSubtitle}>اتصال ومزامنة مشفرة بالكامل مع الخوادم</Text>
-            </View>
-
-            <View style={[styles.menuIconBox, { backgroundColor: '#E0F2FE' }]}>
-              <Ionicons name="shield-checkmark" size={19} color="#0284C7" />
-            </View>
-          </View>
         </View>
 
-        {/* 4. App Info & Version Section */}
-        <Text style={styles.sectionHeaderLabel}>عن التطبيق والنظام</Text>
-        <View style={styles.groupedCard}>
-          <View style={styles.infoRowItem}>
-            <View style={styles.versionBadge}>
-              <Text style={styles.versionBadgeText}>v1.0.1 (Build 6)</Text>
-            </View>
-            <Text style={styles.infoRowLabel}>إصدار التطبيق</Text>
-          </View>
-
-          <View style={styles.menuDivider} />
-
-          <View style={styles.infoRowItem}>
-            <View style={styles.serverStatusBadge}>
-              <View style={styles.serverStatusDot} />
-              <Text style={styles.serverStatusText}>سحابي متصل</Text>
-            </View>
-            <Text style={styles.infoRowLabel}>حالة خوادم XPharma Cloud</Text>
-          </View>
-        </View>
-
-        {/* 5. Modern Redesigned Logout Button */}
+        {/* 3. Modern Redesigned Logout Button */}
         <TouchableOpacity
           style={styles.logoutBtn}
           onPress={onLogout}
@@ -370,74 +330,68 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 14,
   },
-  profileHeroCard: {
-    borderRadius: 24,
-    padding: 20,
-    overflow: 'hidden',
-    position: 'relative',
-    shadowColor: '#3F0082',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 8,
-  },
-  heroGlowCircle: {
-    position: 'absolute',
-    top: -40,
-    right: -40,
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-  },
-  profileHeroContent: {
+  profileCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 16,
+    gap: 14,
   },
   avatarWrapper: {
     position: 'relative',
   },
   avatarImg: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    borderWidth: 2.5,
-    borderColor: '#FFFFFF',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
   },
   avatarPlaceholder: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1.5,
+    borderColor: '#E0E7FF',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 2.5,
-    borderColor: '#FFFFFF',
   },
   avatarLetter: {
-    fontSize: 26,
-    fontWeight: '900',
-    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#4F46E5',
   },
   providerBadge: {
     position: 'absolute',
     bottom: -2,
     left: -2,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
     backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
   },
   profileTextWrapper: {
     flex: 1,
     alignItems: 'flex-end',
+    justifyContent: 'center',
   },
   nameRow: {
     flexDirection: 'row-reverse',
@@ -446,172 +400,151 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   profileName: {
-    fontSize: 18,
+    fontSize: 16.5,
     fontWeight: '800',
-    color: '#FFFFFF',
+    color: '#0F172A',
     textAlign: 'right',
   },
   verifiedPill: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    gap: 3,
+    backgroundColor: '#ECFDF5',
     paddingHorizontal: 7,
     paddingVertical: 2,
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.4)',
+    borderColor: '#A7F3D0',
   },
   verifiedPillText: {
-    color: '#34D399',
-    fontSize: 10.5,
+    color: '#059669',
+    fontSize: 11,
     fontWeight: '700',
   },
   profileEmail: {
     fontSize: 12.5,
-    color: 'rgba(255, 255, 255, 0.8)',
+    color: '#64748B',
     textAlign: 'right',
   },
-  subscriptionCard: {
-    borderRadius: 22,
-    overflow: 'hidden',
-    marginTop: 14,
-    marginBottom: 8,
-    shadowColor: '#3F0082',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 6,
+  subCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
+    marginTop: 4,
+    marginBottom: 4,
   },
-  subscriptionGradient: {
-    padding: 18,
-    borderRadius: 22,
-  },
-  subCardTopRow: {
+  subCardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 14,
+    marginBottom: 12,
   },
-  subActiveBadge: {
-    flexDirection: 'row',
+  subStatusBadge: {
+    flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(16, 185, 129, 0.2)',
-    paddingHorizontal: 10,
+    backgroundColor: '#F0FDF4',
+    paddingHorizontal: 9,
     paddingVertical: 4,
-    borderRadius: 12,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.4)',
+    borderColor: '#DCFCE7',
   },
-  pulseDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: '#10B981',
+  subStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
-  subActiveBadgeText: {
-    color: '#34D399',
-    fontSize: 11,
-    fontWeight: '800',
+  subStatusText: {
+    fontSize: 11.5,
+    fontWeight: '700',
   },
-  subPlanPill: {
+  subTagPill: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 5,
-    backgroundColor: 'rgba(245, 158, 11, 0.18)',
-    paddingHorizontal: 10,
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 9,
     paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.35)',
+    borderRadius: 20,
   },
-  subPlanPillText: {
-    color: '#FBBF24',
-    fontSize: 11,
-    fontWeight: '800',
+  subTagText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#4F46E5',
   },
-  subMainRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-    gap: 12,
-  },
-  subIconWrapper: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-  },
-  subTextGroup: {
-    flex: 1,
+  subBody: {
+    marginBottom: 12,
     alignItems: 'flex-end',
   },
-  subPlanBigTitle: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#FFFFFF',
+  subPlanTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0F172A',
     textAlign: 'right',
-    marginBottom: 3,
+    marginBottom: 4,
   },
-  subPlanSubText: {
-    fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.75)',
+  subPlanSubtitle: {
+    fontSize: 12.5,
+    color: '#64748B',
     textAlign: 'right',
     lineHeight: 18,
   },
-  subMetricsRow: {
+  subMetaRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.25)',
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    marginBottom: 14,
+    justifyContent: 'space-between',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: '#F1F5F9',
+    marginBottom: 12,
   },
-  subMetricCol: {
-    flex: 1,
+  subMetaItem: {
+    flexDirection: 'row-reverse',
     alignItems: 'center',
+    gap: 6,
   },
-  subMetricVal: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#F8FAFC',
-    marginBottom: 2,
-  },
-  subMetricLbl: {
-    fontSize: 11,
-    color: '#94A3B8',
+  subMetaLabel: {
+    fontSize: 12,
+    color: '#64748B',
     fontWeight: '600',
   },
-  subMetricSep: {
+  subMetaVal: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  subMetaDivider: {
     width: 1,
-    height: 28,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    height: 16,
+    backgroundColor: '#E2E8F0',
   },
   subUpgradeBtn: {
-    borderRadius: 14,
-    overflow: 'hidden',
-    marginTop: 2,
-  },
-  subUpgradeBtnGradient: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 11,
-    gap: 8,
+    backgroundColor: '#F5F3FF',
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    gap: 6,
   },
   subUpgradeBtnText: {
-    color: '#FFFFFF',
-    fontSize: 13.5,
-    fontWeight: '800',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#4338CA',
   },
   sectionHeaderLabel: {
     fontSize: 13,
@@ -662,65 +595,6 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#F1F5F9',
     marginHorizontal: 16,
-  },
-  securityPill: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#ECFDF5',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#A7F3D0',
-  },
-  securityPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#059669',
-  },
-  infoRowItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-  },
-  infoRowLabel: {
-    fontSize: 13.5,
-    fontWeight: '600',
-    color: '#334155',
-  },
-  versionBadge: {
-    backgroundColor: '#F1F5F9',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  versionBadgeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#475569',
-  },
-  serverStatusBadge: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#ECFDF5',
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  serverStatusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: '#10B981',
-  },
-  serverStatusText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#059669',
   },
   logoutBtn: {
     flexDirection: 'row-reverse',

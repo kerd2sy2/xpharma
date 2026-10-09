@@ -11,12 +11,10 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import {
-  InvoiceItem,
-  ReceiptItem,
-  ReturnItem,
-  StatementItem,
-} from '@/services/warehouse';
+import { InvoiceItem } from '@/features/purchases';
+import { ReturnItem } from '@/features/returns';
+import { ReceiptItem } from '@/features/receipts';
+import { StatementItem } from '@/features/statement';
 import { defaultPortalColors, formatCurrency, formatDate, PortalColors, SectionKey } from '../types';
 
 interface PortalSectionListViewProps {

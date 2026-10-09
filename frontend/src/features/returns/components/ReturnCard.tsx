@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { ReturnItem } from '@/services/warehouse';
+import { ReturnItem } from '../types';
 
 interface ReturnCardProps {
   item: ReturnItem;

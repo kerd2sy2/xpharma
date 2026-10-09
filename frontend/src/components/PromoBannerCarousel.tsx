@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Banner, formatBannerImageUrl } from '@/services/banner';
+import { Banner, formatBannerImageUrl } from '@/features/banners';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 export const BANNER_HEIGHT = Math.round(SCREEN_HEIGHT / 3);

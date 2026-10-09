@@ -17,12 +17,21 @@ import (
 type AuthHandler struct {
 	router       *db.TenantRouter
 	tokenService *TokenService
+	otpService   *OTPService
 }
 
 func NewAuthHandler(router *db.TenantRouter, tokenService *TokenService) *AuthHandler {
+	// Ensure provider check constraint accommodates phone/otp login
+	_, _ = router.Pool().Exec(
+		context.Background(),
+		`ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_provider_check;
+		 ALTER TABLE public.users ADD CONSTRAINT users_provider_check CHECK (provider IN ('google', 'apple', 'email', 'phone', 'otp'));`,
+	)
+
 	return &AuthHandler{
 		router:       router,
 		tokenService: tokenService,
+		otpService:   NewOTPService(),
 	}
 }
 
@@ -610,3 +619,222 @@ func (h *AuthHandler) ResetDevice(c *gin.Context) {
 		"message": "تم فك ربط الجهاز بنجاح. يمكن للصيدلي الآن تسجيل الدخول وتفعيل الحساب على هاتفه الجديد فوراً.",
 	})
 }
+
+// SendOTP handles sending SMS verification code via Authentica SA
+func (h *AuthHandler) SendOTP(c *gin.Context) {
+	var req struct {
+		Phone string `json:"phone" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "رقم الهاتف مطلوب"})
+		return
+	}
+
+	phoneClean := NormalizePhone(req.Phone)
+	if len(phoneClean) < 9 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "رقم الهاتف غير صالح"})
+		return
+	}
+
+	err := h.otpService.SendOTP(c.Request.Context(), phoneClean)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "تم إرسال رمز التحقق عبر الرسائل القصيرة بنجاح",
+		"phone":   phoneClean,
+	})
+}
+
+// VerifyOTP validates the OTP code and completes login/registration
+func (h *AuthHandler) VerifyOTP(c *gin.Context) {
+	var req struct {
+		Phone      string `json:"phone" binding:"required"`
+		OTP        string `json:"otp" binding:"required"`
+		DeviceID   string `json:"device_id"`
+		DeviceName string `json:"device_name"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "رقم الهاتف ورمز التحقق مطلوبان"})
+		return
+	}
+
+	phoneClean := NormalizePhone(req.Phone)
+	otpClean := strings.TrimSpace(req.OTP)
+
+	verified, err := h.otpService.VerifyOTP(c.Request.Context(), phoneClean, otpClean)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "تعذر التحقق من الرمز: " + err.Error()})
+		return
+	}
+
+	if !verified {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"error":   "رمز التحقق غير صحيح أو انتهت صلاحيته",
+		})
+		return
+	}
+
+	incomingDeviceID := strings.TrimSpace(req.DeviceID)
+	incomingDeviceName := strings.TrimSpace(req.DeviceName)
+	phoneEmail := phoneClean + "@phone.xpharma.cloud"
+
+	var existingDeviceID, existingDeviceName, dbUserID, dbRole, dbName, dbEmail string
+	var trialStartedAt time.Time
+	var subscriptionPlan int
+	var isActive bool = true
+
+	queryErr := h.router.Pool().QueryRow(
+		c.Request.Context(),
+		`SELECT id, role, is_active, COALESCE(device_id, ''), COALESCE(device_name, ''), COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0), COALESCE(name, ''), email
+		 FROM public.users 
+		 WHERE phone = $1 OR email = $2 OR email = $1
+		 LIMIT 1`,
+		phoneClean, phoneEmail,
+	).Scan(&dbUserID, &dbRole, &isActive, &existingDeviceID, &existingDeviceName, &trialStartedAt, &subscriptionPlan, &dbName, &dbEmail)
+
+	if queryErr == nil {
+		isLegacyMigration := existingDeviceID != "" &&
+			strings.HasPrefix(existingDeviceID, "XPH-ANDROID-") &&
+			!strings.HasPrefix(existingDeviceID, "XPH-HW-") &&
+			existingDeviceName != "" &&
+			strings.EqualFold(strings.TrimSpace(existingDeviceName), strings.TrimSpace(incomingDeviceName))
+
+		if existingDeviceID != "" && existingDeviceID != incomingDeviceID && !isLegacyMigration {
+			c.JSON(http.StatusConflict, gin.H{
+				"success":           false,
+				"code":              "DEVICE_MISMATCH",
+				"error":             "هذا الحساب مسجل ومفعل بالفعل على هاتف آخر. لا يمكن فتح الحساب على أكثر من جهاز في نفس الوقت. تواصل مع الدعم الفني لنقل الحساب إلى جهازك الجديد.",
+				"registered_device": existingDeviceName,
+			})
+			return
+		}
+
+		if !isActive {
+			c.JSON(http.StatusForbidden, gin.H{"error": "تم تعطيل هذا الحساب. يرجى مراجعة إدارة المنصة"})
+			return
+		}
+
+		if (existingDeviceID == "" || isLegacyMigration) && incomingDeviceID != "" {
+			existingDeviceID = incomingDeviceID
+			existingDeviceName = incomingDeviceName
+		}
+
+		_, _ = h.router.Pool().Exec(
+			c.Request.Context(),
+			`UPDATE public.users SET last_login_at = NOW(), updated_at = NOW(), phone = $1, device_id = COALESCE(NULLIF($2, ''), device_id), device_name = COALESCE(NULLIF($3, ''), device_name) WHERE id = $4`,
+			phoneClean, incomingDeviceID, incomingDeviceName, dbUserID,
+		)
+	} else {
+		dbRole = "user"
+		dbName = "صيدلي (" + phoneClean + ")"
+		dbEmail = phoneEmail
+
+		insertQuery := `
+			INSERT INTO public.users (
+				phone, email, email_verified, name, provider, role, device_id, device_name, trial_started_at, last_login_at, created_at, updated_at
+			) VALUES (
+				$1, $2, TRUE, $3, 'phone', $4, $5, $6, NOW(), NOW(), NOW(), NOW()
+			)
+			RETURNING id, role, is_active, COALESCE(device_id, ''), COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0)
+		`
+		err = h.router.Pool().QueryRow(
+			c.Request.Context(),
+			insertQuery,
+			phoneClean,
+			phoneEmail,
+			dbName,
+			dbRole,
+			incomingDeviceID,
+			incomingDeviceName,
+		).Scan(&dbUserID, &dbRole, &isActive, &existingDeviceID, &trialStartedAt, &subscriptionPlan)
+
+		if err != nil {
+			log.Printf("[OTP] Warning: could not persist phone user: %v", err)
+			dbUserID = phoneClean
+		}
+
+		existingDeviceID = incomingDeviceID
+	}
+
+	// 30-day trial automatically active in subscriptions
+	_, _ = h.router.Pool().Exec(
+		c.Request.Context(),
+		`INSERT INTO public.subscriptions (
+			tenant_id, user_email, user_name, user_phone, plan_type, amount, payment_method,
+			status, start_date, end_date, created_at, updated_at, notes
+		)
+		SELECT 
+			(SELECT id FROM public.tenants LIMIT 1),
+			LOWER(TRIM($1)),
+			$2,
+			$3,
+			'1 صيدلية (فترة تجريبية مجانية)',
+			0,
+			'free_trial',
+			'active',
+			CURRENT_DATE,
+			CURRENT_DATE + INTERVAL '30 days',
+			NOW(),
+			NOW(),
+			'فترة تجريبية مجانية 30 يوماً مفعلة تلقائياً عبر التحقق برقم الهاتف'
+		WHERE NOT EXISTS (
+			SELECT 1 FROM public.subscriptions WHERE LOWER(TRIM(user_email)) = LOWER(TRIM($1)) OR user_phone = $3
+		)`,
+		dbEmail, dbName, phoneClean,
+	)
+
+	subPlan, trialDaysLeft, isTrialExpired := h.resolveUserSubscription(c.Request.Context(), dbEmail)
+
+	var pharmacyID, tenantID, pharmaCode string
+	_ = h.router.Pool().QueryRow(
+		c.Request.Context(),
+		`SELECT id, tenant_id, code FROM public.pharmacies WHERE linked_user_id = $1 OR linked_user_id = $2 LIMIT 1`,
+		dbUserID, phoneClean,
+	).Scan(&pharmacyID, &tenantID, &pharmaCode)
+
+	token, err := h.tokenService.GenerateToken(Claims{
+		UserID:     dbUserID,
+		Email:      dbEmail,
+		Role:       dbRole,
+		TenantID:   tenantID,
+		PharmacyID: pharmacyID,
+		PharmaCode: pharmaCode,
+	}, 30*24*time.Hour)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل إنشاء الجلسة"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":           true,
+		"token":             token,
+		"trial_days_left":   trialDaysLeft,
+		"is_trial_expired":  isTrialExpired,
+		"subscription_plan": subPlan,
+		"device_id":         existingDeviceID,
+		"user": gin.H{
+			"id":                dbUserID,
+			"email":             dbEmail,
+			"phone":             phoneClean,
+			"name":              dbName,
+			"role":              dbRole,
+			"provider":          "phone",
+			"tenant_id":         tenantID,
+			"pharmacy_id":       pharmacyID,
+			"device_id":         existingDeviceID,
+			"trial_days_left":   trialDaysLeft,
+			"is_trial_expired":  isTrialExpired,
+			"subscription_plan": subPlan,
+		},
+		"role": dbRole,
+	})
+}
+

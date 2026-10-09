@@ -7,8 +7,8 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinkedPharmacyAccount, PharmacyBalance } from '@/services/warehouse';
-import { defaultPortalColors, formatCurrency, PortalColors } from '../types';
+import { LinkedPharmacyAccount } from '@/features/warehouses';
+import { defaultPortalColors, formatCurrency, PortalColors, PharmacyBalance } from '../types';
 
 interface PharmacyMasterCardProps {
   pharmacies: LinkedPharmacyAccount[];

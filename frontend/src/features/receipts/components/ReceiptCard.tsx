@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { ReceiptItem } from '@/services/warehouse';
+import { ReceiptItem } from '../types';
 
 interface ReceiptCardProps {
   item: ReceiptItem;

@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { InvoiceItem, InvoiceLineItem } from '@/services/warehouse';
+import { InvoiceItem, InvoiceLineItem } from '@/features/purchases';
 import { defaultPortalColors, formatCurrency, PortalColors } from '../types';
 
 interface InvoiceDetailsViewProps {

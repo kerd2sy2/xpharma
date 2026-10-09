@@ -11,7 +11,8 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { InvoiceLineItem, ReturnItem } from '@/services/warehouse';
+import { InvoiceLineItem } from '@/features/purchases';
+import { ReturnItem } from '@/features/returns';
 import { defaultPortalColors, formatCurrency, PortalColors } from '../types';
 
 interface ReturnDetailsViewProps {

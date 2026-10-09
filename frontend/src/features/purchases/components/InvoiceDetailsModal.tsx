@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { InvoiceItem, InvoiceLineItem } from '@/services/warehouse';
+import { InvoiceItem, InvoiceLineItem } from '../types';
 
 interface InvoiceDetailsModalProps {
   invoice: InvoiceItem | null;

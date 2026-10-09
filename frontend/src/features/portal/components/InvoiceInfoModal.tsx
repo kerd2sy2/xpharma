@@ -1,7 +1,7 @@
 import React from 'react';
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { InvoiceItem } from '@/services/warehouse';
+import { InvoiceItem } from '@/features/purchases';
 import { defaultPortalColors, formatCurrency, formatDate, PortalColors } from '../types';
 
 interface InvoiceInfoModalProps {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { ReturnItem } from '@/services/warehouse';
+import { ReturnItem } from '@/features/returns';
 import { defaultPortalColors, formatCurrency, formatDate, PortalColors } from '../types';
 
 interface ReturnInfoModalProps {

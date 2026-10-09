@@ -53,7 +53,7 @@
       "reactCompiler": true
     },
     "updates": {
-      "url": "https://u.expo.dev/b6ffba91-f6da-42fc-9e30-7c1710382f1e"
+      "url": "https://u.expo.dev/e4ac5d40-7622-4985-992a-adb30364e432"
     },
     "runtimeVersion": {
       "policy": "appVersion"
@@ -61,9 +61,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "b6ffba91-f6da-42fc-9e30-7c1710382f1e"
+        "projectId": "e4ac5d40-7622-4985-992a-adb30364e432"
       }
     },
-    "owner": "xpharmas-team"
+    "owner": "aams2"
   }
 }

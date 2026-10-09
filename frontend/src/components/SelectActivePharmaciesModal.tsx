@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { selectActivePharmacies } from '@/services/subscription';
+import { selectActivePharmacies } from '@/features/subscription';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 

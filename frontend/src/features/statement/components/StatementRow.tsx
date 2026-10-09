@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { StatementItem } from '@/services/warehouse';
+import { StatementItem } from '../types';
 
 interface StatementRowProps {
   item: StatementItem;

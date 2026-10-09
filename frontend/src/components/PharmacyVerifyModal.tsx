@@ -15,7 +15,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Warehouse, verifyPharmacy, VerifyPharmacyResult } from '@/services/warehouse';
+import { Warehouse, verifyPharmacy, VerifyPharmacyResult } from '@/features/warehouses';
 import { useAuth } from '@/context/AuthContext';
 
 interface PharmacyVerifyModalProps {

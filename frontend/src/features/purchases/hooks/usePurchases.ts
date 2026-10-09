@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
-import { fetchInvoiceDetails, fetchPharmacyPurchases, InvoiceItem, InvoiceLineItem } from '@/services/warehouse';
+import { fetchInvoiceDetails, fetchPharmacyPurchases } from '../api';
+import { InvoiceItem, InvoiceLineItem } from '../types';
 
 const PAGE_SIZE = 20;
 

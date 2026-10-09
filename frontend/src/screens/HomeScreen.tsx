@@ -29,14 +29,14 @@ import {
   syncWarehousePharmacies,
   VerifyPharmacyResult,
   Warehouse,
-} from '@/services/warehouse';
+} from '@/features/warehouses';
 import {
   checkCanAddPharmacy,
   getGlobalLinkedPharmacies,
   getSubscriptionStatus,
   registerGlobalPharmacy,
   SubscriptionStatus,
-} from '@/services/subscription';
+} from '@/features/subscription';
 
 // Modular Components
 import ModuleErrorBoundary from '@/components/ModuleErrorBoundary';
@@ -51,7 +51,7 @@ import SelectActivePharmaciesModal from '@/components/SelectActivePharmaciesModa
 import WarehousePortalScreen from '@/screens/WarehousePortalScreen';
 import XLogo, { XLogoHandle } from '@/components/XLogo';
 import PromoBannerCarousel, { BANNER_HEIGHT } from '@/components/PromoBannerCarousel';
-import { fetchBanners, Banner } from '@/services/banner';
+import { fetchBanners, Banner } from '@/features/banners';
 
 const { width } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -99,7 +99,7 @@ export default function HomeScreen() {
   // Subscription & Trial Modal State
   const [subscriptionModalVisible, setSubscriptionModalVisible] = useState(false);
   const [subscriptionReason, setSubscriptionReason] = useState<string | undefined>();
-  const [subscriptionRequiredPlan, setSubscriptionRequiredPlan] = useState<number>(2);
+  const [subscriptionRequiredPlan, setSubscriptionRequiredPlan] = useState<number | undefined>(undefined);
   const [isTrialExpired, setIsTrialExpired] = useState(false);
   const [subscriptionStatusInfo, setSubscriptionStatusInfo] = useState<SubscriptionStatus | null>(null);
   const [selectActiveModalVisible, setSelectActiveModalVisible] = useState(false);
@@ -470,6 +470,11 @@ export default function HomeScreen() {
       <SettingsScreen
         user={user}
         subscriptionStatusInfo={subscriptionStatusInfo}
+        onOpenSubscriptionModal={() => {
+          setProfileModalVisible(false);
+          setSubscriptionReason(undefined);
+          setSubscriptionModalVisible(true);
+        }}
         onLogout={logout}
         onBack={() => setProfileModalVisible(false)}
       />
@@ -486,7 +491,13 @@ export default function HomeScreen() {
           const updatedStatus = await getSubscriptionStatus(user?.email);
           setSubscriptionStatusInfo(updatedStatus);
         }}
-        onBack={() => setSubscriptionModalVisible(false)}
+        onBack={async () => {
+          setSubscriptionModalVisible(false);
+          try {
+            const updatedStatus = await getSubscriptionStatus(user?.email);
+            setSubscriptionStatusInfo(updatedStatus);
+          } catch {}
+        }}
       />
     );
   }
@@ -662,6 +673,7 @@ export default function HomeScreen() {
               selectedTab={selectedCategoryTab}
               onSelectTab={setSelectedCategoryTab}
               isSticky={false}
+              backgroundColor={colors.bg}
             />
           </View>
         }
@@ -739,6 +751,7 @@ export default function HomeScreen() {
                 selectedTab={selectedCategoryTab}
                 onSelectTab={setSelectedCategoryTab}
                 isSticky={true}
+                backgroundColor={colors.bg}
               />
             </View>
           ) : null}
@@ -919,7 +932,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     paddingTop: 2,
     paddingBottom: 2,
-    backgroundColor: '#F8F9FA',
+    backgroundColor: '#F9F7FD',
   },
   tabsStickyContainer: {
     marginTop: 2,

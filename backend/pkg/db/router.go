@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -23,9 +25,24 @@ func NewTenantRouter(databaseURL string) (*TenantRouter, error) {
 		return nil, fmt.Errorf("invalid database URL: %w", err)
 	}
 
-	config.MaxConns = 25
-	config.MinConns = 5
+	maxConns := int32(100)
+	if envMax := os.Getenv("DB_MAX_CONNS"); envMax != "" {
+		if val, err := strconv.Atoi(envMax); err == nil && val > 0 {
+			maxConns = int32(val)
+		}
+	}
+
+	minConns := int32(10)
+	if envMin := os.Getenv("DB_MIN_CONNS"); envMin != "" {
+		if val, err := strconv.Atoi(envMin); err == nil && val > 0 {
+			minConns = int32(val)
+		}
+	}
+
+	config.MaxConns = maxConns
+	config.MinConns = minConns
 	config.MaxConnIdleTime = 5 * time.Minute
+	config.MaxConnLifetime = 30 * time.Minute
 
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {

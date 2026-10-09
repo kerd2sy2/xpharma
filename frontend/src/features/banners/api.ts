@@ -1,19 +1,8 @@
-export interface Banner {
-  id: string;
-  title: string;
-  subtitle: string;
-  image_url: string;
-  badge_text: string;
-  action_type: 'none' | 'url' | 'warehouse' | 'category';
-  action_value: string;
-  bg_color?: string;
-  is_active?: boolean;
-  sort_order?: number;
-}
+import { resilientFetch } from '@/utils/resilientFetch';
+import { Banner } from './types';
 
 const API_BASE_URL = 'https://api.xpharma.cloud';
 
-// Fallback banner when no banners are loaded from the cloud
 export const DEFAULT_FALLBACK_BANNER: Banner = {
   id: 'default-hero',
   title: 'منصة إكس فارما السحابية',
@@ -36,28 +25,22 @@ export function formatBannerImageUrl(url: string | undefined): string {
 
 export async function fetchBanners(): Promise<Banner[]> {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
-
-    const res = await fetch(`${API_BASE_URL}/v1/banners`, {
-      signal: controller.signal,
-      headers: {
-        'Accept': 'application/json',
-      },
+    const data = await resilientFetch<{ banners?: Banner[] }>(`${API_BASE_URL}/v1/banners`, {
+      timeoutMs: 5000,
+      retries: 2,
+      fallback: { banners: [DEFAULT_FALLBACK_BANNER] },
+      serviceName: 'banners-api',
+      headers: { Accept: 'application/json' },
     });
-    clearTimeout(timeoutId);
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data.banners && Array.isArray(data.banners) && data.banners.length > 0) {
-        return data.banners.map((b: Banner) => ({
-          ...b,
-          image_url: formatBannerImageUrl(b.image_url),
-        }));
-      }
+    if (data?.banners && Array.isArray(data.banners) && data.banners.length > 0) {
+      return data.banners.map((b) => ({
+        ...b,
+        image_url: formatBannerImageUrl(b.image_url),
+      }));
     }
   } catch (err) {
-    console.log('[BannerService] Falling back to default banners:', err);
+    console.warn('[BannerService] Graceful degradation to default banner:', err);
   }
 
   return [DEFAULT_FALLBACK_BANNER];

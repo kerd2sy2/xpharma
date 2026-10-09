@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"xpharma-backend/pkg/db"
+	"xpharma-backend/pkg/queue"
 )
 
 type IngestionPayload struct {
@@ -113,11 +114,31 @@ type ProductSyncItem struct {
 }
 
 type IngestionService struct {
-	router *db.TenantRouter
+	router     *db.TenantRouter
+	broker     queue.MessageBroker
+	workerPool *WorkerPool
 }
 
-func NewIngestionService(router *db.TenantRouter) *IngestionService {
-	return &IngestionService{router: router}
+func NewIngestionService(router *db.TenantRouter, broker queue.MessageBroker) *IngestionService {
+	if broker == nil {
+		broker = queue.NewResilientBroker()
+	}
+	svc := &IngestionService{
+		router: router,
+		broker: broker,
+	}
+	svc.workerPool = NewWorkerPool(broker, svc, 8)
+	svc.workerPool.Start()
+	return svc
+}
+
+func (s *IngestionService) Close() {
+	if s.workerPool != nil {
+		s.workerPool.Stop()
+	}
+	if s.broker != nil {
+		s.broker.Close()
+	}
 }
 
 // AuthenticateAgent verifies the X-Agent-Key header against public.tenants
@@ -145,7 +166,7 @@ func (s *IngestionService) AuthenticateAgent(c *gin.Context) (string, error) {
 	return tenantID, nil
 }
 
-// HandleIngest receives Gzip compressed JSON batch payload
+// HandleIngest receives Gzip compressed JSON batch payload and queues it asynchronously
 func (s *IngestionService) HandleIngest(c *gin.Context) {
 	tenantID, err := s.AuthenticateAgent(c)
 	if err != nil {
@@ -170,8 +191,64 @@ func (s *IngestionService) HandleIngest(c *gin.Context) {
 		return
 	}
 
+	jobID := fmt.Sprintf("ingest_%d_%s", time.Now().UnixNano(), tenantID[:8])
+	task := IngestionTask{
+		JobID:     jobID,
+		TenantID:  tenantID,
+		Payload:   payload,
+		CreatedAt: time.Now(),
+	}
+
+	taskBytes, err := json.Marshal(task)
+	if err == nil {
+		enqueueErr := s.broker.Enqueue(c.Request.Context(), IngestTopic, taskBytes)
+		if enqueueErr == nil {
+			// Fast asynchronous response - 202 Accepted
+			c.JSON(http.StatusAccepted, gin.H{
+				"success": true,
+				"status":  "queued",
+				"job_id":  jobID,
+				"message": "تم استلام دفعة المزامنة بنجاح وجار معالجتها في الخلفية",
+				"counts": gin.H{
+					"invoices":  len(payload.Invoices),
+					"returns":   len(payload.Returns),
+					"receipts":  len(payload.CashReceipts),
+					"ledger":    len(payload.Ledger),
+					"products":  len(payload.Products),
+					"customers": len(payload.Customers),
+				},
+			})
+			return
+		}
+		log.Printf("[IngestionService] Broker enqueue failed (%v); falling back to inline execution", enqueueErr)
+	}
+
+	// Resilient Fallback: Process inline if broker is full or unavailable
 	ctx := c.Request.Context()
-	err = s.router.ExecInTenant(ctx, tenantID, func(ctx context.Context, schema string, conn *pgxpool.Conn) error {
+	err = s.ProcessPayload(ctx, tenantID, &payload)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"status":  "processed_inline",
+		"message": "Batch synced successfully (fallback inline)",
+		"counts": gin.H{
+			"invoices":  len(payload.Invoices),
+			"returns":   len(payload.Returns),
+			"receipts":  len(payload.CashReceipts),
+			"ledger":    len(payload.Ledger),
+			"products":  len(payload.Products),
+			"customers": len(payload.Customers),
+		},
+	})
+}
+
+// ProcessPayload executes database upserts inside the tenant's isolated schema
+func (s *IngestionService) ProcessPayload(ctx context.Context, tenantID string, payload *IngestionPayload) error {
+	return s.router.ExecInTenant(ctx, tenantID, func(ctx context.Context, schema string, conn *pgxpool.Conn) error {
 		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return err
@@ -360,23 +437,5 @@ func (s *IngestionService) HandleIngest(c *gin.Context) {
 		}
 
 		return tx.Commit(ctx)
-	})
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Batch synced successfully",
-		"counts": gin.H{
-			"invoices":  len(payload.Invoices),
-			"returns":   len(payload.Returns),
-			"receipts":  len(payload.CashReceipts),
-			"ledger":    len(payload.Ledger),
-			"products":  len(payload.Products),
-			"customers": len(payload.Customers),
-		},
 	})
 }

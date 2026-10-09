@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Warehouse } from '@/services/warehouse';
+import { Warehouse } from '../types';
 
 interface WarehouseCardProps {
   item: Warehouse;

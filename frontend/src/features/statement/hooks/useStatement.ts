@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
-import { fetchPharmacyStatement, StatementItem } from '@/services/warehouse';
+import { fetchPharmacyStatement } from '../api';
+import { StatementItem } from '../types';
 
 const PAGE_SIZE = 20;
 

@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
-import { fetchPharmacyReceipts, ReceiptItem } from '@/services/warehouse';
+import { fetchPharmacyReceipts } from '../api';
+import { ReceiptItem } from '../types';
 
 const PAGE_SIZE = 20;
 

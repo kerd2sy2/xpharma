@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { InvoiceItem } from '@/services/warehouse';
+import { InvoiceItem } from '../types';
 
 interface InvoiceCardProps {
   item: InvoiceItem;

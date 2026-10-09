@@ -456,15 +456,15 @@ func (s *SubscriptionService) RecordPayment(c *gin.Context) {
 		if _, err := fmt.Sscanf(req.PlanType, "P%d", &p); err == nil && p > 0 {
 			plan = p
 		}
-	} else if strings.Contains(req.PlanType, "5") {
+	} else if strings.Contains(req.PlanType, "5") || strings.Contains(req.PlanType, "٥") {
 		plan = 5
-	} else if strings.Contains(req.PlanType, "4") {
+	} else if strings.Contains(req.PlanType, "4") || strings.Contains(req.PlanType, "٤") {
 		plan = 4
-	} else if strings.Contains(req.PlanType, "3") {
+	} else if strings.Contains(req.PlanType, "3") || strings.Contains(req.PlanType, "٣") {
 		plan = 3
-	} else if strings.Contains(req.PlanType, "2") {
+	} else if strings.Contains(req.PlanType, "2") || strings.Contains(req.PlanType, "٢") {
 		plan = 2
-	} else if strings.Contains(req.PlanType, "1") {
+	} else if strings.Contains(req.PlanType, "1") || strings.Contains(req.PlanType, "١") {
 		plan = 1
 	}
 

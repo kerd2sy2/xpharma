@@ -1,16 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   BackHandler,
   Dimensions,
   Linking,
+  Modal,
   Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -24,8 +25,9 @@ import {
   initiateKashierPayment,
   setActiveSubscriptionPlan,
   recordSubscriptionPayment,
-} from '@/services/subscription';
+} from '@/features/subscription';
 import { useAuth } from '@/context/AuthContext';
+import SubscriptionNoticeModal, { NoticeType } from '@/components/SubscriptionNoticeModal';
 
 const { width } = Dimensions.get('window');
 
@@ -40,108 +42,360 @@ interface SubscriptionScreenProps {
 export default function SubscriptionScreen({
   reason,
   isTrialExpired = false,
-  suggestedPlan = 3,
+  suggestedPlan,
   onSubscribed,
   onBack,
 }: SubscriptionScreenProps) {
   const insets = useSafeAreaInsets();
   const topInset = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 28) : 0);
   const { user } = useAuth();
-  const [selectedPlan, setSelectedPlan] = useState<number>(suggestedPlan || (isTrialExpired ? 1 : 3));
-  const [showSuccess, setShowSuccess] = useState(false);
-  const [activatedPlanObj, setActivatedPlanObj] = useState<PricingPlan | null>(null);
+  const [selectedPlan, setSelectedPlan] = useState<number | undefined>(undefined);
+  const [showInstructionsModal, setShowInstructionsModal] = useState(false);
+  const [currentPlan, setCurrentPlan] = useState<number>(0);
+  const [currentDaysRemaining, setCurrentDaysRemaining] = useState<number>(0);
+  const [isCurrentlySubscribed, setIsCurrentlySubscribed] = useState<boolean>(false);
+  const [isCurrentlyTrialExpired, setIsCurrentlyTrialExpired] = useState<boolean>(isTrialExpired);
+  const [loadingCurrentPlan, setLoadingCurrentPlan] = useState<boolean>(true);
   const [isCheckingServer, setIsCheckingServer] = useState(false);
   const [isProcessingKashier, setIsProcessingKashier] = useState(false);
+  const [isProcessingDowngrade, setIsProcessingDowngrade] = useState(false);
+
+  // Bottom-sheet notice modal state
+  type NoticeModalState = {
+    visible: boolean;
+    type: NoticeType;
+    title: string;
+    message: string;
+    badgeText?: string;
+    primaryButtonText?: string;
+    onPrimaryPress?: () => void;
+    secondaryButtonText?: string;
+    onSecondaryPress?: () => void;
+  };
+  const [noticeModal, setNoticeModal] = useState<NoticeModalState>({
+    visible: false, type: 'info', title: '', message: '',
+  });
+  const closeNotice = useCallback(() => setNoticeModal((prev) => ({ ...prev, visible: false })), []);
+  const showNotice = useCallback((s: Omit<NoticeModalState, 'visible'>) =>
+    setNoticeModal({ ...s, visible: true }), []);
+
+
+
+  const fetchStatus = async () => {
+    try {
+      const status = await getSubscriptionStatus(user?.email);
+      setIsCurrentlySubscribed(status.isSubscribed);
+      setCurrentPlan(status.subscribedPlan || 0);
+      setCurrentDaysRemaining(status.daysRemaining);
+      setIsCurrentlyTrialExpired(status.isTrialExpired);
+
+      // If user has an active plan, open DIRECTLY on it!
+      // Only select suggestedPlan if there's an explicit reason to upgrade beyond current plan.
+      if (status.subscribedPlan > 0) {
+        if (reason && suggestedPlan && suggestedPlan > status.subscribedPlan) {
+          setSelectedPlan(suggestedPlan);
+        } else {
+          setSelectedPlan(status.subscribedPlan);
+        }
+      } else if (suggestedPlan) {
+        setSelectedPlan(suggestedPlan);
+      } else {
+        setSelectedPlan(1);
+      }
+    } catch (err) {
+      console.warn('Subscription fetch status error:', err);
+    } finally {
+      setLoadingCurrentPlan(false);
+    }
+  };
 
   useEffect(() => {
-    if (suggestedPlan) {
-      setSelectedPlan(suggestedPlan);
-    } else if (isTrialExpired) {
-      setSelectedPlan(1);
-    }
-  }, [suggestedPlan, isTrialExpired]);
+    fetchStatus();
+  }, [user?.email, suggestedPlan]);
 
   const activePlanObj = PRICING_PLANS.find((p) => p.pharmacies === selectedPlan) || PRICING_PLANS[0];
+  const currentPlanObj = PRICING_PLANS.find((p) => p.pharmacies === currentPlan);
+
+  const isCurrentSelected = isCurrentlySubscribed && selectedPlan !== undefined && selectedPlan === currentPlan;
+  const isDowngradeSelected = isCurrentlySubscribed && currentPlan > 0 && selectedPlan !== undefined && selectedPlan < currentPlan;
+  const isUpgradeSelected = isCurrentlySubscribed && currentPlan > 0 && selectedPlan !== undefined && selectedPlan > currentPlan;
+
+
+  // Calculate fair prorated upgrade difference if user upgrades to a higher tier
+  const upgradeQuote = useMemo(() => {
+    if (!isUpgradeSelected || !currentPlanObj) return null;
+    const targetPrice = activePlanObj.price;
+    const currentPrice = currentPlanObj.price;
+    const days = Math.max(0, Math.min(30, currentDaysRemaining));
+    const dailyRate = currentPrice / 30;
+    const unusedCredit = Math.round(dailyRate * days);
+    const rawDiff = targetPrice - unusedCredit;
+    const finalAmount = Math.max(20, Math.round(rawDiff / 5) * 5);
+    return {
+      targetPrice,
+      currentPrice,
+      unusedCredit,
+      finalAmount,
+      daysRemaining: days,
+    };
+  }, [isUpgradeSelected, currentPlanObj, activePlanObj, currentDaysRemaining]);
 
   // Handle Android hardware back button
   useEffect(() => {
     const onBackPress = () => {
-      if (showSuccess) {
-        setShowSuccess(false);
-      } else {
-        onBack();
-      }
+      onBack();
       return true;
     };
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => subscription.remove();
-  }, [showSuccess, onBack]);
+  }, [onBack]);
 
   const handlePayWithKashier = async () => {
     if (!user?.email) {
-      Alert.alert('تنبيه', 'يرجى تسجيل الدخول بحسابك أولاً لإتمام الدفع الإلكتروني.');
+      showNotice({
+        type: 'warning',
+        title: 'تنبيه',
+        message: 'يرجى تسجيل الدخول بحسابك أولاً لإتمام الدفع الإلكتروني.',
+        primaryButtonText: 'حسناً',
+      });
       return;
+    }
+
+    // 1. Lock the target plan and amount AT TIME OF CLICK (immune to state changes)
+    const planToPay = selectedPlan ?? 1;
+    const targetPlanObj = PRICING_PLANS.find((p) => p.pharmacies === planToPay) || PRICING_PLANS[0];
+    const isUpgrading = isCurrentlySubscribed && currentPlan > 0 && planToPay > currentPlan;
+
+    let amountToCharge = targetPlanObj.price;
+    let upgradeCredit = 0;
+    if (isUpgrading && currentPlanObj) {
+      const days = Math.max(0, Math.min(30, currentDaysRemaining));
+      const dailyRate = currentPlanObj.price / 30;
+      upgradeCredit = Math.round(dailyRate * days);
+      const rawDiff = targetPlanObj.price - upgradeCredit;
+      amountToCharge = Math.max(20, Math.round(rawDiff / 5) * 5);
     }
 
     setIsProcessingKashier(true);
     try {
       const res = await initiateKashierPayment({
         email: user.email,
-        plan: selectedPlan,
+        plan: planToPay,
+        customAmount: amountToCharge,
         userName: user.name,
       });
 
       if (!res.success || !res.session_url) {
-        Alert.alert('تعذر فتح بوابة كاشير', res.error || 'يرجى المحاولة مرة أخرى أو الدفع عبر واتساب.');
+        showNotice({
+          type: 'error',
+          title: 'تعذر فتح بوابة كاشير',
+          message: res.error || 'يرجى المحاولة مرة أخرى أو الدفع عبر واتساب.',
+          primaryButtonText: 'حسناً',
+        });
         setIsProcessingKashier(false);
         return;
       }
 
       // Open AuthSession that intercepts xpharma:// redirect and closes browser automatically
-      const result = await WebBrowser.openAuthSessionAsync(
+      const browserResult = await WebBrowser.openAuthSessionAsync(
         res.session_url,
         'xpharma://'
       );
 
-      // Immediately persist selected plan locally and notify servers
-      await setActiveSubscriptionPlan(selectedPlan);
+      // Check payment status from redirect URL
+      let isPaymentConfirmed = false;
+      const returnUrl = browserResult.type === 'success' ? browserResult.url : '';
+      if (returnUrl) {
+        try {
+          const queryIndex = returnUrl.indexOf('?');
+          let paymentStatus = '';
+          if (queryIndex !== -1) {
+            const queryString = returnUrl.substring(queryIndex + 1);
+            const searchParams = new URLSearchParams(queryString);
+            paymentStatus = (
+              searchParams.get('paymentStatus') ||
+              searchParams.get('status') ||
+              ''
+            ).toUpperCase();
+          }
+
+          if (
+            paymentStatus === 'SUCCESS' ||
+            paymentStatus === 'CAPTURED' ||
+            paymentStatus === 'PAID' ||
+            returnUrl.includes('subscription-success')
+          ) {
+            isPaymentConfirmed = true;
+          }
+        } catch (err) {
+          console.warn('Error parsing payment status:', err);
+        }
+      }
+
+      // Fallback: check if backend already received payment via webhook or redirect
+      if (!isPaymentConfirmed) {
+        try {
+          const checkStatus = await getSubscriptionStatus(user.email);
+          if (checkStatus.isSubscribed && (checkStatus.subscribedPlan >= planToPay || checkStatus.allowedPharmacies >= planToPay)) {
+            isPaymentConfirmed = true;
+          }
+        } catch (err) {
+          console.warn('Fallback status check error:', err);
+        }
+      }
+
+      if (!isPaymentConfirmed) {
+        showNotice({
+          type: 'warning',
+          title: 'لم تكتمل عملية الدفع',
+          message: 'لم يتم استلام تأكيد نجاح العملية من بوابة الدفع. لم يتم خصم أي مبالغ أو تفعيل الاشتراك.',
+          primaryButtonText: 'حسناً',
+        });
+        setIsProcessingKashier(false);
+        return;
+      }
+
+      // Immediately persist planToPay (LOCKED, immune to selectedPlan changes!)
+      await setActiveSubscriptionPlan(planToPay);
+      setCurrentPlan(planToPay);
+      setSelectedPlan(planToPay);
+      setIsCurrentlySubscribed(true);
+      setCurrentDaysRemaining(30);
+      setIsCurrentlyTrialExpired(false);
+
       try {
         await recordSubscriptionPayment({
           user_email: user?.email || '',
           user_name: user?.name || 'دكتور صيدلي',
           user_phone: user?.phone || '',
-          plan_type: `${selectedPlan} صيدليات`,
-          amount: activePlanObj.price,
+          plan_type: isUpgrading ? `${planToPay} صيدليات (ترقية تناسبية)` : `${planToPay} صيدليات`,
+          amount: amountToCharge,
           payment_method: 'kashier',
           status: 'active',
           order_id: res.order_id || '',
-          notes: `اشتراك إلكتروني ناجح بحساب Google (${user?.email || ''}) - باقة ${activePlanObj.label}`,
+          notes: isUpgrading
+            ? `ترقية اشتراك تناسبية إلى ${targetPlanObj.label} بقيمة ${amountToCharge} ج.م بدلاً من ${targetPlanObj.price} ج.م (خصم رصيد ${upgradeCredit} ج.م عن ${currentDaysRemaining} يوم)`
+            : `اشتراك إلكتروني ناجح بحساب Google (${user?.email || ''}) - باقة ${targetPlanObj.label}`,
         });
       } catch (e) {
         console.warn('Record billing error:', e);
       }
 
-      // Fetch fresh status and activate plan UI
-      setIsCheckingServer(true);
+      // Fetch fresh status in background
       try {
         await getSubscriptionStatus(user.email);
       } catch {}
-      setActivatedPlanObj(activePlanObj);
-      setShowSuccess(true);
-      if (onSubscribed) onSubscribed(selectedPlan);
-      setIsCheckingServer(false);
+
+      if (onSubscribed) onSubscribed(planToPay);
+
+      showNotice({
+        type: 'success',
+        title: 'تم التفعيل بنجاح 🎉',
+        badgeText: isUpgrading ? 'تمت الترقية' : 'تم الاشتراك',
+        message: isUpgrading
+          ? `تمت ترقية باقتك بنجاح إلى (${targetPlanObj.label}). سعة الفروع مفعلة وصلاحيتك الآن 30 يوماً كاملة.`
+          : `تم تفعيل اشتراكك بنجاح على (${targetPlanObj.label}). حسابك الآن مفعل ونشط بكافة المزايا.`,
+        primaryButtonText: 'متابعة إلى التطبيق',
+        onPrimaryPress: () => { closeNotice(); onBack(); },
+      });
     } catch (e: any) {
-      Alert.alert('خطأ', 'حدث خطأ أثناء فتح بوابة الدفع: ' + (e.message || 'يرجى المحاولة لاحقاً'));
+      showNotice({
+        type: 'error',
+        title: 'خطأ في بوابة الدفع',
+        message: 'حدث خطأ أثناء فتح بوابة الدفع: ' + (e.message || 'يرجى المحاولة لاحقاً'),
+        primaryButtonText: 'حسناً',
+      });
     } finally {
       setIsProcessingKashier(false);
     }
   };
 
+  const handleDowngradePlan = async () => {
+    if (selectedPlan === undefined) return;
+    setIsProcessingDowngrade(true);
+    try {
+      await setActiveSubscriptionPlan(selectedPlan);
+      setCurrentPlan(selectedPlan);
+
+      try {
+        await recordSubscriptionPayment({
+          user_email: user?.email || '',
+          user_name: user?.name || 'دكتور صيدلي',
+          user_phone: user?.phone || '',
+          plan_type: `${selectedPlan} صيدليات (تخفيض باقة)`,
+          amount: 0,
+          payment_method: 'downgrade',
+          status: 'active',
+          notes: `تخفيض الباقة من ${currentPlan} إلى ${selectedPlan} صيدليات بدون رسوم إضافية`,
+        });
+      } catch (err) {
+        console.warn('Record downgrade error:', err);
+      }
+
+      if (onSubscribed) onSubscribed(selectedPlan);
+
+      showNotice({
+        type: 'success',
+        title: 'تم التخفيض بنجاح 🎉',
+        badgeText: 'تم تعديل الباقة',
+        message: `تم تحويل باقتك إلى (${activePlanObj.label}). سعة الصيدليات أصبحت ${selectedPlan} صيدليات لكل مخزن، مع بقاء أيامك السابقة (${currentDaysRemaining} يوماً) مفعلة بدون أي رسوم.`,
+        primaryButtonText: 'حسناً',
+        onPrimaryPress: () => { closeNotice(); onBack(); },
+      });
+    } catch (e: any) {
+      showNotice({
+        type: 'error',
+        title: 'خطأ',
+        message: 'تعذر تنفيذ التخفيض: ' + (e.message || 'يرجى المحاولة لاحقاً'),
+        primaryButtonText: 'حسناً',
+      });
+    } finally {
+      setIsProcessingDowngrade(false);
+    }
+  };
+
+  const handlePrimaryAction = () => {
+    if (isCurrentSelected) {
+      if (currentDaysRemaining <= 5) {
+        handlePayWithKashier();
+      } else {
+        showNotice({
+          type: 'info',
+          title: 'باقتك الحالية مفعلة ✓',
+          badgeText: `متبقي ${currentDaysRemaining} يوم`,
+          message: `أنت مشترك بالفعل في (${activePlanObj.label}).\n\nلا حاجة لسداد الاشتراك مرة أخرى الآن، يمكنك تجديد الاشتراك عند اقتراب موعد انتهائه.`,
+          primaryButtonText: 'حسناً',
+        });
+      }
+      return;
+    }
+
+    if (isDowngradeSelected) {
+      showNotice({
+        type: 'confirm',
+        title: 'تأكيد تخفيض الباقة',
+        message: `أنت مشترك حالياً في (${currentPlanObj?.label || `${currentPlan} صيدليات`}).\n\nهل ترغب في التغيير إلى (${activePlanObj.label})؟\n\nلن يتم خصم أي مبالغ وستستمر فترتك الحالية (${currentDaysRemaining} يوماً) سارية.`,
+        primaryButtonText: 'تأكيد التخفيض',
+        onPrimaryPress: () => { closeNotice(); handleDowngradePlan(); },
+        secondaryButtonText: 'إلغاء',
+        onSecondaryPress: closeNotice,
+      });
+      return;
+    }
+
+    // Otherwise: Upgrade or fresh subscription
+    handlePayWithKashier();
+  };
 
   const handleCheckAdminActivation = async () => {
     if (!user?.email) {
-      Alert.alert('تنبيه', 'يرجى تسجيل الدخول بحسابك أولاً للتحقق من حالة الاشتراك.');
+      showNotice({
+        type: 'warning',
+        title: 'تنبيه',
+        message: 'يرجى تسجيل الدخول بحسابك أولاً للتحقق من حالة الاشتراك.',
+        primaryButtonText: 'حسناً',
+      });
       return;
     }
     setIsCheckingServer(true);
@@ -149,32 +403,43 @@ export default function SubscriptionScreen({
       const status = await getSubscriptionStatus(user.email);
       if (status.isSubscribed && status.subscribedPlan > 0) {
         const matchingPlan = PRICING_PLANS.find((p) => p.pharmacies === status.subscribedPlan) || PRICING_PLANS[0];
-        setActivatedPlanObj(matchingPlan);
-        setShowSuccess(true);
+        setCurrentPlan(status.subscribedPlan);
+        setIsCurrentlySubscribed(true);
+        setCurrentDaysRemaining(status.daysRemaining);
+        setIsCurrentlyTrialExpired(status.isTrialExpired);
         if (onSubscribed) onSubscribed(status.subscribedPlan);
+        showNotice({
+          type: 'success',
+          title: 'حسابك مفعل بنجاح 🎉',
+          badgeText: matchingPlan.label,
+          message: `تم تأكيد تفعيل باقة (${matchingPlan.label}) بنجاح على خوادم XPharma.`,
+          primaryButtonText: 'ممتاز',
+        });
       } else {
-        Alert.alert(
-          'طلبك قيد المراجعة ⏳',
-          'لم يتم تفعيل الباقة حتى الآن.\n\nإذا أتممت الدفع عبر كاشير أو واتساب سيتم التفعيل تلقائياً، يمكنك التحقق مجدداً بعد لحظات.'
-        );
+        showNotice({
+          type: 'warning',
+          title: 'طلبك قيد المراجعة ⏳',
+          message: 'لم يتم تفعيل الباقة حتى الآن.\n\nإذا أتممت الدفع عبر كاشير أو واتساب سيتم التفعيل تلقائياً، يمكنك التحقق مجدداً بعد لحظات.',
+          primaryButtonText: 'حسناً',
+        });
       }
     } catch (e) {
-      Alert.alert('خطأ', 'تعذر الاتصال بالخادم. يرجى التأكد من اتصال الإنترنت والمحاولة مرة أخرى.');
+      showNotice({
+        type: 'error',
+        title: 'خطأ في الاتصال',
+        message: 'تعذر الاتصال بالخادم. يرجى التأكد من اتصال الإنترنت والمحاولة مرة أخرى.',
+        primaryButtonText: 'حسناً',
+      });
     } finally {
       setIsCheckingServer(false);
     }
-  };
-
-  const handleCloseSuccess = () => {
-    setShowSuccess(false);
-    onBack();
   };
 
   return (
     <View style={[styles.container, { paddingTop: topInset }]}>
       <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" translucent={false} />
 
-      {/* Top Header: Matching WarehousePortal header */}
+      {/* Top Header */}
       <View style={styles.topHeader}>
         <TouchableOpacity
           style={styles.backBtnClean}
@@ -186,295 +451,362 @@ export default function SubscriptionScreen({
         <Text style={styles.topHeaderTitle} numberOfLines={1}>
           باقات واشتراكات XPharma
         </Text>
-        <View style={styles.topHeaderSpacer} />
+        <TouchableOpacity
+          style={styles.infoBtn}
+          onPress={() => setShowInstructionsModal(true)}
+          activeOpacity={0.7}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="information-circle-outline" size={24} color="#4F46E5" />
+        </TouchableOpacity>
       </View>
 
-      {showSuccess ? (
-        /* ========================================================= */
-        /* 1. SUCCESS ACTIVATION VIEW                                */
-        /* ========================================================= */
-        <ScrollView
-          style={styles.scrollArea}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom + 24, 40) }]}
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={styles.successContainer}>
-            {/* Hero Celebration Card */}
-            <LinearGradient
-              colors={['#0F2B1E', '#064E3B', '#047857']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.successHeroCard}
-            >
-              <View style={styles.successIconGlowRing}>
-                <View style={styles.successIconCircle}>
-                  <Ionicons name="sparkles" size={36} color="#FBBF24" />
-                </View>
-              </View>
-
-              <Text style={styles.successHeroTitle}>تم تفعيل الباقة بنجاح 🎉</Text>
-              <Text style={styles.successHeroSubtitle}>
-                حسابك الآن نشط ومفعل مع كافة المزايا المتقدمة
-              </Text>
-
-              <View style={styles.activePlanPill}>
-                <Ionicons name="shield-checkmark" size={16} color="#34D399" />
-                <Text style={styles.activePlanPillText}>
-                  {activatedPlanObj?.label || activePlanObj.label} • {activatedPlanObj?.price || activePlanObj.price} ج.م / شهر
-                </Text>
-              </View>
-            </LinearGradient>
-
-            {/* Unlocked Features List */}
-            <View style={styles.unlockedBox}>
-              <Text style={styles.unlockedHeaderTitle}>المزايا المفعلة لحسابك:</Text>
-
-              <View style={styles.unlockedItem}>
-                <View style={[styles.checkCircle, { backgroundColor: '#ECFDF5' }]}>
-                  <Ionicons name="checkmark-sharp" size={16} color="#059669" />
-                </View>
-                <View style={styles.unlockedTextCol}>
-                <Text style={styles.unlockedItemTitle}>ربط حتى {activatedPlanObj?.pharmacies || activePlanObj.pharmacies} صيدليات في كل مخزن</Text>
-                <Text style={styles.unlockedItemSub}>يمكنك الآن ربط حتى {activatedPlanObj?.pharmacies || activePlanObj.pharmacies} فروع في المخزن الواحد، ومتاح فتح كافة المخازن بلا حدود</Text>
-              </View>
-              </View>
-
-              <View style={styles.unlockedItem}>
-                <View style={[styles.checkCircle, { backgroundColor: '#ECFDF5' }]}>
-                  <Ionicons name="checkmark-sharp" size={16} color="#059669" />
-                </View>
-                <View style={styles.unlockedTextCol}>
-                  <Text style={styles.unlockedItemTitle}>مزامنة فورية لكافة المخازن</Text>
-                  <Text style={styles.unlockedItemSub}>اطلاع مباشر على الفواتير، المرتجعات، والمدفوعات لحظة بلحظة</Text>
-                </View>
-              </View>
-
-              <View style={styles.unlockedItem}>
-                <View style={[styles.checkCircle, { backgroundColor: '#ECFDF5' }]}>
-                  <Ionicons name="checkmark-sharp" size={16} color="#059669" />
-                </View>
-                <View style={styles.unlockedTextCol}>
-                  <Text style={styles.unlockedItemTitle}>كشف حساب تفصيلي 24/7</Text>
-                  <Text style={styles.unlockedItemSub}>مطابقات مالية دقيقة وأرشفة سحابية لكافة المعاملات</Text>
-                </View>
-              </View>
-            </View>
-
-            {/* Done / Start Button */}
-            <TouchableOpacity
-              style={styles.successDoneBtn}
-              onPress={handleCloseSuccess}
-              activeOpacity={0.88}
-            >
-              <LinearGradient
-                colors={['#047857', '#065F46']}
-                style={styles.successDoneBtnGradient}
-              >
-                <Ionicons name="rocket-outline" size={20} color="#FFFFFF" />
-                <Text style={styles.successDoneBtnText}>ابدأ استخدام التطبيق الآن</Text>
-              </LinearGradient>
-            </TouchableOpacity>
+      <ScrollView
+        style={styles.scrollArea}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom + 24, 40) }]}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Contextual Reason Banner */}
+        {Boolean(reason && reason.trim() !== '' && reason.toLowerCase() !== 'general') && (
+          <View style={styles.reasonBanner}>
+            <Ionicons name="information-circle-outline" size={20} color="#4F46E5" />
+            <Text style={styles.reasonBannerText}>{reason}</Text>
           </View>
-        </ScrollView>
-      ) : (
-        /* ========================================================= */
-        /* 2. MAIN PLANS SELECTION VIEW                              */
-        /* ========================================================= */
-        <ScrollView
-          style={styles.scrollArea}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom + 24, 40) }]}
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Hero Header Banner */}
-          <LinearGradient
-            colors={['#25044A', '#3F0082', '#5610A3']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.heroCard}
-          >
-            <View style={styles.heroIconBox}>
-              <MaterialCommunityIcons name="crown" size={32} color="#FBBF24" />
-            </View>
-            <Text style={styles.heroTitle}>باقات وخطط الاشتراك الشهري</Text>
-            <Text style={styles.heroSubtitle}>
-              {reason || 'الباقة تحدد عدد الصيدليات المسموح بربطها في المخزن الواحد (مع فتح كافة المخازن مجاناً)'}
-            </Text>
-          </LinearGradient>
+        )}
 
-          {/* Trial Expired Alert Banner */}
-          {isTrialExpired && (
-            <View style={styles.expiredBanner}>
-              <Ionicons name="alert-circle" size={22} color="#DC2626" />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.expiredBannerTitle}>انتهت الفترة التجريبية المجانية</Text>
-                <Text style={styles.expiredBannerSub}>
-                  يرجى اختيار باقة للاستمرار في ربط الصيدليات ومتابعة الحسابات.
+        {/* Trial Expired Alert Banner */}
+        {isCurrentlyTrialExpired && (
+          <View style={styles.expiredBanner}>
+            <Ionicons name="alert-circle" size={22} color="#DC2626" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.expiredBannerTitle}>انتهت الفترة التجريبية المجانية</Text>
+              <Text style={styles.expiredBannerSub}>
+                يرجى اختيار باقة للاستمرار في ربط الصيدليات ومتابعة الحسابات.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Section Header */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionHeaderTitle}>اختر سعة الفروع المناسبة:</Text>
+          <Text style={styles.sectionHeaderSub}>كافة الباقات تتيح فتح كافة المخازن بلا حدود</Text>
+        </View>
+
+        {/* Plan Cards List */}
+        {loadingCurrentPlan ? (
+          <View style={{ paddingVertical: 48, alignItems: 'center' }}>
+            <ActivityIndicator size="large" color="#3F0082" />
+          </View>
+        ) : (
+        <View style={styles.plansList}>
+          {PRICING_PLANS.map((plan) => {
+            const isSelected = selectedPlan === plan.pharmacies;
+            const isCurrent = isCurrentlySubscribed && currentPlan === plan.pharmacies;
+            return (
+              <TouchableOpacity
+                key={plan.pharmacies}
+                style={[
+                  styles.planCardItem,
+                  isSelected && styles.planCardItemSelected,
+                  isCurrent && styles.planCardItemCurrent,
+                ]}
+                onPress={() => setSelectedPlan(plan.pharmacies)}
+                disabled={isProcessingKashier || isProcessingDowngrade}
+                activeOpacity={0.8}
+              >
+                <View style={styles.planCardRight}>
+                  <View
+                    style={[
+                      styles.radioOuter,
+                      isSelected && styles.radioOuterSelected,
+                      isCurrent && styles.radioOuterCurrent,
+                    ]}
+                  >
+                    {isSelected && (
+                      <View style={[styles.radioInner, isCurrent && styles.radioInnerCurrent]} />
+                    )}
+                  </View>
+
+                  <View style={styles.planNameCol}>
+                    <View style={styles.planTitleRow}>
+                      <Text
+                        style={[
+                          styles.planLabel,
+                          isSelected && styles.planLabelSelected,
+                          isCurrent && styles.planLabelCurrent,
+                        ]}
+                      >
+                        {plan.label}
+                      </Text>
+                      {isCurrent && (
+                        <View style={styles.currentBadge}>
+                          <Ionicons name="checkmark-circle" size={13} color="#059669" />
+                          <Text style={styles.currentBadgeText}>
+                            باقتك الحالية ({currentDaysRemaining} يوم)
+                          </Text>
+                        </View>
+                      )}
+                      {plan.popular && !isCurrent && (
+                        <View style={styles.popularBadge}>
+                          <Text style={styles.popularBadgeText}>الأكثر طلباً</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={styles.planLimitText}>
+                      {plan.pharmacies === 1
+                        ? 'صيدلية واحدة في كل مخزن'
+                        : `حتى ${plan.pharmacies} صيدليات في كل مخزن`}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.priceContainer}>
+                  <Text
+                    style={[
+                      styles.priceNumber,
+                      isSelected && styles.priceNumberSelected,
+                      isCurrent && styles.priceNumberCurrent,
+                    ]}
+                  >
+                    {plan.price}
+                  </Text>
+                  <Text style={styles.priceCurrency}>ج.م / شهر</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        )}
+
+        {/* Action Buttons & Proration Breakdown */}
+        {!loadingCurrentPlan && (
+        <View style={styles.actionsContainer}>
+          {isUpgradeSelected && upgradeQuote && (
+            <View style={styles.prorationCard}>
+              <View style={styles.prorationHeader}>
+                <Ionicons name="sparkles" size={15} color="#4F46E5" />
+                <Text style={styles.prorationTitle}>حساب فرق الترقية التناسبية العادلة</Text>
+              </View>
+              <View style={styles.prorationRow}>
+                <Text style={styles.prorationLabel}>سعر باقة {activePlanObj.label}:</Text>
+                <Text style={styles.prorationValue}>{upgradeQuote.targetPrice} ج.م</Text>
+              </View>
+              <View style={styles.prorationRow}>
+                <Text style={styles.prorationLabel}>
+                  خصم رصيدك الحالي ({upgradeQuote.daysRemaining} يوم متبقي):
                 </Text>
+                <Text style={styles.prorationCredit}>- {upgradeQuote.unusedCredit} ج.م</Text>
+              </View>
+              <View style={styles.prorationDivider} />
+              <View style={styles.prorationRow}>
+                <Text style={styles.prorationTotalLabel}>المبلغ المطلوب سداده فقط:</Text>
+                <Text style={styles.prorationTotalValue}>{upgradeQuote.finalAmount} ج.م</Text>
               </View>
             </View>
           )}
 
-          {/* Pricing Tiers */}
-          <Text style={styles.sectionHeaderTitle}>اختر الباقة المناسبة:</Text>
+          <TouchableOpacity
+            style={[
+              styles.primaryBtn,
+              isCurrentSelected && currentDaysRemaining > 5 && styles.currentPlanBtn,
+              isDowngradeSelected && styles.downgradeBtn,
+            ]}
+            onPress={handlePrimaryAction}
+            disabled={isProcessingKashier || isProcessingDowngrade}
+            activeOpacity={0.85}
+          >
+            {isProcessingKashier || isProcessingDowngrade ? (
+              <ActivityIndicator
+                size="small"
+                color={
+                  isDowngradeSelected
+                    ? '#B45309'
+                    : isCurrentSelected && currentDaysRemaining > 5
+                    ? '#059669'
+                    : '#FFFFFF'
+                }
+              />
+            ) : isCurrentSelected ? (
+              <Ionicons
+                name={currentDaysRemaining <= 5 ? 'refresh-outline' : 'checkmark-circle'}
+                size={20}
+                color={currentDaysRemaining <= 5 ? '#FFFFFF' : '#059669'}
+              />
+            ) : isDowngradeSelected ? (
+              <Ionicons name="arrow-down-circle-outline" size={20} color="#B45309" />
+            ) : (
+              <Ionicons name="card-outline" size={20} color="#FFFFFF" />
+            )}
 
-          <View style={styles.plansList}>
-            {PRICING_PLANS.map((plan) => {
-              const isSelected = selectedPlan === plan.pharmacies;
-              return (
+            <Text
+              style={[
+                styles.primaryBtnText,
+                isCurrentSelected && currentDaysRemaining > 5 && styles.currentPlanBtnText,
+                isDowngradeSelected && styles.downgradeBtnText,
+              ]}
+            >
+              {isProcessingKashier
+                ? 'جاري تجهيز بوابة الدفع...'
+                : isProcessingDowngrade
+                ? 'جاري تعديل الباقة...'
+                : isCurrentSelected
+                ? currentDaysRemaining <= 5
+                  ? `تجديد باقتك الحالية — ${activePlanObj.price} ج.م`
+                  : `أنت مشترك في هذه الباقة بالفعل ✓`
+                : isDowngradeSelected
+                ? `تخفيض الباقة إلى ${activePlanObj.label} (بدون رسوم)`
+                : isUpgradeSelected && upgradeQuote
+                ? `سداد فرق الترقية — ${upgradeQuote.finalAmount} ج.م فقط`
+                : isUpgradeSelected
+                ? `ترقية إلى ${activePlanObj.label} — ${activePlanObj.price} ج.م`
+                : `الدفع والتفعيل الفوري — ${activePlanObj.price} ج.م`}
+            </Text>
+          </TouchableOpacity>
+
+          <Text style={styles.paymentMethodsNotice}>
+            {isCurrentSelected && currentDaysRemaining > 5
+              ? `اشتراكك سارٍ لمدة ${currentDaysRemaining} يوماً قادمة • لا حاجة لإعادة السداد`
+              : isDowngradeSelected
+              ? `أنت مشترك في باقة أعلى بالفعل • لن يتم تحصيل أي مبالغ إضافية`
+              : isUpgradeSelected && upgradeQuote
+              ? `تم خصم ${upgradeQuote.unusedCredit} ج.م رصيد باقتك السابقة (${upgradeQuote.daysRemaining} يوم) • تجديد الصلاحية لـ 30 يوماً كاملة`
+              : `دفع آمن وفوري • فيزا • ماستركارد • ميزة • محافظ إلكترونية`}
+          </Text>
+
+          {/* Secondary Action: Check Activation Status */}
+          <TouchableOpacity
+            style={styles.checkServerBtn}
+            onPress={handleCheckAdminActivation}
+            disabled={isCheckingServer}
+            activeOpacity={0.75}
+          >
+            {isCheckingServer ? (
+              <ActivityIndicator size="small" color="#475569" />
+            ) : (
+              <Ionicons name="refresh-outline" size={18} color="#475569" />
+            )}
+            <Text style={styles.checkServerBtnText}>
+              {isCheckingServer ? 'جاري التحقق من الخادم...' : 'التحقق من حالة التفعيل'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+        )}
+      </ScrollView>
+
+      {/* Bottom Sheet Modal for Subscription Steps & Support */}
+      <Modal
+        visible={showInstructionsModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowInstructionsModal(false)}
+      >
+        <TouchableWithoutFeedback onPress={() => setShowInstructionsModal(false)}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.bottomSheetCard}>
+                <View style={styles.sheetHandle} />
                 <TouchableOpacity
-                  key={plan.pharmacies}
-                  style={[
-                    styles.planCardItem,
-                    isSelected && styles.planCardItemSelected,
-                  ]}
-                  onPress={() => setSelectedPlan(plan.pharmacies)}
-                  activeOpacity={0.85}
+                  style={styles.sheetCloseBtn}
+                  onPress={() => setShowInstructionsModal(false)}
+                  activeOpacity={0.7}
                 >
-                  {plan.popular && (
-                    <View style={styles.popularTag}>
-                      <Text style={styles.popularTagText}>الأكثر طلباً ⭐</Text>
-                    </View>
-                  )}
+                  <Ionicons name="close" size={18} color="#64748B" />
+                </TouchableOpacity>
 
-                  <View style={styles.planCardHeader}>
-                    {/* Radio Button Selector */}
-                    <View
-                      style={[
-                        styles.radioOuter,
-                        isSelected && styles.radioOuterSelected,
-                      ]}
-                    >
-                      {isSelected && <View style={styles.radioInner} />}
-                    </View>
+                <View style={styles.sheetHeader}>
+                  <View style={styles.sheetIconBox}>
+                    <Ionicons name="information-circle-outline" size={24} color="#4F46E5" />
+                  </View>
+                  <View style={{ flex: 1, alignItems: 'flex-end' }}>
+                    <Text style={styles.sheetTitle}>خطوات الاشتراك والتفعيل</Text>
+                    <Text style={styles.sheetSubtitle}>طرق السداد والتفعيل المعتمدة</Text>
+                  </View>
+                </View>
 
-                    {/* Plan Name & Tag */}
-                    <View style={styles.planNameCol}>
-                      <Text style={[styles.planLabel, isSelected && styles.planLabelSelected]}>
-                        {plan.label}
-                      </Text>
-                      <Text style={styles.planLimitText}>
-                        {plan.pharmacies === 1
-                          ? 'ربط صيدلية واحدة في المخزن الواحد'
-                          : plan.pharmacies === 2
-                          ? 'ربط حتى صيدليتين في المخزن الواحد'
-                          : `ربط حتى ${plan.pharmacies} صيدليات في المخزن الواحد`}
-                      </Text>
+                <View style={styles.stepsList}>
+                  <View style={styles.stepItemRow}>
+                    <View style={styles.stepBadge}>
+                      <Text style={styles.stepBadgeText}>1</Text>
                     </View>
-
-                    {/* Price Tag */}
-                    <View style={styles.priceContainer}>
-                      <Text style={[styles.priceNumber, isSelected && styles.priceNumberSelected]}>
-                        {plan.price}
+                    <View style={styles.stepContent}>
+                      <Text style={styles.stepItemTitle}>الدفع الإلكتروني المباشر</Text>
+                      <Text style={styles.stepItemDesc}>
+                        اختر الباقة واضغط على «الدفع والتفعيل الفوري» للسداد بأمان عبر كاشير (فيزا، ماستركارد، ميزة، أو المحافظ). يتم التفعيل لحظياً.
                       </Text>
-                      <Text style={styles.priceCurrency}>ج.م / شهر</Text>
                     </View>
                   </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
 
-          {/* Features Comparison Box */}
-          <View style={styles.featuresBox}>
-            <Text style={styles.featuresBoxTitle}>ما تشمله باقتك:</Text>
-            <View style={styles.featureLine}>
-              <Ionicons name="checkmark-circle" size={18} color="#10B981" />
-              <Text style={styles.featureLineText}>
-                {activePlanObj.pharmacies === 1
-                  ? 'ربط صيدلية واحدة في كل مخزن على حدة'
-                  : activePlanObj.pharmacies === 2
-                  ? 'ربط حتى صيدليتين في كل مخزن على حدة'
-                  : `ربط حتى ${activePlanObj.pharmacies} صيدليات في كل مخزن على حدة`}
-              </Text>
-            </View>
-            <View style={styles.featureLine}>
-              <Ionicons name="checkmark-circle" size={18} color="#10B981" />
-              <Text style={styles.featureLineText}>
-                فتح وربط غير محدود مع كافة مخازن الأدوية والمستلزمات في مصر
-              </Text>
-            </View>
-            <View style={styles.featureLine}>
-              <Ionicons name="checkmark-circle" size={18} color="#10B981" />
-              <Text style={styles.featureLineText}>
-                كشف حساب مباشر، فواتير فورية، ومطابقات دورية
-              </Text>
-            </View>
-            <View style={styles.featureLine}>
-              <Ionicons name="checkmark-circle" size={18} color="#10B981" />
-              <Text style={styles.featureLineText}>
-                تنبيهات فورية عند إصدار أي فاتورة جديدة باسم صيدليتك
-              </Text>
-            </View>
-            <View style={styles.featureLine}>
-              <Ionicons name="checkmark-circle" size={18} color="#10B981" />
-              <Text style={styles.featureLineText}>
-                دعم فني خاص على مدار الساعة عبر واتساب
-              </Text>
-            </View>
-          </View>
+                  <View style={styles.stepItemRow}>
+                    <View style={styles.stepBadge}>
+                      <Text style={styles.stepBadgeText}>2</Text>
+                    </View>
+                    <View style={styles.stepContent}>
+                      <Text style={styles.stepItemTitle}>التحويل عبر إنستاباي أو فودافون كاش</Text>
+                      <Text style={styles.stepItemDesc}>
+                        يمكنك تحويل قيمة الاشتراك ثم إرسال الإشعار للدعم الفني لتفعيل حسابك مباشرة.
+                      </Text>
+                    </View>
+                  </View>
 
-          {/* Activation Instructions Box */}
-          <View style={styles.instructionsBox}>
-            <View style={styles.instructionsHeaderRow}>
-              <Ionicons name="information-circle" size={18} color="#0284C7" />
-              <Text style={styles.instructionsTitle}>خطوات تفعيل الاشتراك:</Text>
-            </View>
-            <Text style={styles.instructionsStep}>1. اختر الباقة واضغط على «تأكيد الاشتراك عبر واتساب» للتواصل مع الإدارة.</Text>
-            <Text style={styles.instructionsStep}>2. قم بتحويل قيمة الاشتراك وتأكيد العملية مع فريق الدعم.</Text>
-            <Text style={styles.instructionsStep}>3. تقوم الإدارة بتفعيل حسابك على الخادم، ثم اضغط بالأسفل للتحقق فوراً.</Text>
-          </View>
-
-          {/* Action Buttons */}
-          <View style={styles.actionsContainer}>
-            {/* Primary Action 1: Kashier Instant Online Payment */}
-            <TouchableOpacity
-              style={styles.kashierBtn}
-              onPress={handlePayWithKashier}
-              disabled={isProcessingKashier}
-              activeOpacity={0.88}
-            >
-              <LinearGradient
-                colors={['#3B0764', '#581C87', '#6B21A8']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={styles.btnGradient}
-              >
-                {isProcessingKashier ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Ionicons name="card" size={24} color="#FBBF24" />
-                )}
-                <View style={styles.btnTextCol}>
-                  <Text style={styles.subscribeBtnText}>
-                    {isProcessingKashier ? 'جاري تجهيز بوابة الدفع...' : `الدفع والتفعيل الفوري (${activePlanObj.price} ج.م)`}
-                  </Text>
-                  <Text style={styles.subscribeBtnSub}>
-                    كاشير • فيزا • ماستركارد • ميزة • محافظ إلكترونية
-                  </Text>
+                  <View style={styles.stepItemRow}>
+                    <View style={styles.stepBadge}>
+                      <Text style={styles.stepBadgeText}>3</Text>
+                    </View>
+                    <View style={styles.stepContent}>
+                      <Text style={styles.stepItemTitle}>التحقق ومزامنة الحساب</Text>
+                      <Text style={styles.stepItemDesc}>
+                        في حال التحويل عبر الدعم، اضغط على زر «التحقق من حالة التفعيل» لتحديث بيانات حسابك فوراً.
+                      </Text>
+                    </View>
+                  </View>
                 </View>
-              </LinearGradient>
-            </TouchableOpacity>
 
+                {/* Direct WhatsApp Support */}
+                <TouchableOpacity
+                  style={styles.sheetWhatsappBtn}
+                  onPress={() => {
+                    setShowInstructionsModal(false);
+                    Linking.openURL(
+                      `https://wa.me/201550888841?text=${encodeURIComponent(
+                        `مرحباً، أود الاستفسار عن تفعيل باقة اشتراك XPharma (${activePlanObj.label})`
+                      )}`
+                    );
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="logo-whatsapp" size={20} color="#FFFFFF" />
+                  <Text style={styles.sheetWhatsappBtnText}>
+                    تواصل مع الدعم الفني عبر واتساب (01550888841)
+                  </Text>
+                </TouchableOpacity>
 
-            {/* Action 3: Check Admin Activation Status Button */}
-            <TouchableOpacity
-              style={styles.checkServerBtn}
-              onPress={handleCheckAdminActivation}
-              disabled={isCheckingServer}
-              activeOpacity={0.8}
-            >
-              {isCheckingServer ? (
-                <ActivityIndicator size="small" color="#4338CA" />
-              ) : (
-                <Ionicons name="refresh-circle" size={20} color="#4338CA" />
-              )}
-              <Text style={styles.checkServerBtnText}>
-                {isCheckingServer ? 'جاري التحقق من الخادم...' : 'التحقق من تفعيل الحساب من الإدارة'}
-              </Text>
-            </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.sheetDismissBtn}
+                  onPress={() => setShowInstructionsModal(false)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.sheetDismissBtnText}>إغلاق</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableWithoutFeedback>
           </View>
-        </ScrollView>
-      )}
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      {/* Bottom-sheet notice modal — replaces all native Alert.alert calls */}
+      <SubscriptionNoticeModal
+        visible={noticeModal.visible}
+        type={noticeModal.type}
+        title={noticeModal.title}
+        message={noticeModal.message}
+        badgeText={noticeModal.badgeText}
+        primaryButtonText={noticeModal.primaryButtonText}
+        onPrimaryPress={noticeModal.onPrimaryPress}
+        secondaryButtonText={noticeModal.secondaryButtonText}
+        onSecondaryPress={noticeModal.onSecondaryPress}
+        onClose={closeNotice}
+      />
     </View>
   );
 }
@@ -502,8 +834,13 @@ const styles = StyleSheet.create({
     flex: 1,
     marginHorizontal: 8,
   },
-  topHeaderSpacer: {
+  infoBtn: {
     width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   scrollArea: {
     flex: 1,
@@ -512,112 +849,91 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 14,
   },
-  heroCard: {
-    borderRadius: 22,
-    padding: 20,
+  reasonBanner: {
+    flexDirection: 'row-reverse',
     alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#3F0082',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 6,
+    gap: 8,
+    backgroundColor: '#EEF2FF',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
   },
-  heroIconBox: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-    borderWidth: 1.5,
-    borderColor: 'rgba(251, 191, 36, 0.4)',
-  },
-  heroTitle: {
-    color: '#FFFFFF',
-    fontSize: 19,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-  heroSubtitle: {
-    color: 'rgba(255, 255, 255, 0.85)',
-    fontSize: 13,
-    fontWeight: '500',
-    textAlign: 'center',
-    marginTop: 6,
-    lineHeight: 19,
-    paddingHorizontal: 12,
+  reasonBannerText: {
+    fontSize: 12.5,
+    color: '#3730A3',
+    fontWeight: '600',
+    flex: 1,
+    textAlign: 'right',
   },
   expiredBanner: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 10,
     backgroundColor: '#FEF2F2',
-    borderWidth: 1,
-    borderColor: '#FECDD3',
-    borderRadius: 14,
-    padding: 14,
+    borderWidth: 1.2,
+    borderColor: '#FCA5A5',
+    borderRadius: 16,
+    padding: 12,
+    gap: 10,
   },
   expiredBannerTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#DC2626',
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#991B1B',
     textAlign: 'right',
   },
   expiredBannerSub: {
-    fontSize: 12,
-    color: '#991B1B',
+    fontSize: 11.5,
+    color: '#B91C1C',
     textAlign: 'right',
     marginTop: 2,
-    lineHeight: 16,
+  },
+  sectionHeaderRow: {
+    marginTop: 2,
+    marginBottom: 2,
   },
   sectionHeaderTitle: {
     fontSize: 15,
     fontWeight: '800',
-    color: '#1E293B',
+    color: '#0F172A',
     textAlign: 'right',
-    marginTop: 4,
+  },
+  sectionHeaderSub: {
+    fontSize: 12,
+    color: '#64748B',
+    textAlign: 'right',
+    marginTop: 2,
   },
   plansList: {
     gap: 10,
   },
   planCardItem: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    padding: 16,
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  planCardItemSelected: {
-    borderColor: '#6D28D9',
-    backgroundColor: '#FBF9FF',
-    shadowColor: '#6D28D9',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  popularTag: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    backgroundColor: '#6D28D9',
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderBottomLeftRadius: 10,
-  },
-  popularTagText: {
-    color: '#FFFFFF',
-    fontSize: 10.5,
-    fontWeight: '800',
-  },
-  planCardHeader: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    position: 'relative',
+  },
+  planCardItemSelected: {
+    borderColor: '#4F46E5',
+    backgroundColor: '#FAF5FF',
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  planCardRight: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
   },
   radioOuter: {
     width: 22,
@@ -627,31 +943,46 @@ const styles = StyleSheet.create({
     borderColor: '#CBD5E1',
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 12,
   },
   radioOuterSelected: {
-    borderColor: '#6D28D9',
+    borderColor: '#4F46E5',
   },
   radioInner: {
     width: 10,
     height: 10,
     borderRadius: 5,
-    backgroundColor: '#6D28D9',
+    backgroundColor: '#4F46E5',
   },
   planNameCol: {
     flex: 1,
     alignItems: 'flex-end',
   },
+  planTitleRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 8,
+  },
   planLabel: {
-    fontSize: 16,
+    fontSize: 15.5,
     fontWeight: '800',
-    color: '#1E293B',
+    color: '#0F172A',
   },
   planLabelSelected: {
-    color: '#6D28D9',
+    color: '#4F46E5',
+  },
+  popularBadge: {
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  popularBadgeText: {
+    color: '#4F46E5',
+    fontSize: 11,
+    fontWeight: '700',
   },
   planLimitText: {
-    fontSize: 12.5,
+    fontSize: 12,
     color: '#64748B',
     marginTop: 2,
   },
@@ -659,245 +990,317 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   priceNumber: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '900',
     color: '#0F172A',
   },
   priceNumberSelected: {
-    color: '#6D28D9',
+    color: '#4F46E5',
   },
   priceCurrency: {
     fontSize: 11,
     color: '#64748B',
     fontWeight: '600',
   },
-  featuresBox: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    padding: 16,
-    gap: 10,
-  },
-  featuresBoxTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#334155',
-    textAlign: 'right',
-    marginBottom: 2,
-  },
-  featureLine: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 8,
-  },
-  featureLineText: {
-    flex: 1,
-    fontSize: 12.5,
-    color: '#475569',
-    fontWeight: '500',
-    textAlign: 'right',
-    lineHeight: 18,
-  },
   actionsContainer: {
-    gap: 10,
-    marginTop: 4,
+    gap: 8,
+    marginTop: 6,
   },
-  kashierBtn: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    shadowColor: '#581C87',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  subscribeBtn: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    shadowColor: '#16A34A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  btnGradient: {
+  primaryBtn: {
+    backgroundColor: '#4F46E5',
+    borderRadius: 14,
+    height: 52,
     flexDirection: 'row-reverse',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    gap: 12,
+    gap: 10,
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 3,
   },
-  btnTextCol: {
-    alignItems: 'center',
-  },
-  subscribeBtnText: {
+  primaryBtnText: {
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '800',
   },
-  subscribeBtnSub: {
-    color: 'rgba(255, 255, 255, 0.9)',
+  currentPlanBtn: {
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1.5,
+    borderColor: '#A7F3D0',
+    shadowColor: '#10B981',
+    shadowOpacity: 0.1,
+  },
+  currentPlanBtnText: {
+    color: '#065F46',
+  },
+  downgradeBtn: {
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1.5,
+    borderColor: '#FCD34D',
+    shadowColor: '#F59E0B',
+    shadowOpacity: 0.1,
+  },
+  downgradeBtnText: {
+    color: '#B45309',
+  },
+  paymentMethodsNotice: {
+    textAlign: 'center',
     fontSize: 11.5,
-    fontWeight: '600',
-    marginTop: 1,
-  },
-  instructionsBox: {
-    backgroundColor: '#F0F9FF',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#BAE6FD',
-    padding: 14,
-    gap: 6,
-  },
-  instructionsHeaderRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 2,
-  },
-  instructionsTitle: {
-    fontSize: 13.5,
-    fontWeight: '800',
-    color: '#0369A1',
-    textAlign: 'right',
-  },
-  instructionsStep: {
-    fontSize: 12,
-    color: '#0C4A6E',
-    textAlign: 'right',
-    lineHeight: 18,
+    color: '#94A3B8',
     fontWeight: '500',
+    marginVertical: 2,
   },
   checkServerBtn: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: '#EEF2FF',
-    borderWidth: 1.5,
-    borderColor: '#C7D2FE',
-    borderRadius: 14,
-    paddingVertical: 13,
-  },
-  checkServerBtnText: {
-    color: '#4338CA',
-    fontSize: 13.5,
-    fontWeight: '800',
-  },
-  successContainer: {
-    gap: 14,
-  },
-  successHeroCard: {
-    borderRadius: 22,
-    padding: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  successIconGlowRing: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  successIconCircle: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: 'rgba(255, 255, 255, 0.25)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  successHeroTitle: {
-    color: '#FFFFFF',
-    fontSize: 21,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-  successHeroSubtitle: {
-    color: 'rgba(255, 255, 255, 0.85)',
-    fontSize: 13,
-    textAlign: 'center',
-    marginTop: 4,
-  },
-  activePlanPill: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(0, 0, 0, 0.25)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-    marginTop: 12,
-  },
-  activePlanPillText: {
-    color: '#34D399',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  unlockedBox: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
+    backgroundColor: '#F8FAFC',
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    padding: 16,
-    gap: 14,
+    borderRadius: 14,
+    height: 48,
   },
-  unlockedHeaderTitle: {
-    fontSize: 14.5,
+  checkServerBtnText: {
+    color: '#475569',
+    fontSize: 13.5,
+    fontWeight: '700',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    zIndex: 9999,
+  },
+  bottomSheetCard: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingTop: 12,
+    paddingHorizontal: 20,
+    paddingBottom: Platform.OS === 'ios' ? 38 : 28,
+    position: 'relative',
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: '#E2E8F0',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 16,
+  },
+  sheetHandle: {
+    width: 38,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#CBD5E1',
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  sheetCloseBtn: {
+    position: 'absolute',
+    top: 14,
+    left: 18,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  sheetHeader: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 18,
+    paddingHorizontal: 4,
+  },
+  sheetIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetTitle: {
+    fontSize: 17,
     fontWeight: '800',
-    color: '#1E293B',
+    color: '#0F172A',
     textAlign: 'right',
   },
-  unlockedItem: {
+  sheetSubtitle: {
+    fontSize: 12.5,
+    color: '#64748B',
+    textAlign: 'right',
+    marginTop: 2,
+  },
+  stepsList: {
+    gap: 14,
+    marginBottom: 18,
+  },
+  stepItemRow: {
     flexDirection: 'row-reverse',
     alignItems: 'flex-start',
-    gap: 10,
+    gap: 12,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
   },
-  checkCircle: {
+  stepBadge: {
     width: 26,
     height: 26,
     borderRadius: 13,
+    backgroundColor: '#EEF2FF',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 2,
   },
-  unlockedTextCol: {
+  stepBadgeText: {
+    color: '#4F46E5',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  stepContent: {
     flex: 1,
     alignItems: 'flex-end',
   },
-  unlockedItemTitle: {
+  stepItemTitle: {
     fontSize: 13.5,
     fontWeight: '700',
     color: '#0F172A',
     textAlign: 'right',
   },
-  unlockedItemSub: {
-    fontSize: 11.5,
+  stepItemDesc: {
+    fontSize: 12,
     color: '#64748B',
     textAlign: 'right',
     marginTop: 2,
-    lineHeight: 16,
+    lineHeight: 17,
   },
-  successDoneBtn: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    marginTop: 4,
-  },
-  successDoneBtnGradient: {
+  sheetWhatsappBtn: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
     gap: 8,
+    backgroundColor: '#10B981',
+    borderRadius: 14,
+    paddingVertical: 13,
+    shadowColor: '#10B981',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 3,
   },
-  successDoneBtnText: {
+  sheetWhatsappBtnText: {
     color: '#FFFFFF',
-    fontSize: 15,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  sheetDismissBtn: {
+    marginTop: 8,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetDismissBtnText: {
+    color: '#64748B',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  currentBadge: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 8,
+    paddingVertical: 2.5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+  },
+  currentBadgeText: {
+    color: '#15803D',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  planCardItemCurrent: {
+    borderColor: '#10B981',
+    backgroundColor: '#F0FDF4',
+  },
+  planLabelCurrent: {
+    color: '#065F46',
+  },
+  priceNumberCurrent: {
+    color: '#065F46',
+  },
+  radioOuterCurrent: {
+    borderColor: '#10B981',
+  },
+  radioInnerCurrent: {
+    backgroundColor: '#10B981',
+  },
+  prorationCard: {
+    backgroundColor: '#F5F3FF',
+    borderWidth: 1.2,
+    borderColor: '#DDD6FE',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 4,
+    gap: 6,
+  },
+  prorationHeader: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  prorationTitle: {
+    fontSize: 13,
     fontWeight: '800',
+    color: '#4F46E5',
+    textAlign: 'right',
+  },
+  prorationRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  prorationLabel: {
+    fontSize: 12,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  prorationValue: {
+    fontSize: 12.5,
+    color: '#0F172A',
+    fontWeight: '700',
+  },
+  prorationCredit: {
+    fontSize: 12.5,
+    color: '#059669',
+    fontWeight: '800',
+  },
+  prorationDivider: {
+    height: 1,
+    backgroundColor: '#E2E8F0',
+    marginVertical: 2,
+  },
+  prorationTotalLabel: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  prorationTotalValue: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#4F46E5',
   },
 });
