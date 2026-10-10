@@ -197,6 +197,9 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 			avatar_url = EXCLUDED.avatar_url,
 			email_verified = EXCLUDED.email_verified,
 			raw_profile = EXCLUDED.raw_profile,
+			device_id = COALESCE(public.users.device_id, EXCLUDED.device_id),
+			device_name = COALESCE(public.users.device_name, EXCLUDED.device_name),
+			last_login_at = NOW(),
 			updated_at = NOW()
 		RETURNING id, role, is_active, COALESCE(device_id, ''), COALESCE(trial_started_at, NOW()), COALESCE(subscription_plan, 0);
 	`
@@ -226,49 +229,8 @@ func (h *AuthHandler) GoogleLogin(c *gin.Context) {
 		return
 	}
 
-	// -------------------------------------------------------------
-	// 2-Factor Authentication (OTP via SMS) Enforcement
-	// -------------------------------------------------------------
-	// Case 1: First-time Google user (No registered phone number)
-	if existingPhone == "" {
-		ticket, err := h.tokenService.GenerateTicket(emailClean, profile.Sub, incomingDeviceID, incomingDeviceName, "setup_phone")
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل إنشاء رمز التحقق"})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"success":             true,
-			"requires_phone":      true,
-			"verification_ticket": ticket,
-			"email":               emailClean,
-			"name":                profile.Name,
-			"message":             "يرجى إدخال رقم الهاتف لاستلام رمز التحقق لمرة واحدة (SMS)",
-		})
-		return
-	}
-
-	// Case 2: Returning user with registered phone - Send OTP automatically via SMS
-	ticket, err := h.tokenService.GenerateTicket(emailClean, profile.Sub, incomingDeviceID, incomingDeviceName, "verify_otp")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "فشل إنشاء رمز التحقق"})
-		return
-	}
-
-	sendErr := h.otpService.SendOTP(c.Request.Context(), existingPhone)
-	if sendErr != nil {
-		log.Printf("[Google 2FA] Warning: Failed to send OTP to %s: %v", existingPhone, sendErr)
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success":             true,
-		"requires_otp":        true,
-		"phone_masked":        MaskPhone(existingPhone),
-		"verification_ticket": ticket,
-		"email":               emailClean,
-		"name":                profile.Name,
-		"message":             "تم إرسال رمز التحقق إلى رقم هاتفك المسجل لتأكيد الدخول",
-	})
+	// Direct 1-Click Login (Single device enforced by hardware signature above)
+	h.issueUserSession(c, emailClean, incomingDeviceID, incomingDeviceName)
 }
 
 // issueUserSession sets up trial subscription and issues production JWT token
